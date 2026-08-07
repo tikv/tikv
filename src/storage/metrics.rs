@@ -12,6 +12,7 @@ use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
+use resource_metering::record_rocksdb_block_read_count;
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
@@ -344,6 +345,7 @@ where
         static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static FLUSH: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static BUFFER_BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static RAW_COMPARE_AND_SWAP: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
     }
     let tls_cell = match cmd {
         CommandKind::get => &GET,
@@ -364,6 +366,7 @@ where
         CommandKind::resolve_lock => &RESOLVE_LOCK,
         CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
         CommandKind::flush => &FLUSH,
+        CommandKind::raw_compare_and_swap => &RAW_COMPARE_AND_SWAP,
         _ => return f(),
     };
     tls_cell.with(|c| {
@@ -376,7 +379,8 @@ where
         });
         perf_context.start_observe();
         let res = f();
-        perf_context.report_metrics(&[get_tls_tracker_token()]);
+        let report = perf_context.report_metrics(&[get_tls_tracker_token()]);
+        record_rocksdb_block_read_count(report.block_read_count);
         res
     })
 }

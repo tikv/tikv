@@ -3,7 +3,7 @@
 use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, time::Duration};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
-use engine_traits::{PerfContextKind, PerfLevel};
+use engine_traits::{PerfContextKind, PerfContextReport, PerfLevel};
 use lazy_static::lazy_static;
 use slog_derive::KV;
 use tikv_util::time::Instant;
@@ -205,7 +205,7 @@ impl PerfContextStatistics {
         self.apply_perf_settings();
     }
 
-    pub fn report(&mut self, trackers: &[TrackerToken]) {
+    pub fn report(&mut self, trackers: &[TrackerToken]) -> PerfContextReport {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -217,6 +217,7 @@ impl PerfContextStatistics {
                         t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
+                PerfContextReport::default()
             }
             PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -228,14 +229,17 @@ impl PerfContextStatistics {
                         t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
+                PerfContextReport::default()
             }
             PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
                 let perf_context = ReadPerfContext::capture();
+                let block_read_count = perf_context.block_read_count;
                 for token in trackers {
                     GLOBAL_TRACKERS.with_tracker(*token, |t| perf_context.report_to_tracker(t));
                 }
                 self.read += perf_context;
                 self.flush_read_metrics();
+                PerfContextReport { block_read_count }
             }
         }
     }

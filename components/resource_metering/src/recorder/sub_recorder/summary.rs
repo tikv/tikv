@@ -6,7 +6,7 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-    ENABLE_NETWORK_IO_COLLECTION, RawRecords,
+    ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION, RawRecords,
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, STORAGE},
@@ -85,6 +85,22 @@ pub fn record_logical_write_bytes(bytes: u64) {
     })
 }
 
+/// Records RocksDB block reads used as the per-request `read_iops` signal.
+///
+/// This is a relative attribution signal for Top SQL, not a device-level IOPS
+/// measurement.
+pub fn record_rocksdb_block_read_count(count: u64) {
+    if count == 0 || !ENABLE_DETAILED_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .rocksdb_block_read_count
+            .fetch_add(count, Relaxed);
+    })
+}
+
 /// An implementation of [SubRecorder] for collecting summary data.
 ///
 /// `SummaryRecorder` uses some special methods
@@ -146,5 +162,45 @@ impl SubRecorder for SummaryRecorder {
 
     fn thread_created(&mut self, _id: Pid, store: &LocalStorage) {
         store.summary_enable.store(self.enabled, SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use super::*;
+    use crate::{
+        IO_COLLECTION_TEST_LOCK, IoCollectionConfigGuard, config::set_io_collection_config,
+    };
+
+    #[test]
+    fn test_record_rocksdb_block_read_count_respects_config() {
+        let _test_guard = IO_COLLECTION_TEST_LOCK.lock().unwrap();
+        let _config_guard = IoCollectionConfigGuard::set(false, false);
+        std::thread::spawn(|| {
+            for (network, detailed, expected) in [
+                (false, false, 0),
+                (false, true, 0),
+                (true, false, 0),
+                (true, true, 7),
+            ] {
+                set_io_collection_config(network, detailed);
+                STORAGE.with(|s| s.borrow().summary_cur_record.reset());
+                record_rocksdb_block_read_count(7);
+                record_rocksdb_block_read_count(0);
+                STORAGE.with(|s| {
+                    assert_eq!(
+                        s.borrow()
+                            .summary_cur_record
+                            .rocksdb_block_read_count
+                            .load(Relaxed),
+                        expected
+                    );
+                });
+            }
+        })
+        .join()
+        .unwrap();
     }
 }

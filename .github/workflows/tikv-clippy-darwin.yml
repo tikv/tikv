@@ -106,3 +106,7 @@ jobs:
       - name: Run Clippy
         run: |
           make clippy
+
+      - name: Check TiRocks
+        run: |
+          make check-tirocks
