@@ -883,15 +883,17 @@ impl<E: Engine> Endpoint<E> {
 
             loop {
                 let result = {
+                    tracker.on_begin_item();
+
                     let result = track(
                         handler.handle_streaming_request(),
-                        tracker.as_mut(),
+                        tracker.poll_perf_context_tracker(),
                     )
                     .await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
-                    tracker.collect_storage_statistics(storage_stats);
+                    tracker.on_finish_item(Some(storage_stats));
 
                     result
                 };
