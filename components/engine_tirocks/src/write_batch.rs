@@ -1,9 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{Result, WriteBatchExt as _};
-use tirocks::{option::WriteOptions, WriteBatch};
+use tirocks::{WriteBatch, option::WriteOptions};
 
-use crate::{r2e, RocksEngine};
+use crate::{RocksEngine, r2e};
 
 const WRITE_BATCH_MAX_BATCH_NUM: usize = 16;
 const WRITE_BATCH_MAX_KEY_NUM: usize = 16;
@@ -97,7 +97,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
         let mut size = 0;
         for w in &self.wbs[..=self.index] {
-            size += w.len();
+            size += w.as_bytes().len();
         }
         size
     }
@@ -246,12 +246,12 @@ impl engine_traits::Mutable for RocksWriteBatchVec {
 mod tests {
     use std::path::Path;
 
-    use engine_traits::{Mutable, Peekable, WriteBatch, WriteBatchExt, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, Mutable, Peekable, WriteBatch, WriteBatchExt};
     use tempfile::Builder;
 
     use super::*;
     use crate::{
-        cf_options::RocksCfOptions, db_options::RocksDbOptions, new_engine_opt, RocksEngine,
+        RocksEngine, cf_options::RocksCfOptions, db_options::RocksDbOptions, new_engine_opt,
     };
 
     fn new_engine(path: &Path, multi_batch_write: bool) -> RocksEngine {

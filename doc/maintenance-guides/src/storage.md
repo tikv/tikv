@@ -145,7 +145,10 @@ High-risk contracts:
   `metrics.rs` own this attribution for read-only commands and read phases of
   write commands. In particular, transactional writes and
   `raw_compare_and_swap` must retain the `Storage` PerfContext because CAS reads
-  the prior value before deciding whether to write. Do not attribute Raftstore
+  the prior value before deciding whether to write. Resumed pessimistic-lock
+  batches can contain work from multiple requests, so their read and logical
+  write accounting must use each item's original request context instead of the
+  synthetic command's first context. Do not attribute Raftstore
   apply/store write-worker activity to the request: those paths use write-only
   PerfContext metrics and may batch work from multiple requests.
 

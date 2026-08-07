@@ -168,9 +168,6 @@ impl<E: Engine> Tracker<E> {
             _ => unreachable!(),
         }
 
-        self.with_perf_context(|perf_context| {
-            perf_context.start_observe();
-        });
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
@@ -182,14 +179,27 @@ impl<E: Engine> Tracker<E> {
             if let Some(storage_stats) = some_storage_stats {
                 self.total_storage_stats.add(&storage_stats);
             }
-            let report = self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker_token()])
-            });
-            record_rocksdb_block_read_count(report.block_read_count);
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
             unreachable!()
         }
+    }
+
+    fn on_poll_begin(&mut self) {
+        self.with_perf_context(|perf_context| {
+            perf_context.start_observe();
+        });
+    }
+
+    fn on_poll_finish(&mut self) {
+        let report = self.with_perf_context(|perf_context| {
+            perf_context.report_metrics(&[get_tls_tracker_token()])
+        });
+        record_rocksdb_block_read_count(report.block_read_count);
+    }
+
+    pub fn poll_perf_context_tracker(&mut self) -> impl FutureTrack + '_ {
+        PollPerfContextTracker { tracker: self }
     }
 
     pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
@@ -467,10 +477,26 @@ impl<E: Engine> Tracker<E> {
 impl<E: Engine> FutureTrack for &mut Tracker<E> {
     fn on_poll_begin(&mut self) {
         self.on_begin_item();
+        Tracker::on_poll_begin(self);
     }
 
     fn on_poll_finish(&mut self) {
+        Tracker::on_poll_finish(self);
         self.on_finish_item(None);
+    }
+}
+
+struct PollPerfContextTracker<'a, E: Engine> {
+    tracker: &'a mut Tracker<E>,
+}
+
+impl<E: Engine> FutureTrack for PollPerfContextTracker<'_, E> {
+    fn on_poll_begin(&mut self) {
+        self.tracker.on_poll_begin();
+    }
+
+    fn on_poll_finish(&mut self) {
+        self.tracker.on_poll_finish();
     }
 }
 
@@ -542,14 +568,82 @@ impl<E: Engine> HeapSize for Tracker<E> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration, vec};
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::Arc,
+        task::{Context as TaskContext, Poll},
+        thread,
+        time::Duration,
+        vec,
+    };
 
+    use futures::executor::block_on;
     use kvproto::kvrpcpb;
     use pd_client::BucketMeta;
-    use tikv_kv::RocksEngine;
+    use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine};
+    use tracker::track;
 
     use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
-    use crate::{coprocessor::ReqContextInner, storage::Statistics};
+    use crate::{
+        coprocessor::ReqContextInner,
+        storage::{Statistics, TestEngineBuilder},
+    };
+
+    struct TwoPollFuture {
+        first_poll: bool,
+    }
+
+    impl Future for TwoPollFuture {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
+            thread::sleep(Duration::from_millis(20));
+            if self.first_poll {
+                self.first_poll = false;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_streaming_item_process_time_spans_multiple_polls() {
+        set_tls_engine(TestEngineBuilder::new().build().unwrap());
+
+        let req_ctx_inner = ReqContextInner::new(
+            kvrpcpb::Context::default(),
+            vec![],
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+            false,
+        );
+        let mut tracker: Tracker<RocksEngine> =
+            Tracker::new(req_ctx_inner.into(), ReqTag::select, Duration::default());
+        tracker.on_scheduled();
+        tracker.on_snapshot_finished();
+        tracker.on_begin_all_items();
+        tracker.on_begin_item();
+
+        block_on(track(
+            TwoPollFuture { first_poll: true },
+            tracker.poll_perf_context_tracker(),
+        ));
+        tracker.on_finish_item(None);
+
+        assert!(tracker.item_process_time >= Duration::from_millis(35));
+        assert_eq!(tracker.total_process_time, tracker.item_process_time);
+
+        tracker.on_finish_all_items();
+        drop(tracker);
+        unsafe { destroy_tls_engine::<RocksEngine>() };
+    }
 
     #[test]
     fn test_track() {

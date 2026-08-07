@@ -5,9 +5,10 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use tikv_util::box_err;
 use tirocks::{
-    option::{RawCfOptions, TitanCfOptions},
     CfOptions,
+    option::{RawCfOptions, TitanCfOptions},
 };
 
 enum Options {
@@ -166,5 +167,11 @@ impl engine_traits::CfOptions for RocksCfOptions {
     fn set_sst_partitioner_factory<F: engine_traits::SstPartitionerFactory>(&mut self, _: F) {
         // TODO: It should be shared.
         panic!()
+    }
+
+    fn set_max_compactions(&self, _: u32) -> engine_traits::Result<()> {
+        Err(box_err!(
+            "TiRocks does not expose a compaction thread limiter"
+        ))
     }
 }

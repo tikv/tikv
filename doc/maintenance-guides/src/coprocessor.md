@@ -110,7 +110,9 @@ It is a read-heavy hot path and directly impacts query latency.
   used for the downstream `read_iops` dimension and relative attribution; it is
   not a device-level IOPS measurement. Unary and streaming handler futures must
   keep this PerfContext accounting poll-scoped so TLS metrics cannot be
-  attributed to another request.
+  attributed to another request. Keep that poll observer separate from the
+  streaming item lifecycle: one item can span multiple polls, but its
+  `ExecDetails` process time must still cover the complete item.
 - Start with `src/coprocessor/metrics.rs`. High-value signals include:
   `tikv_coprocessor_request_duration_seconds` family,
   `tikv_coprocessor_request_wait_seconds`,
