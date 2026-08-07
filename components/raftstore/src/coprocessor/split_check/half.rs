@@ -143,7 +143,7 @@ pub fn get_region_approximate_middle_in_range(
         })
     }
     if let Some(end_key) = end_key {
-        box_try!(if keys::validate_data_key(end_key) {
+        box_try!(if keys::validate_data_key(end_key) || end_key == keys::DATA_MAX_KEY {
             Ok(())
         } else {
             Err(std::io::Error::new(
@@ -1009,5 +1009,47 @@ mod tests {
             .unwrap();
         assert!(middle_key.as_slice() >= &b"key_020"[..]);
         assert!(middle_key.as_slice() < &b"key_030"[..]);
+    }
+
+    #[test]
+    fn test_get_region_approximate_middle_in_range_with_data_max_end_cf() {
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util_in_range_data_max_end")
+            .tempdir()
+            .unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat_n(b'v', 256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &big_value).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        let start_key = keys::data_key(Key::from_raw(b"key_090").as_encoded());
+
+        let middle_key = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&start_key),
+            Some(keys::DATA_MAX_KEY),
+        )
+        .unwrap()
+        .unwrap();
+
+        let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
+            .into_raw()
+            .unwrap();
+        assert!(middle_key.as_slice() >= &b"key_090"[..]);
     }
 }
