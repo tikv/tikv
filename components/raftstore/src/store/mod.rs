@@ -47,7 +47,7 @@ pub use self::{
     compaction_guard::CompactionGuardGeneratorFactory,
     config::Config,
     entry_storage::{EntryStorage, RaftlogFetchResult, MAX_INIT_ENTRY_COUNT},
-    fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter, StoreInfo},
+    fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter},
     hibernate_state::{GroupState, HibernateState},
     memory::*,
     metrics::RAFT_ENTRY_FETCHES_VEC,

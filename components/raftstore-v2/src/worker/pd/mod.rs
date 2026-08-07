@@ -193,7 +193,9 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
+    #[allow(dead_code)]
     raft_engine: ER,
+    #[allow(dead_code)]
     tablet_registry: TabletRegistry<EK>,
     snap_mgr: TabletSnapManager,
     router: StoreRouter<EK, ER>,
@@ -225,6 +227,7 @@ where
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
+    #[allow(dead_code)]
     cfg: Arc<VersionTrack<Config>>,
 }
 
