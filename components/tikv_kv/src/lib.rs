@@ -1602,5 +1602,44 @@ mod snapshot_timeout_tests {
         }
     }
 
+    #[test]
+    fn test_snapshot_succeeds_within_deadline() {
+        let mut engine = BTreeEngine::default();
+        let mut pb_ctx = Context::default();
+        pb_ctx.set_max_execution_duration_ms(5_000);
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
+
+        assert!(
+            outcome.is_ok(),
+            "expected snapshot() to succeed within the deadline, got: {:?}",
+            outcome
+        );
+    }
+
+    #[test]
+    fn test_snapshot_uses_default_deadline_when_unset() {
+        let mut engine = BTreeEngine::default();
+        let pb_ctx = Context::default();
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
+
+        assert!(
+            outcome.is_ok(),
+            "expected snapshot() to succeed under the default (24h) deadline, got: {:?}",
+            outcome
+        );
+    }
+
 
 }
