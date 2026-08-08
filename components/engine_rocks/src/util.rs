@@ -1,6 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
+use std::{
+    ffi::CString,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
+    str::FromStr,
+    sync::Arc,
+};
 
 use engine_traits::{CF_DEFAULT, Engines, Range, Result};
 use fail::fail_point;
@@ -54,6 +61,15 @@ pub fn new_engine_opt(
         .into_iter()
         .map(|(name, opt)| (name, opt.into_raw()))
         .collect();
+
+    // A crash while RocksDB was switching CURRENT (or a filesystem losing the
+    // write on power failure) can leave it empty, truncated or pointing at a
+    // deleted MANIFEST: the open below then fails forever even though the
+    // MANIFEST is intact. Worse, a *missing* CURRENT makes `db_exist` report
+    // false, and creating the "new" DB either fails on the leftover WAL or
+    // silently starts an empty DB over the old data when no WAL survived.
+    // Repair the pointer from the newest MANIFEST on disk before opening.
+    recover_current_if_needed(path)?;
 
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -154,6 +170,182 @@ pub fn db_exist(path: &str) -> bool {
     // `DB::list_column_families` fails and we can clean up the directory by
     // this indication.
     fs::read_dir(path).unwrap().next().is_some()
+}
+
+/// Temp file used to atomically rewrite RocksDB's `CURRENT`. The `dbtmp.plain`
+/// suffix matches the temp files RocksDB itself uses when updating `CURRENT`:
+/// `KeyManagedEncryptedEnv` always keeps such files (and `CURRENT` itself)
+/// plaintext, so accessing them through the raw filesystem is consistent with
+/// encryption-at-rest.
+const CURRENT_RECOVER_TMP: &str = "CURRENT.recover.dbtmp.plain";
+
+/// State of RocksDB's `CURRENT` pointer file, classified for crash recovery.
+enum CurrentState {
+    /// `CURRENT` names a `MANIFEST-*` file that exists.
+    Healthy,
+    /// `CURRENT` does not exist. Either the DB was never created, or a crash
+    /// during DB creation lost it while other files remain.
+    Missing,
+    /// `CURRENT` exists but its content is not `MANIFEST-<digits>\n`: empty,
+    /// zero-filled or otherwise truncated by an incomplete write. The payload
+    /// is kept for logging.
+    Truncated(Vec<u8>),
+    /// `CURRENT` parses but the MANIFEST it names is gone; the referenced
+    /// manifest number is kept to forbid rolling back to an older one.
+    Dangling(u64),
+}
+
+fn classify_current(dir: &Path) -> std::io::Result<CurrentState> {
+    let bytes = match fs::read(dir.join("CURRENT")) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CurrentState::Missing),
+        Err(e) => return Err(e),
+    };
+    match parse_current_manifest(&bytes) {
+        Some((name, num)) => {
+            if dir.join(name).is_file() {
+                Ok(CurrentState::Healthy)
+            } else {
+                Ok(CurrentState::Dangling(num))
+            }
+        }
+        None => Ok(CurrentState::Truncated(bytes)),
+    }
+}
+
+/// Parses a RocksDB `CURRENT` payload, which must be exactly
+/// `MANIFEST-<digits>\n` (single trailing newline, no other whitespace).
+/// Returns the manifest file name and its number.
+fn parse_current_manifest(bytes: &[u8]) -> Option<(&str, u64)> {
+    let name = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
+    let digits = name.strip_prefix("MANIFEST-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((name, digits.parse().ok()?))
+}
+
+/// Returns the highest-numbered `MANIFEST-*` regular file in `dir`, if any.
+fn latest_manifest(dir: &Path) -> std::io::Result<Option<(String, u64)>> {
+    let mut best: Option<(String, u64)> = None;
+    for ent in fs::read_dir(dir)? {
+        let Ok(ent) = ent else { continue };
+        if !ent.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let name = ent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(digits) = name.strip_prefix("MANIFEST-") else {
+            continue;
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(num) = digits.parse::<u64>() else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(_, b)| num > *b) {
+            best = Some((name.to_owned(), num));
+        }
+    }
+    Ok(best)
+}
+
+fn recover_io_err(op: &str, e: std::io::Error) -> engine_traits::Error {
+    engine_traits::Error::Engine(engine_traits::Status::with_error(
+        engine_traits::Code::IoError,
+        format!("recover CURRENT: {}: {}", op, e),
+    ))
+}
+
+/// Repairs RocksDB's `CURRENT` file when a crash left it unusable, by
+/// atomically rewriting it to name the latest `MANIFEST-*` on disk
+/// (write + fsync temp file, rename over `CURRENT`, fsync directory — the
+/// same durability sequence RocksDB uses when switching `CURRENT`).
+///
+/// A crash or power loss while RocksDB updates its meta files can leave
+/// `CURRENT` empty, zero-filled or without its trailing newline; RocksDB then
+/// refuses to open the DB forever ("CURRENT file does not end with newline")
+/// even though the MANIFEST it needs is intact on disk. A *missing* `CURRENT`
+/// is worse: `db_exist` reports false, so the open path tries to create a new
+/// DB — it fails on the leftover WAL ("While creating a new Db, wal_dir
+/// contains existing log file") or, when no WAL file survived, silently
+/// creates a brand-new empty DB over the old data. Repairing the pointer
+/// restores access to the newest MANIFEST that survived, which is what
+/// RocksDB would have pointed to.
+///
+/// Repair is conservative:
+/// - When `CURRENT` still parses but names a missing MANIFEST, it is only
+///   rewritten to an equal-or-higher-numbered manifest, never to an older one,
+///   so a store cannot silently roll back to earlier metadata.
+/// - Truncated MANIFEST contents are out of scope; only the pointer file is
+///   repaired, and RocksDB's own manifest validation still runs at open.
+/// - `CURRENT` is always plaintext even with encryption-at-rest enabled
+///   (`KeyManagedEncryptedEnv` intentionally skips it), so reading and
+///   rewriting it through the raw filesystem is safe.
+///
+/// Returns `Ok(true)` when `CURRENT` was rewritten.
+fn recover_current_if_needed(path: &str) -> Result<bool> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    let state = classify_current(dir).map_err(|e| recover_io_err("read CURRENT", e))?;
+    if matches!(state, CurrentState::Healthy) {
+        return Ok(false);
+    }
+    let manifest = latest_manifest(dir).map_err(|e| recover_io_err("scan MANIFEST files", e))?;
+    let Some((manifest, manifest_num)) = manifest else {
+        // Nothing to repair from. For a fresh (or empty) DB dir this is the
+        // normal creation path; otherwise RocksDB will report the corruption.
+        return Ok(false);
+    };
+    let reason = match state {
+        CurrentState::Healthy => unreachable!(),
+        CurrentState::Missing => "CURRENT is missing".to_owned(),
+        CurrentState::Truncated(payload) => format!(
+            "CURRENT is truncated (payload {:?}, {} bytes)",
+            String::from_utf8_lossy(&payload[..payload.len().min(32)]),
+            payload.len()
+        ),
+        CurrentState::Dangling(named) => {
+            if manifest_num < named {
+                warn!(
+                    "RocksDB CURRENT names a missing MANIFEST and only older ones remain; \
+                     refusing to roll back";
+                    "path" => %dir.display(),
+                    "named_manifest_num" => named,
+                    "latest_manifest_num" => manifest_num,
+                );
+                return Ok(false);
+            }
+            format!("CURRENT names missing MANIFEST-{:06}", named)
+        }
+    };
+
+    let tmp = dir.join(CURRENT_RECOVER_TMP);
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)
+            .map_err(|e| recover_io_err("open temp file", e))?;
+        f.write_all(format!("{}\n", manifest).as_bytes())
+            .map_err(|e| recover_io_err("write temp file", e))?;
+        f.sync_all()
+            .map_err(|e| recover_io_err("sync temp file", e))?;
+    }
+    fs::rename(&tmp, dir.join("CURRENT")).map_err(|e| recover_io_err("rename over CURRENT", e))?;
+    file_system::sync_dir(dir).map_err(|e| recover_io_err("sync db dir", e))?;
+
+    warn!(
+        "recovered RocksDB CURRENT to the latest MANIFEST";
+        "path" => %dir.display(),
+        "manifest" => %manifest,
+        "reason" => %reason,
+    );
+    Ok(true)
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
@@ -646,6 +838,272 @@ mod tests {
             .get_options_cf("cf_dynamic_level_bytes_disabled")
             .unwrap();
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    fn current_is_healthy(path_str: &str) -> bool {
+        matches!(
+            classify_current(Path::new(path_str)),
+            Ok(CurrentState::Healthy)
+        )
+    }
+
+    /// Creates a DB with committed data in two CFs and closes it.
+    fn build_db_with_data(path_str: &str) {
+        let db = new_engine(path_str, &[CF_DEFAULT, "write"]).unwrap();
+        db.put(b"k1", b"v-committed").unwrap();
+        db.put_cf("write", b"wk", b"wv").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        db.flush_cf("write", true).unwrap();
+        drop(db);
+    }
+
+    fn open_db(path_str: &str) -> Result<RocksEngine> {
+        new_engine_opt(
+            path_str,
+            RocksDbOptions::default(),
+            vec![
+                (CF_DEFAULT, Default::default()),
+                ("write", Default::default()),
+            ],
+        )
+    }
+
+    fn assert_data_intact(db: &RocksEngine) {
+        assert_eq!(
+            db.get_value(b"k1").unwrap().unwrap().as_ref(),
+            b"v-committed"
+        );
+        assert_eq!(
+            db.get_value_cf("write", b"wk").unwrap().unwrap().as_ref(),
+            b"wv"
+        );
+    }
+
+    #[test]
+    fn test_parse_current_manifest_strict() {
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-000001\n"),
+            Some(("MANIFEST-000001", 1))
+        );
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-018446744073709551615\n"),
+            Some(("MANIFEST-018446744073709551615", u64::MAX))
+        );
+        // Empty / missing newline.
+        assert!(parse_current_manifest(b"").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001").is_none());
+        // Whitespace, extra newlines, junk, non-digits, overflow.
+        assert!(parse_current_manifest(b" MANIFEST-000001\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001\n\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001 \n").is_none());
+        assert!(parse_current_manifest(b"NOT-A-MANIFEST\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-abc\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-99999999999999999999\n").is_none());
+        assert!(parse_current_manifest(b"\x00\x00\x00\n").is_none());
+    }
+
+    #[test]
+    fn test_latest_manifest_selection() {
+        let path = Builder::new()
+            .prefix("rocksdb_latest_manifest")
+            .tempdir()
+            .unwrap();
+        let dir = path.path();
+        assert_eq!(latest_manifest(dir).unwrap(), None);
+
+        // Numeric comparison must win over lexicographic (9 vs 10), invalid
+        // names are ignored, and so are directories named like a MANIFEST.
+        std::fs::write(dir.join("MANIFEST-000009"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-000010"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-1x"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-"), b"x").unwrap();
+        std::fs::create_dir(dir.join("MANIFEST-999999")).unwrap();
+        assert_eq!(
+            latest_manifest(dir).unwrap(),
+            Some(("MANIFEST-000010".to_owned(), 10))
+        );
+    }
+
+    /// Empty CURRENT (crash mid-meta-write) makes raw RocksDB open fail with
+    /// "CURRENT file does not end with newline" while MANIFEST remains.
+    #[test]
+    fn test_truncated_current_raw_open_fails() {
+        let path = Builder::new()
+            .prefix("rocksdb_truncated_current_raw_fail")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        // Simulate incomplete CURRENT write leaving an empty file.
+        let current = path.path().join("CURRENT");
+        let before = std::fs::read(&current).unwrap();
+        assert!(before.ends_with(b"\n"), "precondition: CURRENT valid");
+        assert!(
+            latest_manifest(path.path()).unwrap().is_some(),
+            "precondition: MANIFEST present"
+        );
+        std::fs::write(&current, b"").unwrap();
+        assert!(!current_is_healthy(path_str));
+
+        // Direct open without the recovery path must fail.
+        let opts = RocksDbOptions::default().into_raw();
+        let err = DB::open_cf(opts, path_str, vec![(CF_DEFAULT, Default::default())]).unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("CURRENT") || msg.contains("Corruption") || msg.contains("newline"),
+            "expected CURRENT corruption error, got: {}",
+            msg
+        );
+    }
+
+    /// Every truncation shape a crash can leave in CURRENT (empty, missing
+    /// newline, zero-filled, garbage, extra newline) is repaired and committed
+    /// data stays readable.
+    #[test]
+    fn test_recover_truncated_current_variants() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_truncated_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+
+        type Corruptor = fn(&[u8]) -> Vec<u8>;
+        let corruptions: [(&str, Corruptor); 5] = [
+            ("empty", |_| Vec::new()),
+            ("missing trailing newline", |healthy| {
+                healthy[..healthy.len() - 1].to_vec()
+            }),
+            ("zero-filled", |healthy| vec![0; healthy.len()]),
+            ("garbage", |_| b"\xff\xfegarbage".to_vec()),
+            ("extra newline", |healthy| [healthy, b"\n"].concat()),
+        ];
+        for (name, corrupt) in corruptions {
+            let healthy = std::fs::read(&current).unwrap();
+            std::fs::write(&current, corrupt(&healthy)).unwrap();
+            assert!(!current_is_healthy(path_str), "case {}", name);
+
+            // Recover explicitly, then verify the pointer is healthy again
+            // and the engine opens with all committed data.
+            assert!(
+                recover_current_if_needed(path_str).unwrap(),
+                "case {}",
+                name
+            );
+            assert!(current_is_healthy(path_str), "case {}", name);
+            let db = open_db(path_str).unwrap_or_else(|e| panic!("case {}: {:?}", name, e));
+            assert_data_intact(&db);
+            drop(db);
+        }
+
+        // End to end: new_engine_opt itself must auto-recover.
+        std::fs::write(&current, b"").unwrap();
+        let db = open_db(path_str).expect("new_engine_opt should recover empty CURRENT");
+        assert_data_intact(&db);
+    }
+
+    /// A missing CURRENT makes `db_exist` report false, so without recovery
+    /// the open path tries to create a brand-new DB: it fails on a leftover
+    /// WAL file, or silently succeeds with an empty DB when no WAL remains.
+    /// Recovery must reconstruct the pointer and preserve the data instead.
+    #[test]
+    fn test_recover_missing_current_preserves_data() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_missing_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        std::fs::remove_file(path.path().join("CURRENT")).unwrap();
+        assert!(!db_exist(path_str), "precondition: db_exist is fooled");
+
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+    }
+
+    /// CURRENT pointing at a deleted MANIFEST is repaired only forward (to an
+    /// equal-or-higher-numbered manifest), never back to an older one.
+    #[test]
+    fn test_dangling_current_forward_only() {
+        let path = Builder::new()
+            .prefix("rocksdb_dangling_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+
+        // Forward repair: named manifest is gone, a higher-numbered one exists.
+        assert!(!path.path().join("MANIFEST-000000").exists());
+        std::fs::write(&current, b"MANIFEST-000000\n").unwrap();
+        assert!(recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        drop(db);
+
+        // Rollback refused: named manifest is newer than anything on disk.
+        // CURRENT must stay untouched and open must fail (status quo), not
+        // silently regress to older metadata.
+        let healthy = std::fs::read(&current).unwrap();
+        std::fs::write(&current, b"MANIFEST-999999\n").unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), b"MANIFEST-999999\n");
+        open_db(path_str).unwrap_err();
+
+        // Restoring the real pointer opens fine again.
+        std::fs::write(&current, &healthy).unwrap();
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+    }
+
+    /// Healthy stores and fresh directories are never touched, and recovery
+    /// is idempotent.
+    #[test]
+    fn test_recover_current_noop_when_healthy() {
+        // Nonexistent path: nothing to do.
+        assert!(!recover_current_if_needed("/nonexistent/db/path").unwrap());
+
+        // Fresh empty dir: untouched, normal creation still works after.
+        let path = Builder::new()
+            .prefix("rocksdb_recover_current_noop")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        build_db_with_data(path_str);
+
+        // Healthy store: byte-identical no-op, idempotently.
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+    }
+
+    /// A temp file orphaned by a crash during a previous recovery attempt
+    /// does not prevent recovering again.
+    #[test]
+    fn test_recover_current_with_orphaned_tmp() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_orphaned_tmp")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        let tmp = path.path().join(CURRENT_RECOVER_TMP);
+        std::fs::write(&tmp, b"stale junk from interrupted recovery").unwrap();
+        std::fs::write(path.path().join("CURRENT"), b"").unwrap();
+
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        assert!(!tmp.exists(), "tmp must be consumed by the rename");
     }
 
     #[test]
