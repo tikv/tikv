@@ -1848,6 +1848,94 @@ fn test_cache() {
     assert_eq!(resp.get_data(), resp4.get_data());
 }
 
+/// Verifies that the coprocessor cache works correctly when a selection
+/// executor (WHERE clause) is present in the executor chain.
+/// This test ensures that the `can_be_cached()` flag is properly propagated
+/// through the selection executor to the underlying scan executor.
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_cache_with_selection() {
+    use tidb_query_datatype::FieldTypeAccessor;
+
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
+
+    // Build a WHERE condition: count > 2
+    let cols = product.columns_info();
+    let cond = {
+        // Left: column ref for `count`
+        let mut col = Expr::default();
+        col.set_tp(ExprType::ColumnRef);
+        let count_offset = offset_for_column(&cols, product["count"].id);
+        col.mut_val().encode_i64(count_offset).unwrap();
+        col.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+
+        // Right: constant integer 2
+        let mut value = Expr::default();
+        value.set_tp(ExprType::Int64);
+        value.mut_val().encode_i64(2).unwrap();
+        value
+            .mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+
+        // Condition: count > 2
+        let mut cond = Expr::default();
+        cond.set_tp(ExprType::ScalarFunc);
+        cond.set_sig(ScalarFuncSig::GtInt);
+        cond.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        cond.mut_children().push(col);
+        cond.mut_children().push(value);
+        cond
+    };
+
+    let req = DagSelect::from(&product)
+        .where_expr(cond)
+        .build_with(ctx, &[0]);
+
+    // First request: cache miss, should return filtered data.
+    let resp = handle_request(&endpoint, req.clone());
+    assert!(!resp.get_is_cache_hit());
+    let cache_version = resp.get_cache_last_version();
+    assert!(cache_version >= 5);
+
+    // Verify the response contains filtered data (only rows with count > 2).
+    let mut sel_resp = SelectResponse::default();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    // Should have 2 rows: (2, "name:4", 3) and (5, "name:1", 4)
+    assert_eq!(sel_resp.get_chunks().len(), 1);
+
+    // Second request with cache enabled and matching version: should be a cache hit.
+    let mut req2 = req.clone();
+    req2.set_is_cache_enabled(true);
+    req2.set_cache_if_match_version(cache_version);
+    let resp2 = handle_request(&endpoint, req2);
+    assert!(resp2.get_is_cache_hit());
+    assert!(resp2.get_data().is_empty());
+
+    // Third request with cache enabled but non-matching version: should be a cache miss.
+    let mut req3 = req;
+    req3.set_is_cache_enabled(true);
+    req3.set_cache_if_match_version(cache_version + 1);
+    let resp3 = handle_request(&endpoint, req3);
+    assert!(!resp3.get_is_cache_hit());
+    assert_eq!(resp.get_data(), resp3.get_data());
+}
+
 #[test]
 fn test_copr_bypass_or_access_locks() {
     let data = vec![
