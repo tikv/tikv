@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    convert::Infallible,
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
@@ -49,16 +48,16 @@ impl SnapshotSequenceNumber {
         }
     }
 
-    fn with_new_snapshot<T, E>(
+    fn with_new_snapshot<T>(
         &self,
-        create: impl FnOnce() -> std::result::Result<T, E>,
+        create: impl FnOnce() -> T,
         sequence_number: impl FnOnce(&T) -> u64,
-    ) -> std::result::Result<T, E> {
+    ) -> T {
         // Keep the lock across creation, observation, and publication. This
         // makes the checked order match the order in which RocksDB snapshots
         // are created, and adds only one uncontended mutex on the hot path.
         let mut latest = self.latest.lock();
-        let snapshot = create()?;
+        let snapshot = create();
         let sequence_number = sequence_number(&snapshot);
         if let Some(previous) = *latest {
             assert!(
@@ -72,7 +71,7 @@ impl SnapshotSequenceNumber {
         // A failed creation or a failed invariant check must leave the last
         // successfully published sequence number unchanged.
         *latest = Some(sequence_number);
-        Ok(snapshot)
+        snapshot
     }
 
     #[cfg(test)]
@@ -98,14 +97,7 @@ impl RocksSnapshot {
     }
 
     pub(crate) fn new_checked(db: Arc<DB>, sequence_number: &SnapshotSequenceNumber) -> Self {
-        let result = sequence_number.with_new_snapshot(
-            || Ok::<_, Infallible>(RocksSnapshot::new(db)),
-            RocksSnapshot::sequence_number,
-        );
-        match result {
-            Ok(snapshot) => snapshot,
-            Err(never) => match never {},
-        }
+        sequence_number.with_new_snapshot(|| RocksSnapshot::new(db), RocksSnapshot::sequence_number)
     }
 }
 
@@ -207,12 +199,7 @@ mod tests {
     struct TestSnapshot(u64);
 
     fn create_snapshot(sequence_number: &SnapshotSequenceNumber, sequence: u64) -> TestSnapshot {
-        sequence_number
-            .with_new_snapshot(
-                || Ok::<_, ()>(TestSnapshot(sequence)),
-                |snapshot| snapshot.0,
-            )
-            .unwrap()
+        sequence_number.with_new_snapshot(|| TestSnapshot(sequence), |snapshot| snapshot.0)
     }
 
     #[test]
@@ -222,13 +209,6 @@ mod tests {
         create_snapshot(&sequence_number, 10);
         create_snapshot(&sequence_number, 11);
         create_snapshot(&sequence_number, 11);
-        assert_eq!(sequence_number.latest(), Some(11));
-
-        let failed = sequence_number.with_new_snapshot(
-            || Err::<TestSnapshot, _>("snapshot creation failed"),
-            |snapshot| snapshot.0,
-        );
-        assert_eq!(failed.unwrap_err(), "snapshot creation failed");
         assert_eq!(sequence_number.latest(), Some(11));
 
         let regression = catch_unwind(AssertUnwindSafe(|| {
@@ -281,16 +261,14 @@ mod tests {
             handles.push(thread::spawn(move || {
                 start.wait();
                 for _ in 0..SNAPSHOTS_PER_THREAD {
-                    sequence_number
-                        .with_new_snapshot(
-                            || {
-                                let sequence = next_sequence.fetch_add(1, Ordering::SeqCst) + 1;
-                                thread::yield_now();
-                                Ok::<_, ()>(TestSnapshot(sequence))
-                            },
-                            |snapshot| snapshot.0,
-                        )
-                        .unwrap();
+                    sequence_number.with_new_snapshot(
+                        || {
+                            let sequence = next_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                            thread::yield_now();
+                            TestSnapshot(sequence)
+                        },
+                        |snapshot| snapshot.0,
+                    );
                 }
             }));
         }

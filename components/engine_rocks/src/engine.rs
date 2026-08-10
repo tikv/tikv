@@ -166,10 +166,7 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
-    pub fn new(
-        db: DB,
-        enable_snapshot_sequence_number_check: bool,
-    ) -> RocksEngine {
+    pub fn new(db: DB, enable_snapshot_sequence_number_check: bool) -> RocksEngine {
         let db = Arc::new(db);
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),

@@ -839,8 +839,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             let config_raftdb = &config.raftdb;
             let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb =
-                engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            let raftdb = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
                 &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,

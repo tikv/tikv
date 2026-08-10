@@ -78,10 +78,7 @@ pub fn new_engine_opt_with_snapshot_sequence_number_check(
 
         let db = DB::open_cf(db_opt, path, cf_opts.into_iter().collect()).map_err(r2e)?;
 
-        return Ok(RocksEngine::new(
-            db,
-            enable_snapshot_sequence_number_check,
-        ));
+        return Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check));
     }
 
     db_opt.create_if_missing(false);
@@ -120,10 +117,7 @@ pub fn new_engine_opt_with_snapshot_sequence_number_check(
     // orders. So just open db.
     if needed.len() == existed.len() && needed.len() == cfds.len() {
         let db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
-        return Ok(RocksEngine::new(
-            db,
-            enable_snapshot_sequence_number_check,
-        ));
+        return Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check));
     }
 
     // Opens db.
@@ -137,10 +131,7 @@ pub fn new_engine_opt_with_snapshot_sequence_number_check(
         db.drop_cf(cf).map_err(r2e)?;
     }
 
-    Ok(RocksEngine::new(
-        db,
-        enable_snapshot_sequence_number_check,
-    ))
+    Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check))
 }
 
 /// Turns "dynamic level size" off for the existing column family which was off
