@@ -132,6 +132,16 @@ to scale the unified read pool's thread count under foreground CPU pressure.
 This is a real cross-crate contract, not an internal implementation detail —
 changes to either side must keep the other consistent:
 
+> **`enable-fair-scheduling` requires `readpool.unified.auto-adjust-pool-size`.**
+> A group is deprioritised while the pool is scaled in and released once the
+> pool recovers to `core_thread_count`, so pool movement *is* the release
+> signal. `adjust_pool_size` returns early when auto-adjustment is off, which
+> means the pool never moves and no group is ever deprioritised. Since
+> `auto-adjust-pool-size` defaults to false, enabling fair scheduling on its
+> own silently does nothing. This is deliberately not rejected at config load,
+> to stay backward compatible with configs that already set only one of them.
+
+
 - `online_adjust_resource_quota(cpu_score)` — called once per tick from
   `worker.rs` with the shared `cpu_score` from `score::compute_resource_scores`.
   Internally refreshes `read_pool_cpu_pressure` (a `[0, 1]` fraction, `0` when

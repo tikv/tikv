@@ -817,12 +817,12 @@ impl ReadPoolConfigRunner {
             _ => unreachable!(),
         };
 
-        // Without auto-adjustment or a resource manager nothing can move the
-        // pool. Whether fair scheduling is on is the manager's own business:
-        // its read-pool entry points below are no-ops while it is off.
-        if !self.auto_adjust && resource_manager.is_none() {
-            // Nothing else will size the pool on this path, so put it back to
-            // the configured size.
+        // Pool sizing is gated entirely on auto_adjust: with it off the pool
+        // stays at its configured size, exactly as before this change. Note
+        // this also makes fair scheduling inert, since its release signal is
+        // the pool recovering to core_thread_count — see
+        // `Config::enable_fair_scheduling`.
+        if !self.auto_adjust {
             self.reset_thread_count();
             return;
         }
@@ -838,22 +838,10 @@ impl ReadPoolConfigRunner {
             }
         };
 
-        // With auto-adjustment off the pool is pinned at core_thread_count: the
-        // thread ladder below can recover up to it but never shrink past it,
-        // leaving fair scheduling's CPU ladder as the only way the pool moves.
-        let (mut target_cpu_cores, min_thread_count, max_thread_count) = if self.auto_adjust {
-            let target = if self.cpu_threshold > 0.0 {
-                self.cpu_threshold * SysQuota::cpu_cores_quota()
-            } else {
-                SysQuota::cpu_cores_quota()
-            };
-            (target, self.min_thread_count, self.max_thread_count)
+        let mut target_cpu_cores = if self.cpu_threshold > 0.0 {
+            self.cpu_threshold * SysQuota::cpu_cores_quota()
         } else {
-            (
-                SysQuota::cpu_cores_quota(),
-                self.core_thread_count,
-                self.core_thread_count,
-            )
+            SysQuota::cpu_cores_quota()
         };
 
         // Fold the ResourceGroupManager's foreground-pressure-driven target
@@ -879,16 +867,15 @@ impl ReadPoolConfigRunner {
             None => true,
         };
 
-        // Thread-utilization ladder (process CPU, thread usage, queue depth),
-        // bounded by the effective range computed above.
-        let busy_thread_scale_out = self.cur_thread_count < max_thread_count
+        // Thread-utilization ladder (process CPU, thread usage, queue depth).
+        let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
             && scale_out_allowed
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let busy_thread_scale_in = self.cur_thread_count > min_thread_count
+        let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
@@ -1602,7 +1589,8 @@ mod tests {
 
     // Runner with auto-adjust off. Every other read pool test enables it,
     // which is why the fair-scheduling coupling went unnoticed.
-    fn runner_with_auto_adjust_off(
+    fn test_runner(
+        auto_adjust: bool,
         resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> (ReadPoolConfigRunner, tikv_util::worker::Worker) {
         use tikv_util::worker::Worker;
@@ -1611,8 +1599,7 @@ mod tests {
             min_thread_count: 1,
             max_thread_count: 8,
             max_tasks_per_worker: 4,
-            auto_adjust_pool_size: false, // production default
-
+            auto_adjust_pool_size: auto_adjust,
             ..Default::default()
         };
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1637,43 +1624,10 @@ mod tests {
             core_thread_count: 8,
             cur_thread_count: 8,
             max_thread_count: config.max_thread_count,
-            auto_adjust: false,
+            auto_adjust,
             cpu_threshold: config.cpu_threshold,
         };
         (runner, worker)
-    }
-
-    #[test]
-    fn test_fair_scheduling_scales_in_with_auto_adjust_disabled() {
-        // Before the fix, adjust_pool_size returned early on !auto_adjust, so
-        // enabling only enable-fair-scheduling silently did nothing.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager.clone()));
-
-        // Drive foreground pressure as the real GroupQuotaAdjustWorker tick
-        // would, so compute_read_pool_target_cpu returns a real ceiling.
-        resource_manager.set_bg_cpu_at_floor(true);
-        resource_manager.online_adjust_resource_quota(90.0);
-        assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
-
-        runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
-        let before = runner.cur_thread_count;
-
-        runner.adjust_pool_size();
-
-        assert!(
-            runner.cur_thread_count < before,
-            "fair scheduling should scale the pool in even with auto-adjust off; \
-             before: {}, after: {}",
-            before,
-            runner.cur_thread_count
-        );
-
-        worker.stop();
     }
 
     #[test]
@@ -1685,7 +1639,7 @@ mod tests {
             ..Default::default()
         };
         let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager));
+        let (mut runner, worker) = test_runner(false, Some(resource_manager));
 
         runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
         let before = runner.cur_thread_count;
@@ -1710,7 +1664,7 @@ mod tests {
             ..Default::default()
         };
         let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager));
+        let (mut runner, worker) = test_runner(false, Some(resource_manager));
         // A wider configured range than core: only the effective bound stops
         // the ladder from using it.
         runner.min_thread_count = 1;
@@ -1760,7 +1714,10 @@ mod tests {
             })
             .unwrap();
 
-        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager.clone()));
+        let (mut runner, worker) = test_runner(true, Some(resource_manager.clone()));
+        // Pin the thread ladder so it can't shrink the pool and send the tick
+        // down the deprioritize branch instead of the release one.
+        runner.min_thread_count = runner.core_thread_count;
         runner.adjust_pool_size();
 
         // Re-enable: a stale flag would come back deprioritized here.
@@ -1784,10 +1741,9 @@ mod tests {
     }
 
     #[test]
-    fn test_phase1_group_released_once_auto_adjust_is_disabled() {
-        // Task::AutoAdjust(false) restores the pool to core_thread_count but
-        // doesn't reset priorities itself; the next tick does. Before the fix
-        // that tick returned early, stranding the group in phase 1.
+    fn test_phase1_group_released_when_pool_recovers() {
+        // A group deprioritized while the pool was scaled in must be released
+        // once the pool is back at core_thread_count.
         let rm_config = resource_control::config::Config {
             enable_fair_scheduling: true,
             ..Default::default()
@@ -1814,9 +1770,10 @@ mod tests {
             phase1_priority
         );
 
-        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager.clone()));
-        // At core_thread_count, as Task::AutoAdjust(false) leaves it, so this
+        let (mut runner, worker) = test_runner(true, Some(resource_manager.clone()));
+        // Pin the thread ladder so the pool stays at core_thread_count and the
         // tick takes the release branch.
+        runner.min_thread_count = runner.core_thread_count;
         assert_eq!(runner.cur_thread_count, runner.core_thread_count);
 
         runner.adjust_pool_size();
