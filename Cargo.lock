@@ -2428,6 +2428,7 @@ dependencies = [
  "log_wrappers",
  "num_cpus",
  "online_config",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "proptest",

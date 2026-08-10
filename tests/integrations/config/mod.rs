@@ -659,6 +659,7 @@ fn test_serde_custom_tikv_config() {
             enable_pipelined_write: false,
             enable_unordered_write: false,
             allow_concurrent_memtable_write: false,
+            enable_snapshot_sequence_number_check: cfg!(debug_assertions),
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(32),
             defaultcf: RaftDefaultCfConfig {
