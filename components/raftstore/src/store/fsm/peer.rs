@@ -4031,6 +4031,9 @@ where
             self.fsm
                 .peer
                 .set_pending_transfer_leader_msg(&self.ctx.cfg, msg);
+            // A retry keeps the original deadline, which may have already
+            // elapsed. Check it immediately instead of waiting for another
+            // poll cycle.
             if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
                 self.fsm.has_ready = true;
             }

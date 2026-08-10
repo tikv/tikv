@@ -117,6 +117,9 @@ High-risk contracts:
   apply guarantees.
 - Tablet-backed state transitions must remain aligned with region/raft
   metadata.
+- Pending pre-transfer-leader messages and cache warm-up state belong to the
+  leader ID and term that accepted them. They must be discarded when either
+  changes, including term changes that do not yield a new Raft `SoftState`.
 - Split/merge/bootstrap/destroy flows must keep router, FSM, and tablet state
   mutually consistent.
 
