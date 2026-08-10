@@ -120,6 +120,7 @@ fn test_serde_custom_tikv_config() {
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: Some(ReadableDuration::secs(12)),
         end_point_max_concurrency: 10,
+        end_point_max_bg_concurrency: Some(3),
         end_point_perf_level: PerfLevel::EnableTime,
         snap_io_max_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),

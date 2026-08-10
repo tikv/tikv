@@ -103,7 +103,6 @@ lazy_static! {
 
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
-
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
@@ -208,6 +207,11 @@ pub struct Config {
     pub end_point_request_max_handle_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    /// Optional maximum number of concurrently running background-limited
+    /// Analyze tasks. `None` or `Some(0)` keeps Analyze requests on the
+    /// shared semaphore.
+    #[online_config(skip)]
+    pub end_point_max_bg_concurrency: Option<u64>,
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
@@ -341,6 +345,7 @@ impl Default for Config {
             end_point_enable_batch_if_possible: true,
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_max_bg_concurrency: None,
             end_point_perf_level: PerfLevel::Uninitialized,
             end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
@@ -439,6 +444,14 @@ impl Config {
         for (label, value) in non_zero_entries {
             if value == 0 {
                 return Err(box_err!("server.{} should not be 0.", label));
+            }
+        }
+
+        if let Some(value) = self.end_point_max_bg_concurrency {
+            if value > usize::MAX as u64 {
+                return Err(box_err!(
+                    "server.end-point-max-bg-concurrency is too large."
+                ));
             }
         }
 

@@ -65,13 +65,6 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-/// Reserve up to one quarter of the configured heavy-task budget (but never
-/// less than 1 permit) as an extra cap for request classes that are already
-/// throttled by the background quota limiter. The dedicated cap is computed
-/// once from `end_point_max_concurrency` during endpoint construction rather
-/// than following read-pool worker autoscaling at runtime.
-const BACKGROUND_LIMITED_CONCURRENCY_DIVISOR: usize = 4;
-
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
@@ -134,35 +127,24 @@ impl<Snap> ParseCopRequestResult<Snap> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    /// Compute the dedicated cap for request classes that intentionally use
-    /// the background quota limiter. Ordinary coprocessor traffic keeps the
-    /// full configured shared budget, so this additional semaphore can raise
-    /// the total number of concurrent heavy tasks when both groups are active.
-    fn background_limited_request_concurrency(max_concurrency: usize) -> usize {
-        std::cmp::max(1, max_concurrency / BACKGROUND_LIMITED_CONCURRENCY_DIVISOR)
-    }
-
     fn build_request_semaphores(
         read_pool: &ReadPoolHandle,
-        max_concurrency: usize,
+        shared_concurrency: usize,
+        background_limited_concurrency: Option<u64>,
     ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
         match read_pool {
             ReadPoolHandle::Yatp { .. } => {
-                // Ordinary coprocessor requests keep the full heavy-task
-                // budget. Requests that are intentionally throttled by the
-                // background quota limiter also receive a bounded dedicated cap
-                // so they do not bypass admission entirely.
-                if max_concurrency > 1 {
-                    let background_concurrency =
-                        Self::background_limited_request_concurrency(max_concurrency);
-                    (
-                        Some(Arc::new(Semaphore::new(max_concurrency))),
-                        Some(Arc::new(Semaphore::new(background_concurrency))),
-                    )
-                } else {
-                    let semaphore = Arc::new(Semaphore::new(max_concurrency));
-                    (Some(semaphore.clone()), Some(semaphore))
-                }
+                // Keep the legacy shared behavior unless the operator explicitly
+                // enables a positive background-limited Analyze cap.
+                let shared = Arc::new(Semaphore::new(shared_concurrency));
+                let background = match background_limited_concurrency {
+                    Some(concurrency) if concurrency > 0 => Arc::new(Semaphore::new(
+                        usize::try_from(concurrency)
+                            .expect("background-limited semaphore exceeds platform capacity"),
+                    )),
+                    _ => shared.clone(),
+                };
+                (Some(shared), Some(background))
             }
             _ => (None, None),
         }
@@ -183,8 +165,11 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        let (shared_semaphore, background_limited_semaphore) =
-            Self::build_request_semaphores(&read_pool, cfg.end_point_max_concurrency);
+        let (shared_semaphore, background_limited_semaphore) = Self::build_request_semaphores(
+            &read_pool,
+            cfg.end_point_max_concurrency,
+            cfg.end_point_max_bg_concurrency,
+        );
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
@@ -367,10 +352,10 @@ impl<E: Engine> Endpoint<E> {
 
                 (req_tag, semaphore_group) = match analyze.get_tp() {
                     AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
-                        (ReqTag::analyze_index, SemaphoreGroup::Shared)
+                        (ReqTag::analyze_index, SemaphoreGroup::BackgroundLimited)
                     }
                     AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => {
-                        (ReqTag::analyze_table, SemaphoreGroup::Shared)
+                        (ReqTag::analyze_table, SemaphoreGroup::BackgroundLimited)
                     }
                     AnalyzeType::TypeFullSampling => (
                         ReqTag::analyze_full_sampling,
@@ -1848,6 +1833,7 @@ mod tests {
     fn test_background_limited_semaphore_preserves_shared_capacity() {
         let config = Config {
             end_point_max_concurrency: 8,
+            end_point_max_bg_concurrency: Some(3),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
@@ -1856,7 +1842,7 @@ mod tests {
         let background = copr.background_limited_semaphore.as_ref().unwrap();
         assert!(!Arc::ptr_eq(shared, background));
         assert_eq!(shared.available_permits(), 8);
-        assert_eq!(background.available_permits(), 2);
+        assert_eq!(background.available_permits(), 3);
         assert!(Arc::ptr_eq(
             shared,
             copr.request_semaphore(SemaphoreGroup::Shared)
@@ -1872,18 +1858,35 @@ mod tests {
     }
 
     #[test]
-    fn test_small_semaphore_budget_reuses_single_limit() {
+    fn test_small_shared_semaphore_keeps_background_limit_independent() {
         let config = Config {
             end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(7),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
 
         let shared = copr.shared_semaphore.as_ref().unwrap();
         let background = copr.background_limited_semaphore.as_ref().unwrap();
-        assert!(Arc::ptr_eq(shared, background));
+        assert!(!Arc::ptr_eq(shared, background));
         assert_eq!(shared.available_permits(), 1);
-        assert_eq!(background.available_permits(), 1);
+        assert_eq!(background.available_permits(), 7);
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_disabled_by_default_or_zero() {
+        for background_limited_semaphore in [None, Some(0)] {
+            let config = Config {
+                end_point_max_concurrency: 8,
+                end_point_max_bg_concurrency: background_limited_semaphore,
+                ..Default::default()
+            };
+            let (copr, _read_pool) = build_yatp_copr(config);
+            assert!(Arc::ptr_eq(
+                copr.shared_semaphore.as_ref().unwrap(),
+                copr.background_limited_semaphore.as_ref().unwrap(),
+            ));
+        }
     }
 
     #[test]
@@ -1916,19 +1919,31 @@ mod tests {
             .parse_request_and_check_memory_locks(req, None, false)
             .unwrap();
         assert_eq!(parsed.req_tag, ReqTag::analyze_table);
-        assert_eq!(parsed.semaphore_group, SemaphoreGroup::Shared);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
         assert!(Arc::ptr_eq(
-            copr.shared_semaphore.as_ref().unwrap(),
+            copr.background_limited_semaphore.as_ref().unwrap(),
             copr.request_semaphore(parsed.semaphore_group)
                 .as_ref()
                 .unwrap()
         ));
+
+        let mut index = AnalyzeReq::default();
+        index.set_tp(AnalyzeType::TypeIndex);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(index.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_index);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
     }
 
     #[test]
     fn test_background_limited_requests_progress_when_shared_semaphore_is_full() {
         let config = Config {
             end_point_max_concurrency: 4,
+            end_point_max_bg_concurrency: Some(2),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
