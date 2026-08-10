@@ -773,12 +773,12 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             self.router.update_approximate_size(
                 region.get_id(),
                 None,
-                Some(!split_keys.is_empty()),
+                Some(true),
             );
             self.router.update_approximate_keys(
                 region.get_id(),
                 None,
-                Some(!split_keys.is_empty()),
+                Some(true),
             );
 
             let region_epoch = region.get_region_epoch().clone();
