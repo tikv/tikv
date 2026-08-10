@@ -631,28 +631,29 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             },
         };
         let region_id = region.get_id();
-        let is_key_range = start_key.is_some() && end_key.is_some();
-        let request_start_key = start_key.as_deref();
-        let request_end_key = end_key.as_deref();
-        let start_key = if is_key_range {
-            match request_start_key.unwrap() {
-                // Empty start bound means unbounded start and should fall back
-                // to region start key.
-                [] => keys::enc_start_key(region),
-                key => keys::data_key(Key::from_raw(key).as_encoded().as_slice()),
+        let requested_range = start_key.as_deref().zip(end_key.as_deref());
+        let is_key_range = requested_range.is_some();
+      
+        let region_start_key = keys::enc_start_key(region);
+        let region_end_key = keys::enc_end_key(region);
+      
+        let (start_key, end_key) = match requested_range {
+            Some((start_key, end_key)) => {
+                let start_key = if start_key.is_empty() {
+                    region_start_key.clone()
+                } else {
+                    keys::data_key(Key::from_raw(start_key).as_encoded())
+                };
+      
+                let end_key = if end_key.is_empty() {
+                    region_end_key.clone()
+                } else {
+                    keys::data_end_key(Key::from_raw(end_key).as_encoded())
+                };
+      
+                (start_key, end_key)
             }
-        } else {
-            keys::enc_start_key(region)
-        };
-        let end_key = if is_key_range {
-            match request_end_key.unwrap() {
-                // Empty end bound means unbounded end and should fall back to
-                // region end key.
-                [] => keys::enc_end_key(region),
-                key => keys::data_end_key(Key::from_raw(key).as_encoded().as_slice()),
-            }
-        } else {
-            keys::enc_end_key(region)
+            None => (region_start_key, region_end_key),
         };
         debug!(
             "executing task";
@@ -759,8 +760,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 info!(
                     "load split fallback to approximate middle in key range";
                     "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(request_start_key.unwrap()),
-                    "end_key" => log_wrappers::Value::key(request_end_key.unwrap()),
+                    "start_key" => log_wrappers::Value::key(&start_key),
+                    "end_key" => log_wrappers::Value::key(&end_key),
                     "split_key" => log_wrappers::Value::key(&split_key),
                 );
                 split_keys.push(split_key);
