@@ -12,7 +12,8 @@ mod all {
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            mpsc::sync_channel,
+            Arc, Mutex,
         },
         time::Duration,
     };
@@ -452,10 +453,157 @@ mod all {
 
         assert!(
             safepoints.iter().any(|sp| {
-                sp.serivce.contains(&format!("{}", victim))
+                sp.service.contains(&format!("{}", victim))
                     && sp.ttl >= Duration::from_secs(60 * 60 * 24)
                     && sp.safepoint.into_inner() == checkpoint - 1
             }),
+            "{:?}",
+            safepoints
+        );
+    }
+
+    #[test]
+    fn unregister_during_flush_cleans_flush_safe_point() {
+        let mut suite = SuiteBuilder::new_named("unregister_during_flush")
+            .nodes(1)
+            .build();
+        let task = "unregister_during_flush";
+        let service_id = format!("backup-stream-{}-{}", task, 1);
+        let (paused_tx, paused_rx) = sync_channel(0);
+        let (resume_tx, resume_rx) = sync_channel(0);
+        let resume_rx = Mutex::new(resume_rx);
+        let (cleanup_tx, cleanup_rx) = sync_channel(0);
+        let (cleanup_task_tx, cleanup_task_rx) = sync_channel(0);
+
+        fail::cfg_callback("before_flush_observer_after", move || {
+            paused_tx.send(()).unwrap();
+            resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_flush_observer_after")
+        }
+        fail::cfg_callback("before_schedule_cleanup_flush_safe_point", move || {
+            cleanup_tx.send(()).unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_schedule_cleanup_flush_safe_point")
+        }
+        fail::cfg_callback("before_cleanup_flush_safe_point", move || {
+            cleanup_task_tx.send(()).unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_cleanup_flush_safe_point")
+        }
+
+        suite.must_register_task(1, task);
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+
+        suite.run(|| Task::ForceFlush(task.to_owned()));
+        paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should reach observer tail");
+
+        run_async_test(suite.meta_store.delete(Keys::Key(MetaKey::task_of(task)))).unwrap();
+        suite.wait_with_router(|router| !block_on(router.has_task(task)));
+
+        resume_tx.send(()).unwrap();
+        cleanup_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should try to schedule safe point cleanup");
+        cleanup_task_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("safe point cleanup task should run");
+
+        let mut cleaned = false;
+        for _ in 0..100 {
+            let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+            if !safepoints
+                .iter()
+                .any(|sp| sp.service == service_id && sp.safepoint.into_inner() > 0)
+            {
+                cleaned = true;
+                break;
+            }
+            drop(safepoints);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        assert!(cleaned, "{:?}", safepoints);
+    }
+
+    #[test]
+    fn cleanup_flush_safe_point_keeps_same_name_registered_task() {
+        let mut suite = SuiteBuilder::new_named("cleanup_same_name_task")
+            .nodes(1)
+            .build();
+        let task = "cleanup_same_name_task";
+        let service_id = format!("backup-stream-{}-{}", task, 1);
+        let (observer_paused_tx, observer_paused_rx) = sync_channel(0);
+        let (observer_resume_tx, observer_resume_rx) = sync_channel(0);
+        let observer_resume_rx = Mutex::new(observer_resume_rx);
+        let (cleanup_paused_tx, cleanup_paused_rx) = sync_channel(0);
+        let (cleanup_resume_tx, cleanup_resume_rx) = sync_channel(0);
+        let cleanup_resume_rx = Mutex::new(cleanup_resume_rx);
+        let (cleanup_task_tx, cleanup_task_rx) = sync_channel(0);
+
+        fail::cfg_callback("before_flush_observer_after", move || {
+            observer_paused_tx.send(()).unwrap();
+            observer_resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_flush_observer_after")
+        }
+        fail::cfg_callback("before_schedule_cleanup_flush_safe_point", move || {
+            cleanup_paused_tx.send(()).unwrap();
+            cleanup_resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_schedule_cleanup_flush_safe_point")
+        }
+        fail::cfg_callback("before_cleanup_flush_safe_point", move || {
+            cleanup_task_tx.send(()).unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_cleanup_flush_safe_point")
+        }
+
+        suite.must_register_task(1, task);
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+
+        suite.run(|| Task::ForceFlush(task.to_owned()));
+        observer_paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should reach observer tail");
+
+        run_async_test(suite.meta_store.delete(Keys::Key(MetaKey::task_of(task)))).unwrap();
+        suite.wait_with_router(|router| !block_on(router.has_task(task)));
+
+        observer_resume_tx.send(()).unwrap();
+        cleanup_paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should try to schedule safe point cleanup");
+
+        suite.must_register_task(1, task);
+        cleanup_resume_tx.send(()).unwrap();
+        cleanup_task_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("safe point cleanup task should run");
+        suite.sync();
+
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        assert!(
+            safepoints
+                .iter()
+                .any(|sp| sp.service == service_id && !sp.ttl.is_zero()),
             "{:?}",
             safepoints
         );

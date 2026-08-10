@@ -928,7 +928,7 @@ pub struct TestPdClient {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GcSafePoint {
-    pub serivce: String,
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1951,12 +1951,22 @@ impl PdClient for TestPdClient {
         safepoint: TimeStamp,
         ttl: Duration,
     ) -> PdFuture<()> {
+        let mut gc_safepoints = self.gc_safepoints.wl();
+        if ttl.is_zero() {
+            gc_safepoints.retain(|sp| sp.service != name);
+            return Box::pin(ok(()));
+        }
         if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
-                ttl,
-                safepoint,
-            });
+            if let Some(sp) = gc_safepoints.iter_mut().find(|sp| sp.service == name) {
+                sp.ttl = ttl;
+                sp.safepoint = safepoint;
+            } else {
+                gc_safepoints.push(GcSafePoint {
+                    service: name,
+                    ttl,
+                    safepoint,
+                });
+            }
         }
         Box::pin(ok(()))
     }

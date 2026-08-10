@@ -500,6 +500,10 @@ impl RouterInner {
         })
     }
 
+    pub async fn has_task(&self, task_name: &str) -> bool {
+        self.tasks.lock().await.contains_key(task_name)
+    }
+
     /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         let r = self.ranges.read().unwrap();
