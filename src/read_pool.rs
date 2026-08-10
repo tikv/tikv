@@ -824,6 +824,11 @@ impl ReadPoolConfigRunner {
         // `Config::enable_fair_scheduling`.
         if !self.auto_adjust {
             self.reset_thread_count();
+            // Release anything deprioritized while auto-adjustment was on, so
+            // a stale flag can't outlive the pool movement that set it.
+            if let Some(rm) = resource_manager.as_ref() {
+                rm.reset_group_priorities();
+            }
             return;
         }
 
@@ -1628,6 +1633,40 @@ mod tests {
             cpu_threshold: config.cpu_threshold,
         };
         (runner, worker)
+    }
+
+    #[test]
+    fn test_phase1_group_released_when_auto_adjust_is_off() {
+        // Auto-adjust off makes fair scheduling inert, so a flag set while it
+        // was on must not outlive it: the pool no longer moves, and pool
+        // movement is what would otherwise release the group.
+        let rm_config = resource_control::config::Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+        let ctl = resource_manager.derive_controller("read".into(), true);
+
+        let group = tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
+        resource_manager.record_ru_consumption(group, 1000);
+
+        let phase0 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        ctl.set_group_phase(group.as_bytes(), true);
+        let phase1 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        assert!(phase1 > phase0, "sanity: group should be in phase 1");
+
+        let (mut runner, worker) = test_runner(false, Some(resource_manager.clone()));
+        runner.adjust_pool_size();
+
+        let after = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        assert!(
+            after < phase1,
+            "auto-adjust off should release phase 1; phase1: {}, after: {}",
+            phase1,
+            after
+        );
+
+        worker.stop();
     }
 
     #[test]
