@@ -1631,6 +1631,31 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_auto_scaling_without_resource_manager() {
+        // Auto-adjust on with no resource manager still runs the original
+        // thread-utilization ladder; with it off the pool must not move. Same
+        // conditions either way, so the only variable is the gate itself.
+        let (mut runner, worker) = test_runner(true, None);
+        let before = runner.cur_thread_count;
+        runner.adjust_pool_size();
+        assert_eq!(
+            runner.cur_thread_count,
+            before - 1,
+            "an idle pool should scale in by one step"
+        );
+        worker.stop();
+
+        let (mut runner, worker) = test_runner(false, None);
+        let before = runner.cur_thread_count;
+        runner.adjust_pool_size();
+        assert_eq!(
+            runner.cur_thread_count, before,
+            "auto-adjust off must leave the pool at its configured size"
+        );
+        worker.stop();
+    }
+
+    #[test]
     fn test_no_scaling_when_both_fair_scheduling_and_auto_adjust_are_off() {
         // Control: with both off there is nothing to maintain, so the pool
         // must stay put.
