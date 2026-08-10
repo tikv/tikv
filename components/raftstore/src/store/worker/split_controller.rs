@@ -698,7 +698,6 @@ impl AutoSplitController {
         region_id: u64,
         hottest_key_range: &KeyRange,
     ) -> bool {
-        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
         self.cpu_top_fallback_suppressions
             .get(&region_id)
             .is_some_and(|entries| {
@@ -711,7 +710,6 @@ impl AutoSplitController {
 
     /// Records a CPU-top fallback attempt for this region/range pair.
     fn record_cpu_top_fallback(&mut self, region_id: u64, hottest_key_range: &KeyRange) {
-        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
         let now = Instant::now_coarse();
         let entries = self
             .cpu_top_fallback_suppressions
@@ -1017,6 +1015,9 @@ impl AutoSplitController {
                     })
                 {
                     if let Some(hottest_key_range) = hottest_key_range {
+                        // Prune once before this check-and-record sequence to
+                        // avoid duplicate pruning in the immediate hot path.
+                        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
                         if self.should_suppress_cpu_top_fallback(region_id, &hottest_key_range) {
                             LOAD_BASE_SPLIT_EVENT
                                 .cpu_top_fallback_suppressed_repeat
@@ -1034,15 +1035,13 @@ impl AutoSplitController {
                                 hottest_key_range.start_key.clone(),
                                 hottest_key_range.end_key.clone(),
                             ));
+                            // Record this emitted auto-split attempt for
+                            // cooldown-based duplicate suppression. This state
+                            // reflects emission only; the controller does not
+                            // receive asynchronous acceptance/completion
+                            // feedback from peers, so transient failures may
+                            // delay the next retry until cooldown expires.
                             self.record_cpu_top_fallback(region_id, &hottest_key_range);
-                            // Record the range after emitting the auto-split request. The
-                            // controller does not receive asynchronous
-                            // acceptance or failure feedback from the peer, so
-                            // this cooldown suppresses duplicate emissions rather than confirming
-                            // that the split was accepted or completed.
-                            // A transient routing, epoch, or leadership
-                            // failure may therefore delay the next retry until the cooldown
-                            // expires.
                             LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
                             info!("load base split region";
                                 "region_id" => region_id,
