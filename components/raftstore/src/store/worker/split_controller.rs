@@ -1035,6 +1035,14 @@ impl AutoSplitController {
                                 hottest_key_range.end_key.clone(),
                             ));
                             self.record_cpu_top_fallback(region_id, &hottest_key_range);
+                            // Record the range after emitting the auto-split request. The
+                            // controller does not receive asynchronous
+                            // acceptance or failure feedback from the peer, so
+                            // this cooldown suppresses duplicate emissions rather than confirming
+                            // that the split was accepted or completed.
+                            // A transient routing, epoch, or leadership
+                            // failure may therefore delay the next retry until the cooldown
+                            // expires.
                             LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
                             info!("load base split region";
                                 "region_id" => region_id,

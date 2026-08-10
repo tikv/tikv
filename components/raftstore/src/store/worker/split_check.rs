@@ -633,10 +633,10 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let region_id = region.get_id();
         let requested_range = start_key.as_deref().zip(end_key.as_deref());
         let is_key_range = requested_range.is_some();
-      
+
         let region_start_key = keys::enc_start_key(region);
         let region_end_key = keys::enc_end_key(region);
-      
+
         let (start_key, end_key) = match requested_range {
             Some((start_key, end_key)) => {
                 let start_key = if start_key.is_empty() {
@@ -644,13 +644,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 } else {
                     keys::data_key(Key::from_raw(start_key).as_encoded())
                 };
-      
+
                 let end_key = if end_key.is_empty() {
                     region_end_key.clone()
                 } else {
                     keys::data_end_key(Key::from_raw(end_key).as_encoded())
                 };
-      
+
                 (start_key, end_key)
             }
             None => (region_start_key, region_end_key),
@@ -771,16 +771,10 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         if !split_keys.is_empty() {
             // Notify peer that if the region is truly splitable.
             // If it's truly splitable, then skip_split_check should be false;
-            self.router.update_approximate_size(
-                region.get_id(),
-                None,
-                Some(true),
-            );
-            self.router.update_approximate_keys(
-                region.get_id(),
-                None,
-                Some(true),
-            );
+            self.router
+                .update_approximate_size(region.get_id(), None, Some(true));
+            self.router
+                .update_approximate_keys(region.get_id(), None, Some(true));
 
             let region_epoch = region.get_region_epoch().clone();
             let source = match reason {
