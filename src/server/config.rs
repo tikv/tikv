@@ -20,6 +20,7 @@ use tikv_util::{
     sys::SysQuota,
     worker::Scheduler,
 };
+use tokio::sync::Semaphore;
 
 use super::{Result, snap::Task as SnapTask};
 pub use crate::storage::config::Config as StorageConfig;
@@ -211,7 +212,7 @@ pub struct Config {
     /// Analyze tasks. `None` or `Some(0)` keeps Analyze requests on the
     /// shared semaphore.
     #[online_config(skip)]
-    pub end_point_max_bg_concurrency: Option<u64>,
+    pub end_point_max_bg_concurrency: Option<usize>,
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
@@ -448,7 +449,7 @@ impl Config {
         }
 
         if let Some(value) = self.end_point_max_bg_concurrency {
-            if value > usize::MAX as u64 {
+            if value > Semaphore::MAX_PERMITS {
                 return Err(box_err!(
                     "server.end-point-max-bg-concurrency is too large."
                 ));

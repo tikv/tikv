@@ -129,19 +129,18 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 impl<E: Engine> Endpoint<E> {
     fn build_request_semaphores(
         read_pool: &ReadPoolHandle,
-        shared_concurrency: usize,
-        background_limited_concurrency: Option<u64>,
+        max_concurrency: usize,
+        max_bg_concurrency: Option<usize>,
     ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
         match read_pool {
             ReadPoolHandle::Yatp { .. } => {
                 // Keep the legacy shared behavior unless the operator explicitly
                 // enables a positive background-limited Analyze cap.
-                let shared = Arc::new(Semaphore::new(shared_concurrency));
-                let background = match background_limited_concurrency {
-                    Some(concurrency) if concurrency > 0 => Arc::new(Semaphore::new(
-                        usize::try_from(concurrency)
-                            .expect("background-limited semaphore exceeds platform capacity"),
-                    )),
+                let shared = Arc::new(Semaphore::new(max_concurrency));
+                let background = match max_bg_concurrency {
+                    Some(max_bg_concurrency) if max_bg_concurrency > 0 => {
+                        Arc::new(Semaphore::new(max_bg_concurrency))
+                    }
                     _ => shared.clone(),
                 };
                 (Some(shared), Some(background))

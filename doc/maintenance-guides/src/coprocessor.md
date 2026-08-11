@@ -115,9 +115,10 @@ It is a read-heavy hot path and directly impacts query latency.
   of bypassing heavy-task admission. With the setting disabled, it intentionally
   shares the ordinary semaphore.
 - When enabled, the dedicated background-limited semaphore protects all
-  Analyze variants, including index, column, mixed, and full-sampling Analyze,
-  from unlimited fan-out. It is not part of the ordinary shared heavy-task
-  budget; when disabled, these requests intentionally use the shared semaphore.
+  Analyze variants, including index, common-handle, column, mixed, and
+  full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
+  shared heavy-task budget; when disabled, these requests intentionally use the
+  shared semaphore.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 
