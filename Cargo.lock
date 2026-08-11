@@ -3757,7 +3757,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3769,14 +3769,14 @@ dependencies = [
  "lz4-sys",
  "openssl-sys",
  "snappy-sys",
- "tikv-jemalloc-sys",
+ "tikv-jemalloc-sys 0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7",
  "zstd-sys",
 ]
 
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5734,7 +5734,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -7437,7 +7437,7 @@ checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc 0.2.151",
  "paste",
- "tikv-jemalloc-sys",
+ "tikv-jemalloc-sys 0.5.0+5.3.0",
 ]
 
 [[package]]
@@ -7452,13 +7452,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-jemalloc-sys"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
+dependencies = [
+ "cc",
+ "libc 0.2.151",
+]
+
+[[package]]
 name = "tikv-jemallocator"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
 dependencies = [
  "libc 0.2.151",
- "tikv-jemalloc-sys",
+ "tikv-jemalloc-sys 0.5.0+5.3.0",
 ]
 
 [[package]]
@@ -7490,7 +7500,7 @@ dependencies = [
  "tcmalloc",
  "tempfile",
  "tikv-jemalloc-ctl",
- "tikv-jemalloc-sys",
+ "tikv-jemalloc-sys 0.5.0+5.3.0",
  "tikv-jemallocator",
 ]
 
