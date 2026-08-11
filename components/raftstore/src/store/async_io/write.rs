@@ -207,6 +207,10 @@ where
     pub trackers: Vec<TimeTracker>,
     pub has_snapshot: bool,
     pub flushed_epoch: Option<RegionEpoch>,
+    /// Whether the raft log write must be fsynced. Defaults to true so a task
+    /// from a path that never calls `set_must_sync`, as raftstore-v2 does,
+    /// keeps the old always-fsync behavior.
+    pub must_sync: bool,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -230,7 +234,23 @@ where
             persisted_cbs: Vec::new(),
             has_snapshot: false,
             flushed_epoch: None,
+            must_sync: true,
         }
+    }
+
+    /// Raft requires term and vote to be durable before responding to RPCs, and
+    /// a snapshot rewrites metadata that cannot be replayed. Entry appends
+    /// are left out so `unsafe_no_raft_log_fsync` can drop their fsync.
+    pub fn set_must_sync(
+        &mut self,
+        prev_state: &RaftLocalState,
+        cur_state: &RaftLocalState,
+        has_snapshot: bool,
+    ) {
+        let prev = prev_state.get_hard_state();
+        let cur = cur_state.get_hard_state();
+        self.must_sync =
+            cur.get_term() != prev.get_term() || cur.get_vote() != prev.get_vote() || has_snapshot;
     }
 
     pub fn has_data(&self) -> bool {
@@ -496,6 +516,8 @@ where
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
     pub(crate) raft_wb_split_size: usize,
+    /// True when any task in this batch requires an fsync.
+    pub must_sync: bool,
     recorder: WriteTaskBatchRecorder,
 }
 
@@ -518,6 +540,7 @@ where
             persisted_cbs: vec![],
             readies: HashMap::default(),
             raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
+            must_sync: false,
             recorder: WriteTaskBatchRecorder::new(write_batch_size_hint, write_wait_duration),
         }
     }
@@ -598,6 +621,7 @@ where
         for v in task.persisted_cbs.drain(..) {
             self.persisted_cbs.push(v);
         }
+        self.must_sync |= task.must_sync;
         self.tasks.push(task);
         // Record the size of the batch.
         self.recorder.record(self.get_raft_size());
@@ -611,6 +635,7 @@ where
         self.state_size = 0;
         self.tasks.clear();
         self.readies.clear();
+        self.must_sync = false;
         self.recorder.reset_wait_count();
     }
 
@@ -707,6 +732,9 @@ where
     batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
+    /// See `Config::unsafe_no_raft_log_fsync`. Refreshed from `cfg_tracker`
+    /// after each batch.
+    unsafe_no_raft_log_fsync: bool,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
@@ -749,6 +777,7 @@ where
             batch,
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
+            unsafe_no_raft_log_fsync: cfg.value().unsafe_no_raft_log_fsync,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
@@ -849,6 +878,12 @@ where
         self.batch.add_write_task(&self.raft_engine, task);
     }
 
+    /// Entry appends drop the fsync when the unsafe switch is on. Term/vote
+    /// changes and snapshots set `must_sync` and are still fsynced.
+    fn need_raft_log_fsync(&self) -> bool {
+        !self.unsafe_no_raft_log_fsync || self.batch.must_sync
+    }
+
     pub fn write_to_db(&mut self, notify: bool) {
         if self.batch.is_empty() {
             return;
@@ -901,11 +936,15 @@ where
 
             let now = Instant::now();
             self.perf_context.start_observe();
+            let need_sync = self.need_raft_log_fsync();
+            STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+                .with_label_values(&[if need_sync { "sync" } else { "skip" }])
+                .inc();
             for i in 0..self.batch.raft_wbs.len() {
                 self.raft_engine
                     .consume_and_shrink(
                         &mut self.batch.raft_wbs[i],
-                        true,
+                        need_sync,
                         RAFT_WB_SHRINK_SIZE,
                         RAFT_WB_DEFAULT_SIZE,
                     )
@@ -1023,6 +1062,9 @@ where
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
+            // Turning this off takes effect on the next batch: that batch fsyncs the
+            // whole append queue, which covers the entries skipped while it was on.
+            self.unsafe_no_raft_log_fsync = incoming.unsafe_no_raft_log_fsync;
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,
                 incoming.raft_write_wait_duration.0,

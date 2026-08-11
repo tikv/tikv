@@ -90,6 +90,11 @@ pub struct Config {
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
+    /// Skips the fsync after appending raft log entries. Term/vote changes and
+    /// snapshots are still fsynced, so election safety holds. Testing only:
+    /// after a power loss the peer may fail to start, because the applied
+    /// state can survive in the kv engine while the raft log tail does not.
+    pub unsafe_no_raft_log_fsync: bool,
     /// Number of Raft ticks between follower read index request retries.
     pub raft_read_index_retry_interval_ticks: usize,
     // follower will reject this follower request to avoid falling behind leader too far,
@@ -528,6 +533,7 @@ impl Default for Config {
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
             max_apply_unpersisted_log_limit: 1024,
+            unsafe_no_raft_log_fsync: false,
             raft_read_index_retry_interval_ticks: 4,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
@@ -1050,6 +1056,14 @@ impl Config {
             ));
         }
 
+        if self.unsafe_no_raft_log_fsync {
+            warn!(
+                "raftstore.unsafe-no-raft-log-fsync is on: raft log appends are not fsynced, \
+                 a power loss can lose committed writes and leave peers unable to start. \
+                 Testing only, must not be used in production."
+            );
+        }
+
         Ok(())
     }
 
@@ -1344,6 +1358,12 @@ impl ConfigManager for RaftstoreConfigManager {
                 }
                 cfg.update(change)
             })?;
+        }
+        if let Some(ConfigValue::Bool(true)) = change.get("unsafe_no_raft_log_fsync") {
+            warn!(
+                "raftstore.unsafe-no-raft-log-fsync turned on at runtime: raft log appends \
+                 are not fsynced, a power loss can lose committed writes. Testing only."
+            );
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")
@@ -1690,5 +1710,18 @@ mod tests {
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
         cfg.optimize_inspector(true);
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
+    }
+
+    #[test]
+    fn test_unsafe_no_raft_log_fsync_is_off_by_default_and_accepted_when_on() {
+        let split_size = coprocessor::config::SPLIT_SIZE;
+        let mut cfg = Config::new();
+        assert!(!cfg.unsafe_no_raft_log_fsync);
+
+        // Turning it on only warns, it must not be rejected.
+        cfg.unsafe_no_raft_log_fsync = true;
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert!(cfg.unsafe_no_raft_log_fsync);
     }
 }
