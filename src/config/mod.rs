@@ -7137,6 +7137,11 @@ mod tests {
         cfg.server.grpc_raft_conn_num = default_cfg.server.grpc_raft_conn_num;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
         cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
+<<<<<<< HEAD
+=======
+        cfg.server.end_point_max_bg_concurrency = default_cfg.server.end_point_max_bg_concurrency;
+        cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
+>>>>>>> 76666670c4 (coprocessor, server: add optional background Analyze concurrency limit (#19970))
         cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
         cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
         cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;

@@ -237,6 +237,17 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
+<<<<<<< HEAD
+=======
+## Memory usage limit for TiKV handling coprocessor requests.
+## By default, it will be set to 12.5% of the available memory of TiKV.
+# end-point-memory-quota = "0B"
+
+## Maximum number of concurrently running background-limited Analyze tasks.
+## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
+# end-point-max-bg-concurrency = 0
+
+>>>>>>> 76666670c4 (coprocessor, server: add optional background Analyze concurrency limit (#19970))
 ## Max bytes that snapshot can interact with disk in one second. It should be
 ## set based on your disk performance. Only write flow is considered, if
 ## partiioned-raft-kv is used, read flow is also considered and it will be estimated
