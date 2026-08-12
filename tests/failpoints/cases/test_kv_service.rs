@@ -2,18 +2,20 @@
 
 use std::{sync::Arc, time::Duration};
 
+use engine_traits::{Peekable, CF_LOCK};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::SkipPessimisticCheck, *},
     tikvpb::TikvClient,
 };
 use test_raftstore::{
-    configure_for_lease_read, must_kv_commit, must_kv_have_locks, must_kv_prewrite,
-    must_kv_prewrite_with, must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with,
-    try_kv_prewrite_with_impl,
+    configure_for_lease_read, must_kv_commit, must_kv_have_locks, must_kv_pessimistic_lock,
+    must_kv_prewrite, must_kv_prewrite_with, must_new_cluster_and_kv_client_mul,
+    must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
 };
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{config::ReadableDuration, store::new_peer, HandyRwLock};
+use txn_types::Key;
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
@@ -269,4 +271,102 @@ fn test_storage_do_not_update_txn_status_cache_on_write_error() {
     );
     must_kv_have_locks(&client, ctx, 29, b"k2", b"k3", &[(b"k2", Op::Put, 20, 20)]);
     fail::remove(cache_hit_fp);
+}
+
+#[test]
+fn test_scan_locks_with_in_progress_transfer_leader() {
+    let (mut cluster, _, mut ctx) = must_new_cluster_and_kv_client_mul(3);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_peer = cluster.leader_of_region(1).unwrap();
+    ctx.set_peer(leader_peer.clone());
+    let k1 = b"k1";
+    let k2 = b"k2";
+    let leader_region = cluster.get_region(k1);
+    ctx.set_region_epoch(leader_region.get_region_epoch().clone());
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_peer.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    // Create both pessimistic locks.
+    let start_ts = 10;
+    must_kv_pessimistic_lock(&client, ctx.clone(), k1.to_vec(), start_ts);
+    must_kv_pessimistic_lock(&client, ctx.clone(), k2.to_vec(), start_ts);
+
+    // Ensure the pessimistic locks are written to the memory but not the storage.
+    let engine = cluster.get_engine(leader_peer.get_store_id());
+    let cf_res = engine
+        .get_value_cf(
+            CF_LOCK,
+            keys::data_key(Key::from_raw(k1).as_encoded()).as_slice(),
+        )
+        .unwrap();
+    assert!(cf_res.is_none());
+    let cf_res = engine
+        .get_value_cf(
+            CF_LOCK,
+            keys::data_key(Key::from_raw(k2).as_encoded()).as_slice(),
+        )
+        .unwrap();
+    assert!(cf_res.is_none());
+
+    let mut scan_lock_req = ScanLockRequest::default();
+    scan_lock_req.set_context(ctx.clone());
+    scan_lock_req.max_version = start_ts + 10;
+    scan_lock_req.limit = 256;
+    let scan_lock_resp = client.kv_scan_lock(&scan_lock_req.clone()).unwrap();
+    assert!(!scan_lock_resp.has_region_error());
+    assert_eq!(scan_lock_resp.get_locks().len(), 2);
+    assert_eq!(scan_lock_resp.locks.to_vec()[0].lock_version, start_ts);
+    assert_eq!(scan_lock_resp.locks.to_vec()[0].key, k1);
+    assert_eq!(scan_lock_resp.locks.to_vec()[1].lock_version, start_ts);
+    assert_eq!(scan_lock_resp.locks.to_vec()[1].key, k2);
+
+    // Propose the transfer leader command but only trigger proposing pessimistic
+    // locks.
+    fail::cfg(
+        "finish_proposing_transfer_cmd_after_proposing_locks",
+        "return",
+    )
+    .unwrap();
+    let _ = cluster.try_transfer_leader_with_timeout(1, new_peer(2, 2), Duration::from_secs(1));
+
+    // Verify locks exist both in memory and storage.
+    let timer = tikv_util::time::Instant::now();
+    let timeout = Duration::from_secs(5);
+    loop {
+        let cf_res = engine
+            .get_value_cf(
+                CF_LOCK,
+                keys::data_key(Key::from_raw(k1).as_encoded()).as_slice(),
+            )
+            .unwrap();
+        if cf_res.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        if timer.saturating_elapsed() >= timeout {
+            assert!(cf_res.is_some());
+            break;
+        }
+    }
+    let snapshot = cluster.must_get_snapshot_of_region(1);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let guard = txn_ext.pessimistic_locks.read();
+    assert!(guard.get(&Key::from_raw(k1)).is_some());
+    assert!(guard.get(&Key::from_raw(k2)).is_some());
+    drop(guard);
+
+    fail::remove("finish_proposing_transfer_cmd_after_proposing_locks");
+
+    // Verify there should be no duplicate locks returned.
+    let scan_lock_resp = client.kv_scan_lock(&scan_lock_req.clone()).unwrap();
+    assert!(!scan_lock_resp.has_region_error());
+    assert_eq!(scan_lock_resp.locks.len(), 2);
+    assert_eq!(scan_lock_resp.locks.to_vec()[0].lock_version, start_ts);
+    assert_eq!(scan_lock_resp.locks.to_vec()[0].key, k1);
+    assert_eq!(scan_lock_resp.locks.to_vec()[1].lock_version, start_ts);
+    assert_eq!(scan_lock_resp.locks.to_vec()[1].key, k2);
 }
