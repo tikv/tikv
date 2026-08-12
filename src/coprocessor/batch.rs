@@ -15,7 +15,7 @@ use kvproto::{
     coprocessor as coppb,
     kvrpcpb::{CommandPri, ResourceControlContext},
 };
-use resource_control::{HIGH_PRIORITY, TaskMetadata};
+use resource_control::{HIGH_PRIORITY, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{deadline::Deadline, defer, future::async_timeout};
@@ -24,7 +24,7 @@ use tokio::{sync::Semaphore, task::yield_now};
 use super::{
     Error, HandlerOutput, HandlerOutputState, MergeableResult, ResponseMaterializationFailure,
     TracedResponse,
-    endpoint::{make_error_batch_response, make_error_response},
+    endpoint::{charge_background_egress, make_error_batch_response, make_error_response},
     metrics::record_coprocessor_response_size,
 };
 use crate::read_pool::ReadPoolHandle;
@@ -72,6 +72,10 @@ pub(super) struct BatchMergeFinalizer {
     pub(super) returned_response_tag: ResourceMeteringTag,
     /// The request's resource group, which the merge's CPU is charged to.
     pub(super) resource_control_ctx: ResourceControlContext,
+    /// The request's resource limiter, used only to charge the returned
+    /// response to the background egress limiter; the merge itself is not
+    /// admitted through it.
+    pub(super) egress_limiter: Option<Arc<ResourceLimiter>>,
     pub(super) task_id: u64,
 }
 
@@ -88,6 +92,7 @@ impl BatchMergeFinalizer {
             merge_execution_tag,
             returned_response_tag,
             mut resource_control_ctx,
+            egress_limiter,
             task_id,
         } = self;
         // Attribute merge work and pool wait time to the top request.
@@ -141,18 +146,24 @@ impl BatchMergeFinalizer {
         }
 
         match response_rx.await {
-            Ok(response) => account_returned_response(response, &returned_response_tag, tracker),
+            Ok(response) => account_returned_response(
+                response,
+                &returned_response_tag,
+                tracker,
+                &egress_limiter,
+            ),
             Err(_) => make_error_response(Error::MaxPendingTasksExceeded).into(),
         }
     }
 }
 
-/// Records bytes for a response accepted by the caller and updates its wire RU
-/// details.
+/// Records bytes for a response accepted by the caller, charges them to the
+/// background egress limiter, and updates its wire RU details.
 fn account_returned_response(
     mut response: TracedResponse,
     returned_response_tag: &ResourceMeteringTag,
     tracker: TrackerToken,
+    resource_limiter: &Option<Arc<ResourceLimiter>>,
 ) -> TracedResponse {
     let bytes = response.get_data().len() as u64
         + response
@@ -162,6 +173,7 @@ fn account_returned_response(
             .sum::<u64>();
     let _tag_guard = returned_response_tag.attach();
     record_coprocessor_response_size(bytes, tracker);
+    charge_background_egress(resource_limiter, bytes);
     // The handler built these details before deferred materialization knew the
     // returned byte count. Keep the wire value in sync with the tracker here.
     ::tracker::GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
@@ -601,6 +613,7 @@ mod tests {
             merge_execution_tag: ResourceTagFactory::new_for_test().new_tag(context),
             returned_response_tag: ResourceTagFactory::new_for_test().new_tag(context),
             resource_control_ctx: context.get_resource_control_context().clone(),
+            egress_limiter: None,
             task_id: 0,
         }
     }
@@ -1039,6 +1052,7 @@ mod tests {
             resp,
             &ResourceTagFactory::new_for_test().new_tag(&kvrpcpb::Context::default()),
             token,
+            &None,
         );
         let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
 
