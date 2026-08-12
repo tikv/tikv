@@ -1,15 +1,129 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, atomic::AtomicUsize},
+    borrow::Cow,
+    ops::DerefMut,
+    sync::{Arc, atomic::AtomicUsize, mpsc as std_mpsc},
     thread::sleep,
     time::Duration,
 };
 
 use batch_system::{test_runner::*, *};
 use kvproto::resource_manager::{GroupMode, GroupRawResourceSettings, ResourceGroup};
-use resource_control::ResourceGroupManager;
+use resource_control::{ResourceController, ResourceGroupManager, ResourceMetered};
 use tikv_util::mpsc;
+
+enum SelfSendMsg {
+    ControlFirst { release: std_mpsc::Receiver<()> },
+    ControlSecond,
+    Normal,
+}
+
+impl ResourceMetered for SelfSendMsg {
+    fn consume_resource(&self, _: &Arc<ResourceController>) -> Option<String> {
+        None
+    }
+}
+
+struct SelfSendFsm {
+    is_stopped: bool,
+    recv: mpsc::Receiver<SelfSendMsg>,
+    mailbox: Option<BasicMailbox<SelfSendFsm>>,
+}
+
+impl SelfSendFsm {
+    fn new(cap: usize) -> (mpsc::LooseBoundedSender<SelfSendMsg>, Box<SelfSendFsm>) {
+        let (tx, rx) = mpsc::loose_bounded(cap);
+        let fsm = Box::new(SelfSendFsm {
+            is_stopped: false,
+            recv: rx,
+            mailbox: None,
+        });
+        (tx, fsm)
+    }
+}
+
+impl Fsm for SelfSendFsm {
+    type Message = SelfSendMsg;
+
+    const FSM_TYPE: FsmType = FsmType::store;
+
+    fn is_stopped(&self) -> bool {
+        self.is_stopped
+    }
+
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
+        self.mailbox = Some(mailbox.into_owned());
+    }
+
+    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
+        self.mailbox.take()
+    }
+}
+
+struct SelfSendHandler {
+    router: BatchRouter<SelfSendFsm, SelfSendFsm>,
+    events: std_mpsc::Sender<&'static str>,
+}
+
+impl PollHandler<SelfSendFsm, SelfSendFsm> for SelfSendHandler {
+    fn begin<F>(&mut self, _: usize, _: F)
+    where
+        for<'a> F: FnOnce(&'a Config),
+    {
+    }
+
+    fn handle_control(&mut self, control: &mut SelfSendFsm) -> Option<usize> {
+        match control.recv.try_recv() {
+            Ok(SelfSendMsg::ControlFirst { release }) => {
+                if self
+                    .router
+                    .force_send_control(SelfSendMsg::ControlSecond)
+                    .is_err()
+                {
+                    panic!("failed to send the next control message");
+                }
+                self.events.send("control-1").unwrap();
+                release.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+            Ok(SelfSendMsg::ControlSecond) => {
+                self.events.send("control-2").unwrap();
+            }
+            Ok(SelfSendMsg::Normal) => unreachable!("normal message in control FSM"),
+            Err(_) => {}
+        }
+        Some(0)
+    }
+
+    fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = SelfSendFsm>) -> HandleResult {
+        match normal.recv.try_recv() {
+            Ok(SelfSendMsg::Normal) => {
+                self.events.send("normal").unwrap();
+            }
+            Ok(_) => unreachable!("control message in normal FSM"),
+            Err(_) => {}
+        }
+        HandleResult::stop_at(0, false)
+    }
+
+    fn end(&mut self, _: &mut [Option<impl DerefMut<Target = SelfSendFsm>>]) {}
+}
+
+struct SelfSendBuilder {
+    router: BatchRouter<SelfSendFsm, SelfSendFsm>,
+    events: std_mpsc::Sender<&'static str>,
+}
+
+impl HandlerBuilder<SelfSendFsm, SelfSendFsm> for SelfSendBuilder {
+    type Handler = SelfSendHandler;
+
+    fn build(&mut self, _: Priority) -> SelfSendHandler {
+        SelfSendHandler {
+            router: self.router.clone(),
+            events: self.events.clone(),
+        }
+    }
+}
 
 #[test]
 fn test_batch() {
@@ -51,6 +165,58 @@ fn test_batch() {
     expected_metrics.normal = 1;
     expected_metrics.begin = 2;
     assert_eq!(*metrics.lock().unwrap(), expected_metrics);
+}
+
+#[test]
+fn test_control_self_send_stays_in_mailbox_and_yields_to_normal() {
+    let mut cfg = Config::default();
+    cfg.pool_size = 1;
+    cfg.low_priority_pool_size = 0;
+    cfg.max_batch_size = Some(1);
+
+    let (control_tx, control_fsm) = SelfSendFsm::new(10);
+    let (router, mut system) = batch_system::create_system(&cfg, control_tx, control_fsm, None);
+    let (normal_tx, normal_fsm) = SelfSendFsm::new(10);
+    router.register(
+        1,
+        BasicMailbox::new(normal_tx, normal_fsm, router.state_cnt().clone()),
+    );
+
+    let (event_tx, event_rx) = std_mpsc::channel();
+    system.spawn(
+        "test-control-self-send".to_owned(),
+        SelfSendBuilder {
+            router: router.clone(),
+            events: event_tx,
+        },
+    );
+
+    let (release_tx, release_rx) = std_mpsc::sync_channel(0);
+    if router
+        .force_send_control(SelfSendMsg::ControlFirst {
+            release: release_rx,
+        })
+        .is_err()
+    {
+        panic!("failed to send the first control message");
+    }
+    assert_eq!(
+        event_rx.recv_timeout(Duration::from_secs(3)),
+        Ok("control-1")
+    );
+
+    if router.force_send(1, SelfSendMsg::Normal).is_err() {
+        panic!("failed to send the normal message");
+    }
+    release_tx.send(()).unwrap();
+
+    assert_eq!(event_rx.recv_timeout(Duration::from_secs(3)), Ok("normal"));
+    assert_eq!(
+        event_rx.recv_timeout(Duration::from_secs(3)),
+        Ok("control-2")
+    );
+
+    system.shutdown();
 }
 
 #[test]

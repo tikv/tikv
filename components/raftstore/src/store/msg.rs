@@ -1,9 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-#[cfg(any(test, feature = "testexport"))]
-use std::sync::Arc;
-use std::{borrow::Cow, fmt, time::Duration};
+use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -1018,7 +1016,8 @@ where
 
     StoreUnreachableBatch {
         store_id: u64,
-        region_ids: Vec<u64>,
+        region_ids: Arc<[u64]>,
+        offset: usize,
     },
 
     /// Message only used for test.
@@ -1123,7 +1122,8 @@ mod tests {
         distribution[gcsnap_msg.discriminant()] += 1;
         let unreachable_batch_msg: StoreMsg<RocksEngine> = StoreMsg::StoreUnreachableBatch {
             store_id: 4,
-            region_ids: vec![1, 2],
+            region_ids: Arc::<[u64]>::from(vec![1, 2]),
+            offset: 0,
         };
         distribution[unreachable_batch_msg.discriminant()] += 1;
         let mut filter = StoreMsg::<RocksEngine>::VARIANTS
