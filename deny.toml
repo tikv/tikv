@@ -86,6 +86,11 @@ ignore = [
     # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Ignore RUSTSEC-2026-0253 until aws-sdk-s3 can upgrade to lru >= 0.18.2.
+    # The advisory requires a cache key with a panicking Drop implementation,
+    # while aws-sdk-s3's sole LruCache uses a String-backed CacheKey.
+    # TODO: Remove after aws-sdk-s3 permits lru >= 0.18.2.
+    "RUSTSEC-2026-0253",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
