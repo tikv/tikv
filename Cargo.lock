@@ -3014,11 +3014,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
->>>>>>> 08f2329ab3 (engine_rocks: re-enable allow_write for external SST ingestion (#19975))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#b3f1ecbb7d17c82bc9ba5ee18a6e58a21d92bcaf"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3037,11 +3033,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
->>>>>>> 08f2329ab3 (engine_rocks: re-enable allow_write for external SST ingestion (#19975))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#b3f1ecbb7d17c82bc9ba5ee18a6e58a21d92bcaf"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4940,11 +4932,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
->>>>>>> 08f2329ab3 (engine_rocks: re-enable allow_write for external SST ingestion (#19975))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#b3f1ecbb7d17c82bc9ba5ee18a6e58a21d92bcaf"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
