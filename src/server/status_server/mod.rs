@@ -1579,8 +1579,9 @@ mod tests {
             }
             responses
         });
-        let responses = block_on(handle).unwrap();
+        let responses = block_on(handle);
         status_server.stop();
+        let responses = responses.unwrap();
 
         for response in responses {
             assert_eq!(response["raftstore"]["raft-write-wait-duration"], "200us");
