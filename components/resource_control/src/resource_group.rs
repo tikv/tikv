@@ -464,6 +464,9 @@ impl ResourceGroupManager {
             self.bg_limiter
                 .get_write_io_limiter()
                 .set_rate_limit(f64::INFINITY);
+            self.bg_limiter
+                .get_egress_limiter()
+                .set_rate_limit(f64::INFINITY);
         }
     }
 

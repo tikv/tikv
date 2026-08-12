@@ -29,6 +29,12 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
+    /// Maximum network egress rate (response bytes sent out) allowed for
+    /// background tasks on this node, aggregated over all background requests.
+    /// This bounds the outbound bandwidth a large background scan takes from
+    /// foreground reads, no matter how many clients scan the node at the same
+    /// time. Set to 0 (the default) to disable egress throttling.
+    pub bg_egress_limit: ReadableSize,
     /// When true, enables fair two-phase scheduling for reads: groups whose
     /// current-minute RU rate exceeds their historical baseline are placed in
     /// phase 1 (deprioritised in the yatp priority queue) relative to groups
@@ -73,6 +79,7 @@ impl Default for Config {
             bg_compaction_pressure_threshold: 70.0,
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),
+            bg_egress_limit: ReadableSize(0),
             enable_fair_scheduling: false,
             enable_read_admission_control: false,
             enable_write_admission_control: false,

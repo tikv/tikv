@@ -44,6 +44,13 @@ pub struct ResourceLimiter {
     // Independent from the combined IO limiter; rate is set by do_adjust
     // based on compaction pressure. Defaults to f64::INFINITY (no throttle).
     write_io_limiter: QuotaLimiter,
+    // Dedicated network egress (bytes sent out) limiter for background tasks.
+    // Bytes are charged where the response is built, via `consume_egress`,
+    // which never sleeps in flight; the resulting debt is paid by the next
+    // background request at the admission gate. The rate is set by
+    // `resource-control.bg-egress-limit` and defaults to f64::INFINITY
+    // (no throttle).
+    egress_limiter: QuotaLimiter,
     // whether the resource limiter is a background limiter or priority limiter.
     is_background: bool,
     // the wait duration histogram for prioitry limiter.
@@ -82,6 +89,7 @@ impl ResourceLimiter {
             version,
             limiters: [cpu_limiter, io_limiter],
             write_io_limiter: QuotaLimiter::new(f64::INFINITY),
+            egress_limiter: QuotaLimiter::new(f64::INFINITY),
             is_background,
             wait_histogram,
         }
@@ -110,13 +118,26 @@ impl ResourceLimiter {
         } else {
             self.write_io_limiter.consume(io_bytes.write, wait)
         };
-        let wait_dur = cpu_dur.max(io_dur).max(write_io_dur);
+        // Surface the egress debt that `consume_egress` has already built up.
+        // The value 0 adds no new consumption, it only reads back the debt so
+        // that egress flows into the admission delay just like CPU and IO debt.
+        let egress_dur = self.egress_limiter.consume(0, wait);
+        let wait_dur = cpu_dur.max(io_dur).max(write_io_dur).max(egress_dur);
         if !wait_dur.is_zero()
             && let Some(h) = &self.wait_histogram
         {
             h.observe(wait_dur.as_secs_f64());
         }
         wait_dur
+    }
+
+    /// Charges network egress (response bytes sent out) to the egress token
+    /// bucket. This only builds debt, it never sleeps in flight, so the caller
+    /// keeps neither a read-pool slot nor the response buffer while the bucket
+    /// is over budget. The debt is paid by the next background request at the
+    /// admission gate, see `admission_delay`.
+    pub fn consume_egress(&self, bytes: u64) {
+        let _ = self.egress_limiter.consume(bytes, false);
     }
 
     /// Returns the current token-bucket debt the caller should wait before
@@ -127,10 +148,11 @@ impl ResourceLimiter {
     /// For write requests (`is_read = false`), the write-specific IO limiter
     /// debt is also considered alongside CPU and combined IO debt.
     ///
-    /// Note: `write_io_limiter` and the combined IO limiter are only rate-set
-    /// for background limiters (via `do_adjust`); for foreground per-group
-    /// limiters their rates remain at `f64::INFINITY`, so their debt is
-    /// always zero and only CPU debt drives the delay in practice.
+    /// Note: `write_io_limiter`, `egress_limiter` and the combined IO limiter
+    /// are only rate-set for background limiters (via `do_adjust`); for
+    /// foreground per-group limiters their rates remain at `f64::INFINITY`, so
+    /// their debt is always zero and only CPU debt drives the delay in
+    /// practice.
     pub fn admission_delay(&self, is_read: bool) -> Duration {
         self.consume(
             Duration::ZERO,
@@ -164,6 +186,11 @@ impl ResourceLimiter {
     #[inline]
     pub(crate) fn get_write_io_limiter(&self) -> &QuotaLimiter {
         &self.write_io_limiter
+    }
+
+    #[inline]
+    pub(crate) fn get_egress_limiter(&self) -> &QuotaLimiter {
+        &self.egress_limiter
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
@@ -300,5 +327,51 @@ impl std::ops::Div<f64> for GroupStatistics {
             write_consumed: (self.write_consumed as f64 / rhs) as u64,
             request_count: (self.request_count as f64 / rhs) as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A background limiter with a finite egress rate turns a burst of egress
+    // bytes into token-bucket debt, which the next request pays at the
+    // admission gate. This is how the throttle rides the existing gate instead
+    // of adding a new sleep on the response path.
+    #[test]
+    fn test_background_egress_builds_admission_debt() {
+        let rate = 50.0 * 1024.0 * 1024.0;
+        let bg = ResourceLimiter::new("test-bg".to_owned(), f64::INFINITY, f64::INFINITY, 0, true);
+        bg.get_egress_limiter().set_rate_limit(rate);
+
+        // Nothing is consumed yet, so there is no egress debt.
+        assert_eq!(bg.admission_delay(true), Duration::ZERO);
+
+        // Charge several seconds of egress in one shot, well over the capacity
+        // of the bucket, which refills over 1s.
+        bg.consume_egress(rate as u64 * 4);
+        assert!(
+            bg.admission_delay(true) > Duration::ZERO,
+            "expected a non-zero admission delay after a background egress burst",
+        );
+    }
+
+    // With the throttle disabled (rate INFINITY, the default) `consume_egress`
+    // never builds debt, so requests are not delayed.
+    #[test]
+    fn test_egress_throttle_disabled_by_default() {
+        let bg = ResourceLimiter::new("test-bg".to_owned(), f64::INFINITY, f64::INFINITY, 0, true);
+        bg.consume_egress(u64::MAX / 2);
+        assert_eq!(bg.admission_delay(true), Duration::ZERO);
+    }
+
+    // Egress debt never mixes into the foreground path: priority limiters keep
+    // an infinite egress rate.
+    #[test]
+    fn test_foreground_egress_is_unlimited() {
+        let fg = ResourceLimiter::new("test-fg".to_owned(), f64::INFINITY, f64::INFINITY, 0, false);
+        assert!(fg.get_egress_limiter().get_rate_limit().is_infinite());
+        fg.consume_egress(500 * 1024 * 1024);
+        assert_eq!(fg.admission_delay(true), Duration::ZERO);
     }
 }
