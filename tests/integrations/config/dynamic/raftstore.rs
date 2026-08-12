@@ -233,6 +233,30 @@ fn test_update_raftstore_config() {
 }
 
 #[test]
+fn test_update_raftstore_config_preserves_sub_millisecond_duration() {
+    let (mut config, dir) = TikvConfig::with_tmp().unwrap();
+    config.validate().unwrap();
+    let (cfg_controller, router, _, mut system) = start_raftstore(config, &dir);
+
+    cfg_controller
+        .update(new_changes(vec![(
+            "raftstore.raft-write-wait-duration",
+            "200us",
+        )]))
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    router
+        .send_control(StoreMsg::Validate(Box::new(move |cfg: &Config| {
+            tx.send(cfg.raft_write_wait_duration).unwrap();
+        })))
+        .unwrap();
+    let observed = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    system.shutdown();
+
+    assert_eq!(observed, ReadableDuration::micros(200));
+}
+
+#[test]
 fn test_update_raftstore_io_config() {
     // Test update raftstore configurations on io settings.
     // Start from SYNC mode.

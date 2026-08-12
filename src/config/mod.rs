@@ -5269,6 +5269,7 @@ mod tests {
     };
 
     use api_version::{ApiV1, KvFormat};
+    use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager, TSOProvider};
     use engine_rocks::raw::LRUCacheOptions;
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
@@ -5276,6 +5277,7 @@ mod tests {
     use in_memory_engine::config::InMemoryEngineConfigManager;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
+    use pd_client::PdFuture;
     use raft_log_engine::RaftLogEngine;
     use raftstore::{
         coprocessor::{
@@ -5299,6 +5301,7 @@ mod tests {
         sys::SysQuota,
         worker::{ReceiverWrapper, dummy_scheduler},
     };
+    use txn_types::TimeStamp;
 
     use super::*;
     use crate::{
@@ -5913,7 +5916,7 @@ mod tests {
     #[test]
     fn test_to_config_change() {
         assert_eq!(
-            to_change_value("10h", &ConfigValue::Duration(0)).unwrap(),
+            to_change_value("10h", &ConfigValue::Duration(Duration::ZERO)).unwrap(),
             ConfigValue::from(ReadableDuration::hours(10))
         );
         assert_eq!(
@@ -5979,6 +5982,13 @@ mod tests {
             change.insert(name, value);
             to_config_change(change).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_to_config_change_preserves_sub_millisecond_duration() {
+        let value = to_change_value("200us", &ConfigValue::from(ReadableDuration::ZERO)).unwrap();
+
+        assert_eq!(ReadableDuration::from(value), ReadableDuration::micros(200));
     }
 
     #[test]
@@ -6089,6 +6099,58 @@ mod tests {
             )),
         );
         (storage, cfg_controller, receiver, flow_controller)
+    }
+
+    #[test]
+    fn test_online_max_ts_drift_dispatch_uses_millisecond_tso_boundary() {
+        struct FixedTso(TimeStamp);
+
+        impl TSOProvider for FixedTso {
+            fn get_tso(&self) -> PdFuture<TimeStamp> {
+                let tso = self.0;
+                Box::pin(async move { Ok(tso) })
+            }
+        }
+
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.storage.max_ts.action_on_invalid_update = "error".to_owned();
+        cfg.validate().unwrap();
+        let cache_sync_interval = cfg.storage.max_ts.cache_sync_interval.0;
+        let initial_drift = cfg.storage.max_ts.max_drift.0;
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
+        let base = TimeStamp::compose(100_000, 0);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            1.into(),
+            cache_sync_interval,
+            ActionOnInvalidMaxTs::Error,
+            Some(Arc::new(FixedTso(base))),
+            initial_drift,
+        );
+        let (scheduler, _receiver) = dummy_scheduler();
+        cfg_controller.register(
+            Module::Storage,
+            Box::new(StorageConfigManger::new(
+                storage.get_engine().get_rocksdb(),
+                scheduler,
+                flow_controller,
+                storage.get_scheduler(),
+                concurrency_manager.clone(),
+            )),
+        );
+
+        cfg_controller
+            .update_config("storage.max-ts.max-drift", "15s1us")
+            .unwrap();
+        concurrency_manager.set_max_ts_limit(base);
+
+        concurrency_manager
+            .update_max_ts(TimeStamp::compose(115_000, 0), "test")
+            .unwrap();
+        assert!(
+            concurrency_manager
+                .update_max_ts(TimeStamp::compose(115_001, 0), "test")
+                .is_err()
+        );
     }
 
     struct MockCfgManager(Box<dyn Fn(ConfigChange) + Send + Sync>);

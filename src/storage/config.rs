@@ -559,6 +559,18 @@ mod tests {
     }
 
     #[test]
+    fn test_online_max_ts_drift_preserves_relational_fraction() {
+        let mut cfg = Config::default();
+        cfg.max_ts.max_drift = ReadableDuration(
+            cfg.max_ts.cache_sync_interval.0 + std::time::Duration::from_micros(1),
+        );
+
+        cfg.validate().unwrap();
+
+        assert_eq!(cfg.max_ts.max_drift, ReadableDuration::micros(15_000_001));
+    }
+
+    #[test]
     fn test_validate_engine_type_config() {
         let mut cfg = Config::default();
         cfg.engine = EngineType::RaftKv;
