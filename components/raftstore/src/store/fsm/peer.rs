@@ -711,13 +711,6 @@ where
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; PeerMsg::<EK>::COUNT];
-        // As the detail of one msg is not very useful when handling multiple messages,
-        // only format the msg detail in slow log when there is only one message.
-        let detail = if msgs.len() == 1 {
-            msgs.first().map(|m| format!("{:?}", m))
-        } else {
-            None
-        };
 
         for m in msgs.drain(..) {
             // skip handling remain messages if fsm is destroyed. This can avoid handling
@@ -862,11 +855,10 @@ where
         self.on_loop_finished();
         slow_log!(
             T timer,
-            "{} handle {} peer messages {:?}, detail: {:?}",
+            "{} handle {} peer messages {:?}",
             self.fsm.peer.tag,
             count,
             PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
-            detail,
         );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
@@ -4039,6 +4031,9 @@ where
             self.fsm
                 .peer
                 .set_pending_transfer_leader_msg(&self.ctx.cfg, msg);
+            // A retry keeps the original deadline, which may have already
+            // elapsed. Check it immediately instead of waiting for another
+            // poll cycle.
             if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
                 self.fsm.has_ready = true;
             }

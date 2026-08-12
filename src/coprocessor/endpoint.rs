@@ -65,15 +65,17 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
 
-    /// The concurrency limiter of the coprocessor.
-    semaphore: Option<Arc<Semaphore>>,
+    /// Concurrency limiter shared by ordinary coprocessor requests.
+    shared_semaphore: Option<Arc<Semaphore>>,
+    /// Dedicated limiter for requests that intentionally use the background
+    /// quota limiter.
+    background_limited_semaphore: Option<Arc<Semaphore>>,
     /// The memory quota for coprocessor requests.
     memory_quota: Arc<MemoryQuota>,
 
@@ -106,6 +108,7 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
+    semaphore_group: SemaphoreGroup,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -115,6 +118,7 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }
     }
@@ -123,6 +127,35 @@ impl<Snap> ParseCopRequestResult<Snap> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
+    fn build_request_semaphores(
+        read_pool: &ReadPoolHandle,
+        max_concurrency: usize,
+        max_bg_concurrency: Option<usize>,
+    ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
+        match read_pool {
+            ReadPoolHandle::Yatp { .. } => {
+                // Keep the legacy shared behavior unless the operator explicitly
+                // enables a positive background-limited Analyze cap.
+                let shared = Arc::new(Semaphore::new(max_concurrency));
+                let background = match max_bg_concurrency {
+                    Some(max_bg_concurrency) if max_bg_concurrency > 0 => {
+                        Arc::new(Semaphore::new(max_bg_concurrency))
+                    }
+                    _ => shared.clone(),
+                };
+                (Some(shared), Some(background))
+            }
+            _ => (None, None),
+        }
+    }
+
+    fn request_semaphore(&self, group: SemaphoreGroup) -> Option<Arc<Semaphore>> {
+        match group {
+            SemaphoreGroup::Shared => self.shared_semaphore.clone(),
+            SemaphoreGroup::BackgroundLimited => self.background_limited_semaphore.clone(),
+        }
+    }
+
     pub fn new(
         cfg: &Config,
         read_pool: ReadPoolHandle,
@@ -131,17 +164,17 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        let semaphore = match &read_pool {
-            ReadPoolHandle::Yatp { .. } => {
-                Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
-            }
-            _ => None,
-        };
+        let (shared_semaphore, background_limited_semaphore) = Self::build_request_semaphores(
+            &read_pool,
+            cfg.end_point_max_concurrency,
+            cfg.end_point_max_bg_concurrency,
+        );
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
             read_pool,
-            semaphore,
+            shared_semaphore,
+            background_limited_semaphore,
             memory_quota,
             concurrency_manager,
             perf_level: cfg.end_point_perf_level,
@@ -219,6 +252,7 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
+        let semaphore_group: SemaphoreGroup;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -241,6 +275,7 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::index
                 };
+                semaphore_group = SemaphoreGroup::Shared;
 
                 req_ctx = ReqContext::new(
                     context,
@@ -320,10 +355,17 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
-                req_tag = match analyze.get_tp() {
-                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
-                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
-                    AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
+                (req_tag, semaphore_group) = match analyze.get_tp() {
+                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
+                        (ReqTag::analyze_index, SemaphoreGroup::BackgroundLimited)
+                    }
+                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => {
+                        (ReqTag::analyze_table, SemaphoreGroup::BackgroundLimited)
+                    }
+                    AnalyzeType::TypeFullSampling => (
+                        ReqTag::analyze_full_sampling,
+                        SemaphoreGroup::BackgroundLimited,
+                    ),
                     AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
                 req_ctx = ReqContext::new(
@@ -371,6 +413,7 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::checksum_index
                 };
+                semaphore_group = SemaphoreGroup::Shared;
                 req_ctx = ReqContext::new(
                     context,
                     ranges,
@@ -409,6 +452,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(ParseCopRequestResult {
             req_tag,
             req_ctx,
+            semaphore_group,
             handler_builder,
         })
     }
@@ -487,6 +531,7 @@ impl<E: Engine> Endpoint<E> {
     /// produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
+        semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
@@ -543,7 +588,13 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(handle_request_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(
+                handle_request_future,
+                semaphore,
+                semaphore_group,
+                LIGHT_TASK_THRESHOLD,
+            )
+            .await
         } else {
             handle_request_future.await
         };
@@ -597,7 +648,12 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
-        let req_ctx = r.req_ctx;
+        let ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            semaphore_group,
+            handler_builder,
+        } = r;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -625,16 +681,20 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(
+            self.request_semaphore(semaphore_group),
+            semaphore_group,
+            tracker,
+            handler_builder,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
         let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
@@ -888,7 +948,12 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
-        let req_ctx = r.req_ctx;
+        let ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            semaphore_group,
+            handler_builder,
+        } = r;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
@@ -916,17 +981,20 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
-        let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .then(futures::future::ok::<_, mpsc::SendError>)
-                .forward(tx)
-                .unwrap_or_else(|e| {
-                    warn!("coprocessor stream send error"; "error" => %e);
-                });
+        let future = Self::handle_stream_request_impl(
+            self.request_semaphore(semaphore_group),
+            tracker,
+            handler_builder,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .then(futures::future::ok::<_, mpsc::SendError>)
+        .forward(tx)
+        .unwrap_or_else(|e| {
+            warn!("coprocessor stream send error"; "error" => %e);
+        });
 
         let spawn_fut = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
@@ -1289,18 +1357,22 @@ mod tests {
     use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
     use protobuf::Message;
     use raft::StateRole;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{ReadStats, WriteStats},
+    };
     use tidb_query_common::storage::Storage;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
+    use tikv_util::yatp_pool::CleanupMethod;
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
     use super::*;
     use crate::{
-        config::CoprReadPoolConfig,
+        config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
         coprocessor::readpool_impl::build_read_pool_for_test,
-        read_pool::ReadPool,
-        storage::{Store, TestEngineBuilder, kv::RocksEngine},
+        read_pool::{ReadPool, build_yatp_read_pool},
+        storage::{FlowStatsReporter, Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -1356,6 +1428,45 @@ mod tests {
                 ));
             } else {
                 thread::sleep(self.handle_duration);
+            }
+
+            self.result.take().unwrap().map(|x| x.into())
+        }
+    }
+
+    struct HeavyYieldingUnaryFixture {
+        yields: usize,
+        poll_duration: Duration,
+        result: Option<Result<coppb::Response>>,
+    }
+
+    impl HeavyYieldingUnaryFixture {
+        fn new(result: Result<coppb::Response>, yields: usize, poll_duration: Duration) -> Self {
+            Self {
+                yields,
+                poll_duration,
+                result: Some(result),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RequestHandler for HeavyYieldingUnaryFixture {
+        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+            for _ in 0..self.yields {
+                let poll_duration = self.poll_duration;
+                let mut first_poll = true;
+                futures::future::poll_fn(move |cx| {
+                    if first_poll {
+                        first_poll = false;
+                        thread::sleep(poll_duration);
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                })
+                .await;
             }
 
             self.result.take().unwrap().map(|x| x.into())
@@ -1450,6 +1561,38 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _: ReadStats) {}
+
+        fn report_write_stats(&self, _: WriteStats) {}
+    }
+
+    fn build_yatp_copr(config: Config) -> (Endpoint<RocksEngine>, ReadPool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let endpoint = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        (endpoint, read_pool)
+    }
+
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1493,6 +1636,7 @@ mod tests {
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
             req_tag: ReqTag::test,
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }))
         .unwrap_err();
@@ -1688,6 +1832,207 @@ mod tests {
         .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_preserves_shared_capacity() {
+        let config = Config {
+            end_point_max_concurrency: 8,
+            end_point_max_bg_concurrency: Some(3),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+
+        let shared = copr.shared_semaphore.as_ref().unwrap();
+        let background = copr.background_limited_semaphore.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(shared, background));
+        assert_eq!(shared.available_permits(), 8);
+        assert_eq!(background.available_permits(), 3);
+        assert!(Arc::ptr_eq(
+            shared,
+            copr.request_semaphore(SemaphoreGroup::Shared)
+                .as_ref()
+                .unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            background,
+            copr.request_semaphore(SemaphoreGroup::BackgroundLimited)
+                .as_ref()
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_small_shared_semaphore_keeps_background_limit_independent() {
+        let config = Config {
+            end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(7),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+
+        let shared = copr.shared_semaphore.as_ref().unwrap();
+        let background = copr.background_limited_semaphore.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(shared, background));
+        assert_eq!(shared.available_permits(), 1);
+        assert_eq!(background.available_permits(), 7);
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_disabled_by_default_or_zero() {
+        for background_limited_semaphore in [None, Some(0)] {
+            let config = Config {
+                end_point_max_concurrency: 8,
+                end_point_max_bg_concurrency: background_limited_semaphore,
+                ..Default::default()
+            };
+            let (copr, _read_pool) = build_yatp_copr(config);
+            assert!(Arc::ptr_eq(
+                copr.shared_semaphore.as_ref().unwrap(),
+                copr.background_limited_semaphore.as_ref().unwrap(),
+            ));
+        }
+    }
+
+    #[test]
+    fn test_analyze_request_classification_matches_semaphore_group() {
+        let (copr, _read_pool) = build_yatp_copr(Config::default());
+
+        let mut full_sampling = AnalyzeReq::default();
+        full_sampling.set_tp(AnalyzeType::TypeFullSampling);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(full_sampling.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_full_sampling);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+        assert!(Arc::ptr_eq(
+            copr.background_limited_semaphore.as_ref().unwrap(),
+            copr.request_semaphore(parsed.semaphore_group)
+                .as_ref()
+                .unwrap()
+        ));
+
+        let mut column = AnalyzeReq::default();
+        column.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(column.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_table);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+        assert!(Arc::ptr_eq(
+            copr.background_limited_semaphore.as_ref().unwrap(),
+            copr.request_semaphore(parsed.semaphore_group)
+                .as_ref()
+                .unwrap()
+        ));
+
+        let mut index = AnalyzeReq::default();
+        index.set_tp(AnalyzeType::TypeIndex);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(index.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_index);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+    }
+
+    #[test]
+    fn test_background_limited_requests_progress_when_shared_semaphore_is_full() {
+        let config = Config {
+            end_point_max_concurrency: 4,
+            end_point_max_bg_concurrency: Some(2),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+        let shared = copr.shared_semaphore.as_ref().unwrap().clone();
+        let shared_permits = block_on(
+            shared
+                .clone()
+                .acquire_many_owned(shared.available_permits() as u32),
+        )
+        .unwrap();
+        let background_semaphore = copr
+            .request_semaphore(SemaphoreGroup::BackgroundLimited)
+            .unwrap();
+        let shared_semaphore = copr.request_semaphore(SemaphoreGroup::Shared).unwrap();
+        let slow_log_threshold = copr.slow_log_threshold;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let background_engine = engine.clone();
+        let shared_engine = engine;
+
+        let (background_tx, background_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            set_tls_engine(background_engine);
+            defer! {
+                unsafe { destroy_tls_engine::<RocksEngine>() }
+            }
+            let background_handler = Box::new(|_, _: &_| {
+                Ok(HeavyYieldingUnaryFixture::new(
+                    Ok(coppb::Response::default()),
+                    2,
+                    Duration::from_millis(20),
+                )
+                .into_boxed())
+            });
+            let background_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
+                Some(background_semaphore),
+                SemaphoreGroup::BackgroundLimited,
+                Box::new(Tracker::new(
+                    ReqContext::default_for_test(),
+                    ReqTag::analyze_full_sampling,
+                    slow_log_threshold,
+                )),
+                background_handler,
+            );
+            background_tx.send(block_on(background_future)).unwrap();
+        });
+        let (shared_tx, shared_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            set_tls_engine(shared_engine);
+            defer! {
+                unsafe { destroy_tls_engine::<RocksEngine>() }
+            }
+            let shared_handler = Box::new(|_, _: &_| {
+                Ok(HeavyYieldingUnaryFixture::new(
+                    Ok(coppb::Response::default()),
+                    2,
+                    Duration::from_millis(20),
+                )
+                .into_boxed())
+            });
+            let shared_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
+                Some(shared_semaphore),
+                SemaphoreGroup::Shared,
+                Box::new(Tracker::new(
+                    ReqContext::default_for_test(),
+                    ReqTag::test,
+                    slow_log_threshold,
+                )),
+                shared_handler,
+            );
+            shared_tx.send(block_on(shared_future)).unwrap();
+        });
+
+        background_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        shared_rx
+            .recv_timeout(Duration::from_millis(250))
+            .unwrap_err();
+        drop(shared_permits);
+        shared_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
@@ -2033,6 +2378,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2050,6 +2396,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2159,6 +2506,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2176,6 +2524,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2242,6 +2591,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2265,6 +2615,7 @@ mod tests {
                 .handle_stream_request(ParseCopRequestResult {
                     req_tag: ReqTag::test,
                     req_ctx: req_with_exec_detail.clone(),
+                    semaphore_group: SemaphoreGroup::Shared,
                     handler_builder,
                 })
                 .unwrap()
@@ -2426,6 +2777,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2453,6 +2805,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2652,6 +3005,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2672,6 +3026,7 @@ mod tests {
             let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }));
             assert!(res.is_err(), "{:?}", res);
