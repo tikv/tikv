@@ -528,6 +528,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
@@ -607,6 +608,7 @@ impl<E: Engine> Endpoint<E> {
                 let resp_size = resp.data.len() as u64;
                 COPR_RESP_SIZE.inc_by(resp_size);
                 record_network_out_bytes(resp_size);
+                charge_background_egress(&resource_limiter, resp_size);
                 with_tls_tracker(|tracker| {
                     tracker.metrics.coprocessor_response_bytes = tracker
                         .metrics
@@ -684,6 +686,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore_group,
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .map(move |res| {
@@ -854,6 +857,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -913,6 +917,7 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        charge_background_egress(&resource_limiter, resp_size);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
@@ -982,6 +987,7 @@ impl<E: Engine> Endpoint<E> {
             self.request_semaphore(semaphore_group),
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .then(futures::future::ok::<_, mpsc::SendError>)
@@ -1162,6 +1168,22 @@ macro_rules! make_error_response_common {
         };
         COPR_REQ_ERROR.with_label_values(&[$tag]).inc();
     }};
+}
+
+/// Charges the response size of a background request to the background egress
+/// token bucket, so that a large background scan cannot take the whole outbound
+/// network allowance of the node from foreground reads.
+///
+/// This only builds debt, it never sleeps here: the response buffer and the
+/// read-pool slot are released as usual, and the next background request pays
+/// the debt at the admission gate. Foreground requests are not charged, and the
+/// call is a no-op unless `resource-control.bg-egress-limit` is set.
+fn charge_background_egress(resource_limiter: &Option<Arc<ResourceLimiter>>, resp_size: u64) {
+    if let Some(limiter) = resource_limiter {
+        if limiter.is_background() {
+            limiter.consume_egress(resp_size);
+        }
+    }
 }
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
@@ -1985,6 +2007,7 @@ mod tests {
                     slow_log_threshold,
                 )),
                 background_handler,
+                None,
             );
             background_tx.send(block_on(background_future)).unwrap();
         });
@@ -2011,6 +2034,7 @@ mod tests {
                     slow_log_threshold,
                 )),
                 shared_handler,
+                None,
             );
             shared_tx.send(block_on(shared_future)).unwrap();
         });

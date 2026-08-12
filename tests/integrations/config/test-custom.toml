@@ -700,6 +700,7 @@ fg-cpu-throttle-threshold = 70.0
 bg-compaction-pressure-threshold = 70.0
 bg-write-io-ceiling = "100GB"
 bg-write-io-floor = "10MB"
+bg-egress-limit = "50MB"
 enable-fair-scheduling = false
 enable-read-admission-control = false
 enable-write-admission-control = false

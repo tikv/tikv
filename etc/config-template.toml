@@ -177,6 +177,12 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
+## Maximum network egress rate (response bytes sent out) for background tasks on this node,
+## aggregated over all background requests. Use it to stop a large background scan, such as the
+## scan phase of a distributed ADD INDEX, from taking the whole outbound network allowance of
+## the node from foreground reads. Set to 0 to disable egress throttling.
+# bg-egress-limit = "0B"
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"

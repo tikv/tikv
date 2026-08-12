@@ -926,6 +926,7 @@ fn test_serde_custom_tikv_config() {
         bg_compaction_pressure_threshold: 70.0,
         bg_write_io_ceiling: ReadableSize::gb(100),
         bg_write_io_floor: ReadableSize::mb(10),
+        bg_egress_limit: ReadableSize::mb(50),
         enable_fair_scheduling: false,
         enable_read_admission_control: false,
         enable_write_admission_control: false,
