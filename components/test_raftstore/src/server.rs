@@ -356,6 +356,18 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
+<<<<<<< HEAD
+=======
+        if let Err(e) =
+            gc_worker.start_auto_compaction(self.pd_client.clone(), region_info_accessor.clone())
+        {
+            warn!("failed to start auto_compaction: {}", e);
+        } else {
+            info!("Auto compaction started successfully for node {}", node_id);
+        }
+
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
