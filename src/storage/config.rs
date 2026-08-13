@@ -516,8 +516,9 @@ impl MaxTsConfig {
         // values at the same precision.
         if self.max_drift.as_millis() <= self.cache_sync_interval.as_millis() {
             let msg = format!(
-                "storage.max-ts.max-drift {:?} is smaller than or equal to storage.max-ts.cache-sync-interval {:?}",
-                self.max_drift, self.cache_sync_interval,
+                "storage.max-ts.max-drift effective value {}ms is smaller than or equal to storage.max-ts.cache-sync-interval effective value {}ms",
+                self.max_drift.as_millis(),
+                self.cache_sync_interval.as_millis(),
             );
             error!("{}", msg);
             return Err(msg.into());
@@ -568,7 +569,11 @@ mod tests {
             ..Default::default()
         };
 
-        cfg.validate().unwrap_err();
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "storage.max-ts.max-drift effective value 1ms is smaller than or equal to storage.max-ts.cache-sync-interval effective value 1ms",
+        );
 
         cfg.max_drift = ReadableDuration::micros(2_000);
         cfg.validate().unwrap();
