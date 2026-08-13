@@ -90,7 +90,7 @@ ignore = [
     # in only via `aws-sdk-s3`. The advisory is only relevant when unwinding
     # panics are enabled and `std::panic::catch_unwind` is used with key types
     # that may panic in `Drop`.
-    #
+    # 
     # See: https://rustsec.org/advisories/RUSTSEC-2026-0253
     "RUSTSEC-2026-0253",
 ]
