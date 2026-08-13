@@ -1578,14 +1578,14 @@ mod tests {
     };
     use tidb_query_common::storage::Storage;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
-    use tikv_util::yatp_pool::CleanupMethod;
+    use tikv_util::{deadline::Deadline, yatp_pool::CleanupMethod};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
     use super::*;
     use crate::{
         config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
-        coprocessor::readpool_impl::build_read_pool_for_test,
+        coprocessor::{batch::ConcatMergeable, readpool_impl::build_read_pool_for_test},
         read_pool::{ReadPool, build_yatp_read_pool},
         storage::{FlowStatsReporter, Store, TestEngineBuilder, kv::RocksEngine},
     };
@@ -1685,6 +1685,30 @@ mod tests {
             }
 
             self.result.take().unwrap().map(HandlerOutput::ready)
+        }
+    }
+
+    /// A unary handler whose result can be preserved for batch merging.
+    struct MergeableFixture {
+        values: Vec<u8>,
+        fail_serialize: bool,
+    }
+
+    #[async_trait]
+    impl RequestHandler for MergeableFixture {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
+            let values = std::mem::take(&mut self.values);
+            let result = if self.fail_serialize {
+                ConcatMergeable::failing(values)
+            } else {
+                ConcatMergeable::new(values)
+            };
+            let trace = tikv_alloc::mem_trace!(endpoint_mergeable_fixture);
+            Ok(HandlerOutput::mergeable_with_trace(
+                coppb::Response::default(),
+                Box::new(result),
+                &trace,
+            ))
         }
     }
 
@@ -1799,6 +1823,24 @@ mod tests {
         let cm = ConcurrencyManager::new_for_test(1.into());
         let endpoint = Endpoint::<RocksEngine>::new(
             &config,
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        (endpoint, read_pool)
+    }
+
+    fn build_future_pool_copr() -> (Endpoint<RocksEngine>, ReadPool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let endpoint = Endpoint::<RocksEngine>::new(
+            &Config::default(),
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
@@ -2340,6 +2382,111 @@ mod tests {
             }
         });
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn test_handle_unary_request_materialization_modes() {
+        let (copr, _read_pool) = build_future_pool_copr();
+
+        // Ordinary unary requests materialize mergeable results in their read
+        // pool task.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![3, 1, 2],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+
+        // The batch-merge path preserves the unserialized result.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+        ))
+        .unwrap();
+        assert!(matches!(&output.state, HandlerOutputState::Mergeable(_)));
+
+        // Materialization failures follow the ordinary unary error path.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: true,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_merge_path_ready_bytes_committed_once() {
+        let (copr, _read_pool) = build_future_pool_copr();
+        let context = kvrpcpb::Context::default();
+        let previous_tracker = get_tls_tracker_token();
+        let token = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::Unknown,
+            0,
+        )));
+        set_tls_tracker_token(token);
+        let tracked_response_bytes = || {
+            let mut response_bytes = 0;
+            GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+                response_bytes = tracker.metrics.coprocessor_response_bytes;
+            });
+            response_bytes
+        };
+
+        let mut ready = coppb::Response::default();
+        ready.set_data(vec![1, 2, 3]);
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(ready)).into_boxed()));
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+        ))
+        .unwrap();
+
+        // Preserve mode defers accounting even when the handler returns ready data.
+        assert_eq!(tracked_response_bytes(), 0);
+        let finalizer = copr.build_batch_merge_finalizer(
+            context,
+            Deadline::from_now(Duration::from_secs(60)),
+            0,
+            SemaphoreGroup::Shared,
+        );
+        let batch_output = BatchTaskOutput {
+            response: coppb::StoreBatchTaskResponse::default().into(),
+            mergeable_result: Some(Box::new(ConcatMergeable::new(vec![9]))),
+        };
+        let resp = block_on(finalizer.finalize(output, vec![batch_output], token));
+        let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
+        set_tls_tracker_token(previous_tracker);
+
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        assert_eq!(resp.get_batch_responses()[0].get_data(), &[9]);
+        assert_eq!(tracker.metrics.coprocessor_response_bytes, 4);
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_coprocessor_response_bytes(),
+            4
+        );
     }
 
     #[test]
