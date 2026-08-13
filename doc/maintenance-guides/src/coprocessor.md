@@ -33,17 +33,16 @@ It is a read-heavy hot path and directly impacts query latency.
   `src/server/service/kv.rs` as the RPC entry path.
 - On the Yatp path, unary and streaming heavy tasks are admitted through
   semaphores created in `Endpoint::new`: a shared semaphore for ordinary
-  coprocessor work and a dedicated semaphore for request classes that are
+  coprocessor work and a dedicated semaphore for Analyze requests that are
   intentionally throttled by the background quota limiter.
-- The shared semaphore keeps the full
-  `server.end-point-max-concurrency` budget, while the dedicated
-  background-limited semaphore is an extra bounded cap derived from the same
-  setting at startup.
-- When `server.end-point-max-concurrency` > 1, these two semaphores are
-  independent, so the total number of concurrent heavy coprocessor tasks can
-  exceed `server.end-point-max-concurrency` when both ordinary traffic and
-  background-limited traffic are active. For
-  `server.end-point-max-concurrency` == 1, both groups reuse the same semaphore.
+- The shared semaphore is controlled by
+  `server.end-point-max-concurrency`. The dedicated background-limited
+  semaphore is enabled only when
+  `server.end-point-max-bg-concurrency` is explicitly set to a positive value;
+  its capacity is then controlled by that value.
+- When the dedicated setting is absent or `0`, Analyze and ordinary Cop
+  requests share the legacy semaphore. When it is positive, the two semaphores
+  are independent and both lanes can make progress concurrently.
 - The dedicated cap does not automatically track unified read-pool worker
   autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
@@ -110,12 +109,16 @@ It is a read-heavy hot path and directly impacts query latency.
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
 - Memory quota and concurrency limiters must remain cheap and correct.
-- Request parsing and admission must stay aligned: if a request class reports
-  quota samples to the background quota limiter, it should use the dedicated
-  background-limited semaphore instead of bypassing heavy-task admission.
-- The dedicated background-limited semaphore protects the full-sampling analyze
-  path from unlimited fan-out, but it is not part of the ordinary shared
-  heavy-task budget.
+- Request parsing and admission must stay aligned: when the dedicated setting
+  is enabled, a request class that reports quota samples to the background
+  quota limiter should use the dedicated background-limited semaphore instead
+  of bypassing heavy-task admission. With the setting disabled, it intentionally
+  shares the ordinary semaphore.
+- When enabled, the dedicated background-limited semaphore protects all
+  Analyze variants, including index, common-handle, column, mixed, and
+  full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
+  shared heavy-task budget; when disabled, these requests intentionally use the
+  shared semaphore.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 
@@ -135,7 +138,7 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_waiting_for_semaphore`, and
   `tikv_coprocessor_semaphore_wait_time_duration_seconds`.
 - The semaphore wait metrics use `group=shared|background_limited` to
-  distinguish ordinary Cop request pressure from full-sampling Analyze
+  distinguish ordinary Cop request pressure from Analyze background-limited
   throttling. Dashboard queries should preserve this label when diagnosing an
   individual lane and aggregate it only when displaying total semaphore
   pressure.
