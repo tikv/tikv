@@ -237,6 +237,10 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
+## Maximum number of concurrently running background-limited Analyze tasks.
+## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
+# end-point-max-bg-concurrency = 0
+
 ## Max bytes that snapshot can interact with disk in one second. It should be
 ## set based on your disk performance. Only write flow is considered, if
 ## partiioned-raft-kv is used, read flow is also considered and it will be estimated
