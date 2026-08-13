@@ -6154,6 +6154,7 @@ mod tests {
 
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.max_ts.action_on_invalid_update = "error".to_owned();
+        cfg.storage.max_ts.cache_sync_interval = ReadableDuration::secs(14);
         cfg.validate().unwrap();
         let cache_sync_interval = cfg.storage.max_ts.cache_sync_interval.0;
         let initial_drift = cfg.storage.max_ts.max_drift.0;
