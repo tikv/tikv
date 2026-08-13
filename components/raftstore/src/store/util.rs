@@ -1517,16 +1517,12 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
-        if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
-            core.leader_info.epoch = region.get_region_epoch().clone();
-        }
-        if core.leader_info.peers != region.get_peers() {
-            // In v2, we check peers and region epoch independently, because
-            // peers are incomplete but epoch is set correctly during split.
-            core.leader_info.peers = region.get_peers().to_vec();
-        }
-        core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+        core.update_region(region);
+    }
+
+    pub fn update_region(&self, region: &Region) {
+        let mut core = self.core.lock().unwrap();
+        core.update_region(region);
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1649,6 +1645,19 @@ fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
 }
 
 impl RegionReadProgressCore {
+    fn update_region(&mut self, region: &Region) {
+        if !is_region_epoch_equal(region.get_region_epoch(), &self.leader_info.epoch) {
+            self.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if self.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
+            self.leader_info.peers = region.get_peers().to_vec();
+        }
+        self.leader_info.leader_store_id =
+            find_store_id(&self.leader_info.peers, self.leader_info.leader_id)
+    }
+
     fn new(
         region: &Region,
         applied_index: u64,
@@ -1977,7 +1986,7 @@ pub fn validate_split_region(
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{sync::Arc, thread};
 
     use engine_test::kv::KvTestEngine;
     use kvproto::{
@@ -2592,6 +2601,122 @@ mod tests {
         assert_eq!(
             rrp.core.lock().unwrap().get_local_leader_info().peers,
             *region.get_peers(),
+        );
+    }
+
+    #[test]
+    fn test_check_leader_rejects_stale_epoch_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut old_region = metapb::Region::default();
+        old_region.set_id(1);
+        old_region.mut_region_epoch().set_version(10);
+        old_region.mut_region_epoch().set_conf_ver(10);
+        old_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let mut changed_region = old_region.clone();
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.mut_peers().push(new_peer(3, 3));
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 5, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&old_region, 10, 10, 2));
+        follower_progress.update_leader_info(1, 5, &old_region);
+
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress.clone());
+
+        // A peer change increments conf_ver. Before the follower has refreshed
+        // its RegionReadProgress epoch, check_leader does not acknowledge the
+        // leader's new epoch.
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        follower_progress.update_leader_info(1, 5, &changed_region);
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn test_check_leader_rejects_stale_leader_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut changed_region = metapb::Region::default();
+        changed_region.set_id(1);
+        changed_region.mut_region_epoch().set_version(10);
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)].into());
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 6, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&changed_region, 10, 10, 3));
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress.clone());
+
+        // A peer can already have the new region epoch/peer list while its raft
+        // leader id has not caught up yet. In that window, check_leader rejects
+        // the region even though the peer metadata itself is current.
+        follower_progress.update_leader_info(raft::INVALID_ID, 6, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        // A matching leader id with an old term is rejected for the same reason.
+        follower_progress.update_leader_info(1, 5, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        // Once a later leader-state refresh writes the same leader id and term,
+        // the same region is acknowledged.
+        follower_progress.update_leader_info(1, 6, &changed_region);
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn test_region_update_keeps_resolved_ts_leader_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut old_region = metapb::Region::default();
+        old_region.set_id(1);
+        old_region.mut_region_epoch().set_version(10);
+        old_region.mut_region_epoch().set_conf_ver(10);
+        old_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let mut changed_region = old_region.clone();
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.mut_peers().push(new_peer(3, 3));
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 6, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&old_region, 10, 10, 2));
+        follower_progress.update_leader_info(1, 6, &old_region);
+        follower_progress.update_region(&changed_region);
+
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress);
+
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
         );
     }
 

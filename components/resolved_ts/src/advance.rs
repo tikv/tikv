@@ -607,6 +607,7 @@ mod tests {
     #[derive(Clone)]
     struct MockTikv {
         req_tx: Sender<CheckLeaderRequest>,
+        resp_regions: Vec<u64>,
     }
 
     impl Tikv for MockTikv {
@@ -617,8 +618,10 @@ mod tests {
             sink: ::grpcio::UnarySink<CheckLeaderResponse>,
         ) {
             self.req_tx.send(req).unwrap();
+            let mut resp = CheckLeaderResponse::default();
+            resp.regions = self.resp_regions.clone();
             ctx.spawn(async {
-                sink.success(CheckLeaderResponse::default()).await.unwrap();
+                sink.success(resp).await.unwrap();
             })
         }
     }
@@ -626,9 +629,15 @@ mod tests {
     struct MockPdClient {}
     impl PdClient for MockPdClient {}
 
-    fn new_rpc_suite(env: Arc<Environment>) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
+    fn new_rpc_suite(
+        env: Arc<Environment>,
+        resp_regions: Vec<u64>,
+    ) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
         let (tx, rx) = channel();
-        let tikv_service = MockTikv { req_tx: tx };
+        let tikv_service = MockTikv {
+            req_tx: tx,
+            resp_regions,
+        };
         let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
@@ -642,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_leader_request_size() {
         let env = Arc::new(EnvBuilder::new().build());
-        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone(), vec![]);
 
         let mut region1 = Region::default();
         region1.id = 1;
@@ -698,6 +707,64 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
         let _ = server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_filters_region_after_peer_change_without_quorum_confirmation() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server2, tikv_client2, _rx2) = new_rpc_suite(env.clone(), vec![2]);
+        let (mut server3, tikv_client3, _rx3) = new_rpc_suite(env.clone(), vec![]);
+
+        let mut changed_region = Region::default();
+        changed_region.id = 1;
+        changed_region.mut_region_epoch().set_version(10);
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.peers.push(new_peer(1, 1));
+        changed_region.peers.push(new_peer(2, 2));
+        changed_region.peers.push(new_peer(3, 3));
+        let changed_progress = RegionReadProgress::new(&changed_region, 1, 1, 1);
+        changed_progress.update_leader_info(1, 5, &changed_region);
+
+        let mut stable_region = Region::default();
+        stable_region.id = 2;
+        stable_region.mut_region_epoch().set_version(10);
+        stable_region.mut_region_epoch().set_conf_ver(10);
+        stable_region.peers.push(new_peer(1, 1));
+        stable_region.peers.push(new_peer(2, 2));
+        let stable_progress = RegionReadProgress::new(&stable_region, 1, 1, 1);
+        stable_progress.update_leader_info(1, 5, &stable_region);
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(1),
+        );
+        {
+            let mut tikv_clients = leader_resolver.tikv_clients.lock().await;
+            tikv_clients.insert(2 /* store id */, tikv_client2);
+            tikv_clients.insert(3 /* store id */, tikv_client3);
+        }
+        leader_resolver
+            .region_read_progress
+            .insert(1, Arc::new(changed_progress));
+        leader_resolver
+            .region_read_progress
+            .insert(2, Arc::new(stable_progress));
+
+        // Region 1 models a region whose peer change bumped conf_ver, but
+        // remote peers do not acknowledge the new leader info yet. Region 2
+        // models unaffected regions still advancing normally.
+        let mut resolved = leader_resolver
+            .resolve(vec![1, 2], TimeStamp::new(1), None)
+            .await;
+        resolved.sort_unstable();
+        assert_eq!(resolved, vec![2]);
+
+        let _ = server2.shutdown().await;
+        let _ = server3.shutdown().await;
     }
 
     #[test]
