@@ -10,14 +10,13 @@ mod all {
     use std::time::{Duration, Instant};
 
     use backup_stream::{
-        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
-        RegionSet, Task,
+        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
     use tikv::config::BackupStreamConfig;
-    use tikv_util::{box_err, defer, info, HandyRwLock};
+    use tikv_util::defer;
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
 
@@ -140,6 +139,7 @@ mod all {
     }
 
     #[test]
+<<<<<<< HEAD
     fn fatal_error() {
         let mut suite = SuiteBuilder::new_named("fatal_error").nodes(3).build();
         suite.must_register_task(1, "test_fatal_error");
@@ -186,6 +186,8 @@ mod all {
     }
 
     #[test]
+=======
+>>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
     fn region_checkpoint_info() {
         let mut suite = SuiteBuilder::new_named("checkpoint_info").nodes(1).build();
         suite.must_register_task(1, "checkpoint_info");
