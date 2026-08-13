@@ -512,7 +512,9 @@ impl Default for MaxTsConfig {
 
 impl MaxTsConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.max_drift <= self.cache_sync_interval {
+        // Max-ts enforcement uses millisecond precision, so compare the effective
+        // values at the same precision.
+        if self.max_drift.as_millis() <= self.cache_sync_interval.as_millis() {
             let msg = format!(
                 "storage.max-ts.max-drift {:?} is smaller than or equal to storage.max-ts.cache-sync-interval {:?}",
                 self.max_drift, self.cache_sync_interval,
@@ -559,15 +561,17 @@ mod tests {
     }
 
     #[test]
-    fn test_online_max_ts_drift_preserves_relational_fraction() {
-        let mut cfg = Config::default();
-        cfg.max_ts.max_drift = ReadableDuration(
-            cfg.max_ts.cache_sync_interval.0 + std::time::Duration::from_micros(1),
-        );
+    fn test_validate_max_ts_config_uses_effective_milliseconds() {
+        let mut cfg = MaxTsConfig {
+            max_drift: ReadableDuration::micros(1_501),
+            cache_sync_interval: ReadableDuration::micros(1_001),
+            ..Default::default()
+        };
 
+        cfg.validate().unwrap_err();
+
+        cfg.max_drift = ReadableDuration::micros(2_000);
         cfg.validate().unwrap();
-
-        assert_eq!(cfg.max_ts.max_drift, ReadableDuration::micros(15_000_001));
     }
 
     #[test]

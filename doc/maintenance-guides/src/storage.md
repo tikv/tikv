@@ -123,7 +123,7 @@ High-risk contracts:
 ### Max-ts dynamic configuration
 
 - `config.rs` validates `max_ts.max_drift` against `cache_sync_interval` using
-  the exact configured `ReadableDuration`, including sub-millisecond fractions.
+  their effective whole-millisecond values.
 - `config_manager.rs` dispatches the exact duration to `ConcurrencyManager`.
 - `ConcurrencyManager` deliberately stores the allowance in whole milliseconds
   because TSO physical timestamps are millisecond-based. For example, a valid
@@ -140,8 +140,8 @@ High-risk contracts:
   relationships.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
-- Max-ts relational validation must remain precise even though runtime TSO
-  enforcement uses whole milliseconds.
+- Max-ts relational validation must use the same whole-millisecond precision as
+  runtime TSO enforcement.
 - Memory quota and pending-write thresholds must remain operationally effective.
 
 ## Observability And Operational Signals
