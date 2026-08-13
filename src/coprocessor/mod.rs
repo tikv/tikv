@@ -82,6 +82,17 @@ pub type TracedResponse = MemoryTraceGuard<coppb::Response>;
 
 /// The output of handling a unary request. It always owns the response and
 /// records separately whether its data is ready or still mergeable.
+///
+/// The merged shape is negotiated explicitly: when the client allows it
+/// (`Request::allow_batch_task_data_merge`) and the top task produces an
+/// error-free mergeable result, each compatible successful batched task is
+/// merged into it and acknowledged by a response without data
+/// (`StoreBatchTaskResponse::data_merged_into_response`) that keeps the
+/// task's execution details. Failed or non-mergeable tasks keep their normal
+/// responses, so the client can consume the merged successes and apply its
+/// usual retry or error handling to the rest. If the client does not allow
+/// merging or the top task cannot carry merged data, every result is
+/// serialized into its own response as usual.
 pub struct HandlerOutput {
     response: TracedResponse,
     state: HandlerOutputState,
@@ -373,14 +384,18 @@ impl ReqContext {
     }
 
     pub fn build_task_id(&self) -> u64 {
+        Self::build_task_id_from(&self.context, self.txn_start_ts)
+    }
+
+    fn build_task_id_from(context: &kvrpcpb::Context, txn_start_ts: TimeStamp) -> u64 {
         const ID_SHIFT: u32 = 16;
         const MASK: u64 = u64::MAX >> ID_SHIFT;
         const MAX_TS: u64 = u64::MAX;
-        let base = match self.txn_start_ts.into_inner() {
+        let base = match txn_start_ts.into_inner() {
             0 | MAX_TS => thread_rng().next_u64(),
             start_ts => start_ts,
         };
-        let task_id: u64 = self.context.get_task_id();
+        let task_id: u64 = context.get_task_id();
         if task_id > 0 {
             // It is assumed that the lower bits of task IDs in a single transaction
             // tend to be different. So if task_id is provided, we concatenate the
