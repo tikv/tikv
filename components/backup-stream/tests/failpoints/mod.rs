@@ -27,7 +27,6 @@ mod all {
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-    use raftstore::coprocessor::ObserveHandle;
     use tempfile::TempDir;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
@@ -116,7 +115,6 @@ mod all {
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
-                handle: ObserveHandle::new(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
