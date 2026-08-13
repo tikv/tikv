@@ -861,7 +861,7 @@ async fn start<S, R>(
                 // reported immediately instead of inheriting the old throttle.
                 pool.lock()
                     .unwrap()
-                    .store_not_found_last_log
+                    .not_found_stores
                     .remove(&back_end.store_id);
                 info!("resolve store address ok"; "store_id" => back_end.store_id, "addr" => %addr);
                 addr
@@ -880,7 +880,7 @@ async fn start<S, R>(
                         }
                         // Tombstone is terminal for this connection, so its
                         // transient not-found logging state is no longer useful.
-                        pool.store_not_found_last_log.remove(&back_end.store_id);
+                        pool.not_found_stores.remove(&back_end.store_id);
                         pool.tombstone_stores.insert(back_end.store_id);
                         return;
                     }
@@ -1029,9 +1029,9 @@ struct ConnectionInfo {
 struct ConnectionPool {
     connections: HashMap<(u64, usize), ConnectionInfo>,
     tombstone_stores: HashSet<u64>,
-    // Last not-found warning time per store. Stores are independent so one
-    // missing store cannot suppress the first warning for another.
-    store_not_found_last_log: HashMap<u64, Instant>,
+    // Stores in the current not-found episode, mapped to their last warning
+    // time. Unlike `tombstone_stores`, entries are removed after resolution.
+    not_found_stores: HashMap<u64, Instant>,
     store_allowlist: Vec<u64>,
 }
 
@@ -1041,7 +1041,7 @@ impl ConnectionPool {
     /// way.
     fn should_log_store_not_found(&mut self, store_id: u64, now: Instant) -> bool {
         if self
-            .store_not_found_last_log
+            .not_found_stores
             .get(&store_id)
             .is_some_and(|last_log| {
                 now.saturating_duration_since(*last_log) < STORE_NOT_FOUND_LOG_INTERVAL
@@ -1049,7 +1049,7 @@ impl ConnectionPool {
         {
             return false;
         }
-        self.store_not_found_last_log.insert(store_id, now);
+        self.not_found_stores.insert(store_id, now);
         true
     }
 
@@ -1707,7 +1707,7 @@ mod tests {
         assert!(pool.should_log_store_not_found(1, now + STORE_NOT_FOUND_LOG_INTERVAL));
         assert!(pool.should_log_store_not_found(2, now));
 
-        pool.store_not_found_last_log.remove(&1);
+        pool.not_found_stores.remove(&1);
         assert!(pool.should_log_store_not_found(1, now));
     }
 
