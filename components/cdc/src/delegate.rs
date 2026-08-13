@@ -42,9 +42,15 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
+<<<<<<< HEAD
     service::ConnId,
     txn_source::TxnSource,
     Error, Result,
+=======
+    service::{Conn, FeatureGate, RequestId},
+    txn_source::TxnSource,
+    types::ConnId,
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 };
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);

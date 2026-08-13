@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -14,6 +15,13 @@ use futures::{
     compat::Stream01CompatExt,
     stream::{StreamExt, TryStreamExt},
 };
+=======
+use std::sync::Arc;
+
+use collections::{HashMap, HashMapEntry};
+use crossbeam::atomic::AtomicCell;
+use futures::{SinkExt, stream::TryStreamExt};
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -22,28 +30,23 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
+    types::ConnId,
+    watchdog,
 };
-
-static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-// CDC connection monitoring constants in seconds
-const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
-const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
-const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
-const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
 }
 
+<<<<<<< HEAD
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ConnId(usize);
@@ -59,6 +62,10 @@ impl Default for ConnId {
         Self::new()
     }
 }
+=======
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct RequestId(pub u64);
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 
 // FeatureGate checks whether a feature is enabled or not on client versions.
 //
@@ -423,6 +430,7 @@ impl Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
         event_feed_v2: bool,
+        watchdog_config: watchdog::Config,
     ) {
         sink.enhance_batch(true);
         let conn_id = ConnId::new();
@@ -483,42 +491,76 @@ impl Service {
             Ok::<(), String>(())
         };
 
+        let watchdog::WatchdogHandle {
+            activity,
+            recv_abort,
+            send_abort,
+            forward_exit,
+        } = watchdog::Watchdog::spawn(
+            &self.pool,
+            ctx.peer(),
+            conn_id,
+            self.memory_quota.clone(),
+            watchdog_config,
+        );
+
         let peer = ctx.peer();
         ctx.spawn(async move {
+<<<<<<< HEAD
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+=======
+            let should_deregister = tokio::select! {
+                _ = watchdog::wait_for_abort(recv_abort) => {
+                    warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    false
+                }
+                result = recv_req => {
+                    if let Err(e) = result {
+                        warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    } else {
+                        info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    }
+                    true
+                }
+            };
+
+            if should_deregister {
+                let deregister = Deregister::Conn(conn_id);
+                if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                    error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+                }
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
             }
         });
 
-        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
-        let last_flush_time_for_forward = last_flush_time.clone();
-        let last_flush_time_for_watchdog = last_flush_time.clone();
-        let peer_for_watchdog = ctx.peer().to_string();
-
         let peer = ctx.peer();
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-
-        // Create cancelCh for eventDrain.forward exit signal
-        let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
+        let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
+            let _forward_exit = forward_exit;
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             tokio::select! {
-                _ = &mut cancel_rx => {
+                _ = watchdog::wait_for_abort(send_abort) => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    let deregister = Deregister::Conn(conn_id);
+                    if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                        error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+                    }
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
                     CDC_ABORTED_CONNECTIONS.inc();
                 }
-                result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
+                result = event_drain.forward(&mut sink, Some(&activity)) => {
                     if let Err(e) = result {
                         warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                     } else {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
+<<<<<<< HEAD
                     // Send signal when eventDrain.forward exits
                     let _ = forward_exit_tx.send(());
                 }
@@ -610,6 +652,8 @@ impl Service {
                             break;
                         }
                     }
+=======
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
                 }
             }
         });
@@ -623,7 +667,7 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         sink: DuplexSink<ChangeDataEvent>,
     ) {
-        self.handle_event_feed(ctx, stream, sink, false);
+        self.handle_event_feed(ctx, stream, sink, false, watchdog::Config::default());
     }
 
     fn event_feed_v2(
@@ -632,7 +676,7 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         sink: DuplexSink<ChangeDataEvent>,
     ) {
-        self.handle_event_feed(ctx, stream, sink, true);
+        self.handle_event_feed(ctx, stream, sink, true, watchdog::Config::default());
     }
 }
 
@@ -651,7 +695,10 @@ async fn sleep_before_drain_change_event() {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
@@ -661,14 +708,62 @@ mod tests {
     use super::*;
     use crate::channel::{recv_timeout, CdcEvent};
 
+    #[derive(Clone)]
+    struct ServiceWithWatchdogConfig {
+        service: Service,
+        watchdog_config: watchdog::Config,
+    }
+
+    impl ChangeData for ServiceWithWatchdogConfig {
+        fn event_feed(
+            &mut self,
+            ctx: RpcContext<'_>,
+            stream: RequestStream<ChangeDataRequest>,
+            sink: DuplexSink<ChangeDataEvent>,
+        ) {
+            self.service
+                .handle_event_feed(ctx, stream, sink, false, self.watchdog_config.clone());
+        }
+
+        fn event_feed_v2(
+            &mut self,
+            ctx: RpcContext<'_>,
+            stream: RequestStream<ChangeDataRequest>,
+            sink: DuplexSink<ChangeDataEvent>,
+        ) {
+            self.service
+                .handle_event_feed(ctx, stream, sink, true, self.watchdog_config.clone());
+        }
+    }
+
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota, pool);
+        let cdc_service = create_change_data(Service::new(scheduler, memory_quota, pool));
+        new_rpc_suite_from_service(cdc_service, rx)
+    }
+
+    fn new_rpc_suite_with_watchdog_config(
+        capacity: usize,
+        watchdog_config: watchdog::Config,
+    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
+        let (scheduler, rx) = dummy_scheduler();
+        let cdc_service = create_change_data(ServiceWithWatchdogConfig {
+            service: Service::new(scheduler, memory_quota, pool),
+            watchdog_config,
+        });
+        new_rpc_suite_from_service(cdc_service, rx)
+    }
+
+    fn new_rpc_suite_from_service(
+        cdc_service: grpcio::Service,
+        rx: ReceiverWrapper<Task>,
+    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
-        let builder =
-            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
+        let builder = ServerBuilder::new(env.clone()).register_service(cdc_service);
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
         let (_, port) = server.bind_addrs().next().unwrap();
@@ -746,5 +841,64 @@ mod tests {
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
+    }
+
+    #[test]
+    fn test_cdc_watchdog_idle_timeout() {
+        let watchdog_config =
+            watchdog::Config::new(Duration::from_millis(10), Duration::from_millis(50), 0.0);
+        let (_server, client, mut task_rx) =
+            new_rpc_suite_with_watchdog_config(usize::MAX, watchdog_config);
+        let (mut tx, mut rx) = client.event_feed().unwrap();
+
+        let mut req = ChangeDataRequest {
+            region_id: 1,
+            ..Default::default()
+        };
+        req.mut_header().set_ticdc_version("7.5.0".into());
+        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+
+        let conn = loop {
+            match task_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Some(Task::OpenConn { conn }) => break conn,
+                Some(_) => continue,
+                None => panic!("scheduler should stay open"),
+            }
+        };
+        // Keep the connection alive as `Endpoint::on_open_conn` does. Dropping
+        // it here closes the event drain and makes the send task close normally
+        // before the watchdog can abort the stream.
+        let conn_id = conn.get_id();
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(2);
+        let mut stream_failed = false;
+        let mut deregistered = false;
+        while start.elapsed() < timeout && (!stream_failed || !deregistered) {
+            if !stream_failed {
+                match recv_timeout(&mut rx, Duration::from_millis(20)) {
+                    Ok(Some(Err(_))) => stream_failed = true,
+                    Ok(Some(Ok(event))) => panic!("unexpected CDC event: {:?}", event),
+                    Ok(None) | Err(_) => {}
+                }
+            }
+
+            while let Ok(Some(task)) = task_rx.recv_timeout(Duration::from_millis(1)) {
+                if let Task::Deregister(Deregister::Conn(id)) = task {
+                    assert_eq!(id, conn_id);
+                    deregistered = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            stream_failed,
+            "watchdog should fail the EventFeed stream after idle timeout"
+        );
+        assert!(
+            deregistered,
+            "watchdog abort should deregister the CDC connection"
+        );
     }
 }
