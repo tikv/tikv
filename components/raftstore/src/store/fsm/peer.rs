@@ -2482,6 +2482,9 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                // Update the state whether the peer is pending on applying raft
+                // logs if necesssary.
+                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
