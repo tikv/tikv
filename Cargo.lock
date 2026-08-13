@@ -4414,7 +4414,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=codex/add-resource-metering-block-read-count#fb4b0fd8706c3d9220e83f8f406b725cfd4e0a44"
+source = "git+https://github.com/pingcap/kvproto.git#af1ad1bef5b9dd611af5282711f47dbc31a42530"
 dependencies = [
  "bytes",
  "futures 0.3.15",
