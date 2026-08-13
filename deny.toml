@@ -86,10 +86,12 @@ ignore = [
     # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
-    # Ignore RUSTSEC-2026-0253 until aws-sdk-s3 can upgrade to lru >= 0.18.2.
-    # The advisory requires a cache key with a panicking Drop implementation,
-    # while aws-sdk-s3's sole LruCache uses a String-backed CacheKey.
-    # TODO: Remove after aws-sdk-s3 permits lru >= 0.18.2.
+    # Ignore RUSTSEC-2026-0253 for now: Cargo.lock shows `lru` 0.16.3 is pulled
+    # in only via `aws-sdk-s3`. The advisory is only relevant when unwinding
+    # panics are enabled and `std::panic::catch_unwind` is used with key types
+    # that may panic in `Drop`.
+    #
+    # See: https://rustsec.org/advisories/RUSTSEC-2026-0253
     "RUSTSEC-2026-0253",
 ]
 
