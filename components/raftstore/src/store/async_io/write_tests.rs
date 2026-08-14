@@ -248,10 +248,12 @@ fn test_async_writer_duration_hot_update_preserves_sub_millisecond() {
         .unwrap();
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
-    cfg.adaptive_batch_enabled = false;
     cfg.raft_write_wait_duration = tikv_util::config::ReadableDuration::micros(300);
     let mut test_worker = TestWorker::new(&cfg, &engines);
-    let adaptive_wait = test_worker.worker.batch.recorder.wait_duration_adaptive;
+    assert_eq!(
+        test_worker.worker.batch.recorder.wait_duration,
+        Duration::from_micros(300)
+    );
     let mut change = ConfigChange::default();
     change.insert(
         "raft_write_wait_duration".to_owned(),
@@ -270,14 +272,6 @@ fn test_async_writer_duration_hot_update_preserves_sub_millisecond() {
     assert_eq!(
         test_worker.worker.batch.recorder.wait_duration,
         Duration::from_micros(200)
-    );
-    assert_eq!(
-        test_worker.worker.batch.recorder.wait_duration_hint,
-        Duration::from_micros(200)
-    );
-    assert_eq!(
-        test_worker.worker.batch.recorder.wait_duration_adaptive,
-        adaptive_wait
     );
 }
 

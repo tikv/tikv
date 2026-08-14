@@ -11,7 +11,7 @@ use std::{
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
-use tikv_util::config::{ReadableOffsetTime, ReadableSchedule};
+use tikv_util::config::{ReadableDuration, ReadableOffsetTime, ReadableSchedule};
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
