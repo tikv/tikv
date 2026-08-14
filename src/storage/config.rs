@@ -512,6 +512,60 @@ impl IoRateLimitConfig {
     }
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct MaxTsConfig {
+    /// Maximum max_ts deviation allowed from PD TSO
+    pub max_drift: ReadableDuration,
+    /// How often to refresh the max_ts limit from PD
+    #[online_config(skip)]
+    pub cache_sync_interval: ReadableDuration,
+    pub action_on_invalid_update: String,
+}
+
+impl Default for MaxTsConfig {
+    fn default() -> Self {
+        Self {
+            max_drift: ReadableDuration::secs(60),
+            cache_sync_interval: ReadableDuration::secs(15),
+            action_on_invalid_update: DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE.to_owned(),
+        }
+    }
+}
+
+impl MaxTsConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        // Max-ts enforcement uses millisecond precision, so compare the effective
+        // values at the same precision.
+        if self.max_drift.as_millis() <= self.cache_sync_interval.as_millis() {
+            let msg = format!(
+                "storage.max-ts.max-drift effective value {}ms is smaller than or equal to storage.max-ts.cache-sync-interval effective value {}ms",
+                self.max_drift.as_millis(),
+                self.cache_sync_interval.as_millis(),
+            );
+            error!("{}", msg);
+            return Err(msg.into());
+        }
+
+        if let Err(e) = concurrency_manager::ActionOnInvalidMaxTs::try_from(
+            self.action_on_invalid_update.as_str(),
+        ) {
+            error!(
+                "storage.max-ts.action-on-invalid-update is set to an invalid value {}, \
+                change to action panic",
+                self.action_on_invalid_update,
+            );
+            return Err(e.into());
+        }
+
+        Ok(())
+    }
+}
+
+>>>>>>> 9ad7c02231 (online_config: preserve sub-millisecond duration in ConfigValue round-trip (#19983))
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -535,6 +589,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_max_ts_config_defaults_to_error() {
         let cfg = MaxTsConfig::default();
         assert_eq!(cfg.action_on_invalid_update, "error");
@@ -557,6 +612,23 @@ mod tests {
         let mut cfg = MaxTsConfig::default();
         cfg.max_drift = cfg.cache_sync_interval;
         cfg.validate().unwrap_err();
+=======
+    fn test_validate_max_ts_config_uses_effective_milliseconds() {
+        let mut cfg = MaxTsConfig {
+            max_drift: ReadableDuration::micros(1_501),
+            cache_sync_interval: ReadableDuration::micros(1_001),
+            ..Default::default()
+        };
+
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "storage.max-ts.max-drift effective value 1ms is smaller than or equal to storage.max-ts.cache-sync-interval effective value 1ms",
+        );
+
+        cfg.max_drift = ReadableDuration::micros(2_000);
+        cfg.validate().unwrap();
+>>>>>>> 9ad7c02231 (online_config: preserve sub-millisecond duration in ConfigValue round-trip (#19983))
     }
 
     #[test]
