@@ -3496,7 +3496,7 @@ fn prepare_snap_ctx<'a>(
     bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
-    deadline: Deadline, 
+    deadline: Deadline,
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
