@@ -1247,6 +1247,8 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
                 // supported currently.
                 check_term: None,
             }),
+
+            deadline: Some(self.req_ctx.deadline),
         };
 
         let snap = unsafe {

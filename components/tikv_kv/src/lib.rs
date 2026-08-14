@@ -356,6 +356,13 @@ pub struct SnapContext<'a> {
     // it will set this field to get the extra region snapshot
     // in lookup phase.
     pub extra_region_override: Option<ExtraRegionOverride>,
+
+    /// The absolute deadline for this snapshot request, inherited from the
+    /// caller's original request deadline (e.g. `Storage::get_deadline`).
+    /// If set, `snapshot()` bounds acquisition using this deadline's
+    /// remaining duration, rather than reconstructing a fresh timeout
+    /// window from `pb_ctx.max_execution_duration_ms`.
+    pub deadline: Option<tikv_util::deadline::Deadline>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -746,25 +753,30 @@ pub fn snapshot<E: Engine>(
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
 
-    // Mirror Storage::get_deadline's existing semantics: use the caller's
-    // configured execution duration limit if set, otherwise fall back to the
-    // same long-lived default used elsewhere in the codebase, rather than
-    // inventing a new fixed timeout window. Without this, a snapshot request
-    // whose completion callback is never invoked (e.g. due to a stuck
-    // propose queue or lost leadership) would hang indefinitely with no way
-    // for the caller to recover.
-    let max_execution_duration_ms = ctx.pb_ctx.max_execution_duration_ms;
-    let execution_duration_limit = if max_execution_duration_ms == 0 {
-        tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT
-    } else {
-        std::time::Duration::from_millis(max_execution_duration_ms)
+    // Prefer the caller's original deadline (threaded through SnapContext
+    // from Storage::get_deadline) so we bound acquisition using the
+    // *remaining* budget, not a freshly restarted one. Without this, a
+    // request that already spent most of its budget before reaching
+    // snapshot acquisition would wrongly be granted a full new timeout
+    // window here. Fall back to reconstructing one from
+    // pb_ctx.max_execution_duration_ms only for callers that don't yet
+    // pass a deadline through SnapContext.
+    let remaining = match ctx.deadline {
+        Some(deadline) => deadline.remaining_duration(),
+        None => {
+            let max_execution_duration_ms = ctx.pb_ctx.max_execution_duration_ms;
+            let execution_duration_limit = if max_execution_duration_ms == 0 {
+                tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT
+            } else {
+                std::time::Duration::from_millis(max_execution_duration_ms)
+            };
+            tikv_util::deadline::Deadline::from_now(execution_duration_limit).remaining_duration()
+        }
     };
-    let deadline = tikv_util::deadline::Deadline::from_now(execution_duration_limit);
 
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        let remaining = deadline.remaining_duration();
         let result = match tikv_util::future::async_timeout(val, remaining).await {
             Ok(result) => result,
             Err(_) => Err(Error::from(ErrorInner::Timeout(remaining))),
