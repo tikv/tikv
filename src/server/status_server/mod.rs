@@ -1337,15 +1337,10 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-<<<<<<< HEAD
-    use tikv_util::{config::VersionTrack, logger::get_log_level};
-=======
     use tikv_util::{
-        GLOBAL_SERVER_READINESS,
         config::{ReadableDuration, VersionTrack},
         logger::get_log_level,
     };
->>>>>>> 9ad7c02231 (online_config: preserve sub-millisecond duration in ConfigValue round-trip (#19983))
 
     use crate::{
         config::{ConfigController, TikvConfig},
