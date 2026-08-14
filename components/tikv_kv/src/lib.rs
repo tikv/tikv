@@ -1532,7 +1532,7 @@ mod unit_tests {
 
 #[cfg(test)]
 mod snapshot_timeout_tests {
-    
+
     use kvproto::kvrpcpb::Context;
 
     use super::*;
@@ -1652,6 +1652,4 @@ mod snapshot_timeout_tests {
             outcome
         );
     }
-
-
 }
