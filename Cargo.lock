@@ -4414,7 +4414,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#f75d78e45373a2e623273bc33e85132f9b099750"
+source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#08e3ac4c9985b30632fc75487c4e1173a46bead4"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4433,7 +4433,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#f75d78e45373a2e623273bc33e85132f9b099750"
+source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#08e3ac4c9985b30632fc75487c4e1173a46bead4"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6640,7 +6640,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#f75d78e45373a2e623273bc33e85132f9b099750"
+source = "git+https://github.com/gengliqi/rust-rocksdb?branch=fix-ingest-allow-write#08e3ac4c9985b30632fc75487c4e1173a46bead4"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
@@ -9201,7 +9201,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
