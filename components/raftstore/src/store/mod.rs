@@ -44,7 +44,7 @@ pub use self::{
         bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,
         initial_region, prepare_bootstrap_cluster,
     },
-    compaction_guard::CompactionGuardGeneratorFactory,
+    compaction_guard::{CompactionGuardGeneratorFactory, ForcePartitionRangeManager},
     config::Config,
     entry_storage::{EntryStorage, RaftlogFetchResult, MAX_INIT_ENTRY_COUNT},
     fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter},
