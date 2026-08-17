@@ -237,7 +237,7 @@ mod tests {
                     .map_err(|e| format!("read {BLOCK_SIZE} bytes: {e}"))?;
 
                 let local_bytes = id.fetch_io_bytes()?;
-                let expected = i * BLOCK_SIZE + base_local_bytes.read;
+                let expected = i * BLOCK_SIZE as u64 + base_local_bytes.read;
                 if expected != local_bytes.read {
                     return Err(format!(
                         "after read {i}, expected read_bytes {expected}, got {}",
