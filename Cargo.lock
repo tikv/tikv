@@ -2417,6 +2417,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "collections",
+ "crc32c",
  "derive_more 0.99.3",
  "encryption",
  "engine_traits",

@@ -28,6 +28,7 @@ nortcheck = []
 [dependencies]
 api_version = { workspace = true }
 collections = { workspace = true }
+crc32c = "0.6"
 derive_more = "0.99.3"
 encryption = { workspace = true }
 engine_traits = { workspace = true }
