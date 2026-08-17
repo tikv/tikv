@@ -100,7 +100,7 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 // The default limit is set to be very large. Then, requests without
 // `max_exectuion_duration` will not be aborted unexpectedly.
-pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+pub use tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT;
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
