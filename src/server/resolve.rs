@@ -119,6 +119,9 @@ where
                 // be distinguished from this response.
                 if format!("{:?}", e).contains("not found") {
                     RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
+                    // Keep address resolution retryable, but let raftstore-v2
+                    // clean up existing peer-removal records for this store.
+                    self.router.report_store_maybe_tombstone(store_id);
                     return Err(Error::StoreNotFound(store_id));
                 }
                 return Err(box_err!(e));
@@ -227,13 +230,23 @@ impl Default for MockStoreAddrResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
+    use std::{
+        net::SocketAddr,
+        ops::Sub,
+        str::FromStr,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
 
     use collections::HashMap;
     use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
-    use tikv_kv::FakeExtension;
+    use tikv_kv::RaftExtension;
 
     use super::*;
 
@@ -242,6 +255,18 @@ mod tests {
     struct MockPdClient {
         start: Instant,
         store: metapb::Store,
+    }
+
+    #[derive(Clone, Default)]
+    struct MockExtension {
+        maybe_tombstone_store_id: Arc<AtomicU64>,
+    }
+
+    impl RaftExtension for MockExtension {
+        fn report_store_maybe_tombstone(&self, store_id: u64) {
+            self.maybe_tombstone_store_id
+                .store(store_id, Ordering::SeqCst);
+        }
     }
 
     impl PdClient for MockPdClient {
@@ -278,7 +303,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, FakeExtension> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, MockExtension> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -287,7 +312,7 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: FakeExtension,
+            router: MockExtension::default(),
         }
     }
 
@@ -316,6 +341,13 @@ mod tests {
             runner.get_address(store_id),
             Err(Error::StoreTombstone(id)) if id == store_id
         ));
+        assert_eq!(
+            runner
+                .router
+                .maybe_tombstone_store_id
+                .load(Ordering::SeqCst),
+            store_id
+        );
     }
 
     #[test]
@@ -328,6 +360,13 @@ mod tests {
             runner.get_address(store_id),
             Err(Error::StoreNotFound(id)) if id == store_id
         ));
+        assert_eq!(
+            runner
+                .router
+                .maybe_tombstone_store_id
+                .load(Ordering::SeqCst),
+            store_id
+        );
     }
 
     #[test]

@@ -116,8 +116,10 @@ High-risk service contracts:
 - Raft address resolution distinguishes a definitive PD tombstone from an
   ambiguous not-found response. A definitive tombstone is reported to the
   raftstore extension and permanently blocks new connections. Not-found is
-  retryable because the store may not have registered yet; it uses
-  `raft_client_max_backoff` and must not be reported as maybe tombstone.
+  retryable because the store may not have registered yet and uses
+  `raft_client_max_backoff`. It is also reported as a maybe-tombstone hint so
+  raftstore-v2 can clean up existing peer-removal records; this hint does not
+  add the store to the connection tombstone block list.
 
 ### Status and diagnostics
 
