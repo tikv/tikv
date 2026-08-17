@@ -113,6 +113,13 @@ High-risk service contracts:
 - `raftkv/mod.rs` is the bridge between storage and raftstore.
 - `raftkv2/mod.rs` is the bridge between storage and `raftstore-v2`.
 - `debug2.rs` is the matching debugger surface for the `RaftKv2` path.
+- Raft address resolution distinguishes a definitive PD tombstone from an
+  ambiguous not-found response. A definitive tombstone is reported to the
+  raftstore extension and permanently blocks new connections. Not-found is
+  retryable because the store may not have registered yet and uses
+  `raft_client_max_backoff`. It is also reported as a maybe-tombstone hint so
+  raftstore-v2 can clean up existing peer-removal records; this hint does not
+  add the store to the connection tombstone block list.
 
 ### Status and diagnostics
 
@@ -141,6 +148,9 @@ High-risk service contracts:
 
 - gRPC service metrics and request-duration tracking
 - raft transport rejection and memory-pressure signals
+- raft address-resolution success, failure, tombstone, and not-found counters;
+  retryable not-found warnings are emitted immediately and then rate limited
+  per store while the counters continue to record every attempt
 - status-server endpoints for config, metrics, health, and profiles
 - GC and diagnostics metrics and logs
 

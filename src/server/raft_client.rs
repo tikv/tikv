@@ -55,6 +55,10 @@ use crate::server::{
     snap::Task as SnapTask,
 };
 
+// This interval only throttles repeated warnings. Resolve attempts still use
+// `raft_client_max_backoff`, and their metrics are recorded on every attempt.
+const STORE_NOT_FOUND_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
 // Implement health_controller::HealthChecker for HealthChecker to bridge with
 // health_controller
 impl health_controller::HealthChecker for HealthChecker {
@@ -853,21 +857,50 @@ async fn start<S, R>(
         let addr = match f.await {
             Ok(addr) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
+                // End the current not-found episode so a later recurrence is
+                // reported immediately instead of inheriting the old throttle.
+                pool.lock()
+                    .unwrap()
+                    .not_found_stores
+                    .remove(&back_end.store_id);
                 info!("resolve store address ok"; "store_id" => back_end.store_id, "addr" => %addr);
                 addr
             }
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message("resolve");
-                error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
-                if let ResolveError::StoreTombstone(_) = e {
-                    let mut pool = pool.lock().unwrap();
-                    if let Some(conn_info) = pool.connections.remove(&(back_end.store_id, conn_id))
-                    {
-                        conn_info.queue.set_conn_state(ConnState::Disconnected);
+                match e {
+                    ResolveError::StoreTombstone(_) => {
+                        error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
+                        let mut pool = pool.lock().unwrap();
+                        if let Some(conn_info) =
+                            pool.connections.remove(&(back_end.store_id, conn_id))
+                        {
+                            conn_info.queue.set_conn_state(ConnState::Disconnected);
+                        }
+                        // Tombstone is terminal for this connection, so its
+                        // transient not-found logging state is no longer useful.
+                        pool.not_found_stores.remove(&back_end.store_id);
+                        pool.tombstone_stores.insert(back_end.store_id);
+                        return;
                     }
-                    pool.tombstone_stores.insert(back_end.store_id);
-                    return;
+                    ResolveError::StoreNotFound(_) => {
+                        // PD not-found is ambiguous: the store may register
+                        // later. Keep retrying while suppressing log floods.
+                        let should_log = pool
+                            .lock()
+                            .unwrap()
+                            .should_log_store_not_found(back_end.store_id, Instant::now());
+                        if should_log {
+                            warn!("store is not found in PD, retrying resolve";
+                                "store_id" => back_end.store_id,
+                                "retry_interval" => ?backoff_duration,
+                            );
+                        }
+                    }
+                    _ => {
+                        error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
+                    }
                 }
                 continue;
             }
@@ -996,10 +1029,30 @@ struct ConnectionInfo {
 struct ConnectionPool {
     connections: HashMap<(u64, usize), ConnectionInfo>,
     tombstone_stores: HashSet<u64>,
+    // Stores in the current not-found episode, mapped to their last warning
+    // time. Unlike `tombstone_stores`, entries are removed after resolution.
+    not_found_stores: HashMap<u64, Instant>,
     store_allowlist: Vec<u64>,
 }
 
 impl ConnectionPool {
+    /// Returns whether this not-found attempt should emit a warning and records
+    /// `now` when it does. The caller still retries and updates metrics either
+    /// way.
+    fn should_log_store_not_found(&mut self, store_id: u64, now: Instant) -> bool {
+        if self
+            .not_found_stores
+            .get(&store_id)
+            .is_some_and(|last_log| {
+                now.saturating_duration_since(*last_log) < STORE_NOT_FOUND_LOG_INTERVAL
+            })
+        {
+            return false;
+        }
+        self.not_found_stores.insert(store_id, now);
+        true
+    }
+
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
         let need_pause_check = !self.store_allowlist.is_empty();
@@ -1640,6 +1693,23 @@ mod tests {
 
     use super::*;
     use crate::server::load_statistics::ThreadLoadPool;
+
+    #[test]
+    fn test_store_not_found_log_throttle() {
+        let mut pool = ConnectionPool::default();
+        let now = Instant::now();
+
+        assert!(pool.should_log_store_not_found(1, now));
+        assert!(!pool.should_log_store_not_found(
+            1,
+            now + STORE_NOT_FOUND_LOG_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(pool.should_log_store_not_found(1, now + STORE_NOT_FOUND_LOG_INTERVAL));
+        assert!(pool.should_log_store_not_found(2, now));
+
+        pool.not_found_stores.remove(&1);
+        assert!(pool.should_log_store_not_found(1, now));
+    }
 
     #[test]
     fn test_push_raft_message_with_context() {
