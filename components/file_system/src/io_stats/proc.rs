@@ -202,35 +202,64 @@ mod tests {
     use super::*;
     use crate::{OpenOptions, WithIoType, io_stats::A512};
 
+    #[repr(align(4096))]
+    struct A4096<const SZ: usize>([u8; SZ]);
+
     #[test]
     fn test_read_bytes() {
-        let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
-        let file_path = tmp.path().join("test_read_bytes.txt");
-        let mut id = ThreadId::current();
-        let _type = WithIoType::new(IoType::Compaction);
-        {
+        fn test_read_bytes_with_block_size<const BLOCK_SIZE: usize>() -> Result<(), String> {
+            let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
+            let file_path = tmp.path().join("test_read_bytes.txt");
+            let mut id = ThreadId::current();
+            let _type = WithIoType::new(IoType::Compaction);
+
+            {
+                let mut f = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .custom_flags(O_DIRECT)
+                    .open(&file_path)
+                    .map_err(|e| format!("open for write: {e}"))?;
+                let w = Box::new(A4096([0u8; 4096 * 10]));
+                f.write_all(&w.0).map_err(|e| format!("write file: {e}"))?;
+                f.sync_all().map_err(|e| format!("sync file: {e}"))?;
+            }
+
             let mut f = OpenOptions::new()
-                .write(true)
-                .create(true)
+                .read(true)
                 .custom_flags(O_DIRECT)
                 .open(&file_path)
-                .unwrap();
-            let w = Box::new(A512([0u8; 512 * 10]));
-            f.write_all(&w.0).unwrap();
-            f.sync_all().unwrap();
-        }
-        let mut f = OpenOptions::new()
-            .read(true)
-            .custom_flags(O_DIRECT)
-            .open(&file_path)
-            .unwrap();
-        let mut w = A512([0u8; 512]);
-        let base_local_bytes = id.fetch_io_bytes().unwrap();
-        for i in 1..=10 {
-            f.read_exact(&mut w.0).unwrap();
+                .map_err(|e| format!("open for read: {e}"))?;
+            let mut w = A4096([0u8; BLOCK_SIZE]);
+            let base_local_bytes = id.fetch_io_bytes()?;
+            for i in 1..=10 {
+                f.read_exact(&mut w.0)
+                    .map_err(|e| format!("read {BLOCK_SIZE} bytes: {e}"))?;
 
-            let local_bytes = id.fetch_io_bytes().unwrap();
-            assert_eq!(i * 512 + base_local_bytes.read, local_bytes.read);
+                let local_bytes = id.fetch_io_bytes()?;
+                let expected = i * BLOCK_SIZE + base_local_bytes.read;
+                if expected != local_bytes.read {
+                    return Err(format!(
+                        "after read {i}, expected read_bytes {expected}, got {}",
+                        local_bytes.read
+                    ));
+                }
+            }
+
+            Ok(())
+        }
+        // O_DIRECT alignment requirements vary by kernel and filesystem. Try
+        // both common request sizes with a 4 KiB-aligned buffer so this test
+        // checks proc accounting without assuming the CI filesystem layout.
+        let error_512 = match test_read_bytes_with_block_size::<512>() {
+            Ok(()) => return,
+            Err(e) => e,
+        };
+        if let Err(error_4096) = test_read_bytes_with_block_size::<4096>() {
+            panic!(
+                "direct reads were not accounted correctly with either request size; \
+                 512-byte error: {error_512}; 4 KiB error: {error_4096}"
+            );
         }
     }
 
