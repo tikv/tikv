@@ -28,7 +28,12 @@ futures = "0.3"
 futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
+<<<<<<< HEAD
 grpcio = { workspace = true, optional = true }
+=======
+gcp = { workspace = true }
+gcp_v2 = { workspace = true }
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 kvproto = { workspace = true }
 lazy_static = "1.3"
 libloading = { optional = true, version = "0.7.0" }
@@ -47,8 +52,20 @@ tokio-util = { version = "0.7", features = ["compat"] }
 url = "2.0"
 
 [dev-dependencies]
+<<<<<<< HEAD
 matches = "0.1.8"
 rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"
 tokio = { version = "1.5", features = ["macros"] }
+=======
+hyper = { version = "0.14", features = ["server", "tcp"] }
+rust-ini = "0.14.0"
+structopt = "0.3"
+tempfile = "3.1"
+tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "net"] }
+
+[[example]]
+name = "scli"
+path = "examples/scli.rs"
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))

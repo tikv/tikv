@@ -126,7 +126,12 @@ where
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
+<<<<<<< HEAD
         let range_router = Router::new(scheduler.clone(), router::Config::from(config.clone()));
+=======
+        let conf = router::Config::from_backup_stream_config(config.clone());
+        let range_router = Router::new(scheduler.clone(), conf, backup_encryption_manager.clone());
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();

@@ -2,7 +2,11 @@
 
 use std::sync::Arc;
 
+<<<<<<< HEAD
 use external_storage_export::ExternalStorage;
+=======
+use external_storage::{BackendConfig, ExternalStorage};
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 use kvproto::brpb::StorageBackend;
 
 use super::cache_map::{MakeCache, ShareOwned};
@@ -16,22 +20,45 @@ impl ShareOwned for StoragePool {
     }
 }
 
-impl MakeCache for StorageBackend {
+#[derive(Clone, Default)]
+pub struct StorageBackendFactory {
+    backend: StorageBackend,
+    backend_config: BackendConfig,
+}
+
+impl StorageBackendFactory {
+    pub fn new(backend: StorageBackend, backend_config: BackendConfig) -> Self {
+        Self {
+            backend,
+            backend_config,
+        }
+    }
+}
+
+impl MakeCache for StorageBackendFactory {
     type Cached = StoragePool;
     type Error = Error;
 
     fn make_cache(&self) -> Result<Self::Cached> {
-        StoragePool::create(self, 16)
+        StoragePool::create(&self.backend, &self.backend_config, 16)
     }
 }
 
 pub struct StoragePool(Box<[Arc<dyn ExternalStorage>]>);
 
 impl StoragePool {
-    fn create(backend: &StorageBackend, size: usize) -> Result<Self> {
+    fn create(
+        backend: &StorageBackend,
+        backend_config: &BackendConfig,
+        size: usize,
+    ) -> Result<Self> {
         let mut r = Vec::with_capacity(size);
         for _ in 0..size {
+<<<<<<< HEAD
             let s = external_storage_export::create_storage(backend, Default::default())?;
+=======
+            let s = external_storage::create_storage(backend, backend_config.clone())?;
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             r.push(Arc::from(s));
         }
         Ok(Self(r.into_boxed_slice()))
