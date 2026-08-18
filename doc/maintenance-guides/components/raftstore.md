@@ -156,16 +156,18 @@ High-risk contracts:
   valid.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
-- `StoreUnreachable` can fan out one peer message per region. Keep this work
-  bounded on the store FSM. The entry `StoreUnreachable` message should only do
-  the per-store backoff check, snapshot the target region IDs, and enqueue the
-  first `StoreUnreachableBatch`.
-- `StoreUnreachableBatch` processes one bounded slice of that snapshot and
-  self-enqueues the next offset when more regions remain. The self-enqueued
-  batch must stay out of the current `handle_msgs` drain; it is handled by the
-  next control-message drain. That next drain may still run immediately inside
-  the same `Poller::poll()`, because batch-system can release and re-take the
-  control FSM without waiting for another poller scheduling cycle.
+- Store-to-peer broadcasts can fan out one peer message per region. Keep this
+  work bounded on the store FSM. `StoreUnreachable` must only do its per-store
+  backoff check, snapshot the target region IDs, and enqueue the first
+  `StoreUnreachableBatch`.
+- `StoreUnreachableBatch`, `StoreResolvedBatch`, and
+  `UpdateReplicationModeBatch` process one bounded slice of a fixed region-ID
+  snapshot and self-enqueue the next offset when more regions remain. The
+  self-enqueued batch must stay out of the current `handle_msgs` drain; it is
+  handled by the next control-message drain. That next drain may still run
+  immediately inside the same `Poller::poll()`, because batch-system can release
+  and re-take the control FSM without waiting for another poller scheduling
+  cycle.
 - Pending pre-transfer-leader messages and cache warm-up state belong to the
   leader ID and term that accepted them. They must be discarded when either
   changes, including term changes that do not yield a new Raft `SoftState`.
