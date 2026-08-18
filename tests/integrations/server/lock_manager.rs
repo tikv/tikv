@@ -131,11 +131,29 @@ fn async_pessimistic_lock_resumable(
     key: &[u8],
     ts: u64,
 ) -> mpsc::Receiver<PessimisticLockResponse> {
+    async_pessimistic_lock_resumable_timeout(client, ctx, key, ts, 1000)
+}
+
+fn async_pessimistic_lock_resumable_timeout(
+    client: Arc<TikvClient>,
+    ctx: Context,
+    key: &[u8],
+    ts: u64,
+    wait_timeout_ms: i64,
+) -> mpsc::Receiver<PessimisticLockResponse> {
     let (tx, rx) = mpsc::channel();
     let key = vec![key.to_vec()];
     thread::spawn(move || {
-        let resp =
-            kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
+        let resp = kv_pessimistic_lock_resumable(
+            &client,
+            ctx,
+            key,
+            ts,
+            ts,
+            Some(wait_timeout_ms),
+            false,
+            false,
+        );
         tx.send(resp).unwrap();
     });
     rx
@@ -461,15 +479,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
     // 12 now waits for 11 on key1, which would form a cycle with 11→12, but
     // this wait does not register 12→11 on the owner change.
-    assert_eq!(
-        rx_txn12_k1
-            .recv_timeout(Duration::from_millis(150))
-            .unwrap_err(),
-        RecvTimeoutError::Timeout
-    );
-    let resp = rx_txn12_k1
-        .recv_timeout(Duration::from_millis(800))
-        .unwrap();
+    let resp = rx_txn12_k1.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(resp.region_error.is_none());
     assert!(
         resp.errors[0].has_locked(),
@@ -649,7 +659,9 @@ fn test_shared_lock_deadlock_cleanup_partial_edges() {
 fn test_shared_lock_deadlock_with_update_waiter() {
     use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
 
-    let mut cluster = new_cluster_for_deadlock_test(3);
+    // Owner change drops txn40's registered edge. The cycle is visible only
+    // after that wait ends and txn40 retries Detect of the current owner.
+    let mut cluster = new_cluster_for_deadlock_test_with_lock_wait_timeout(3, 2000);
     let key_a = b"slock_update_key";
     let key_b = b"slock_wait_key";
     let (client, ctx) = build_leader_client(&mut cluster, key_a);
@@ -661,16 +673,19 @@ fn test_shared_lock_deadlock_with_update_waiter() {
     force_shared_lock_shrink_only(&client, ctx.clone(), key_a.to_vec(), 103);
 
     // txn40 holds key_b, then waits on key_a. txn30 also waits on key_a and has
-    // higher priority.
+    // higher priority. Keep 40's first wait shorter than 30 so 40 times out
+    // first after the owner change.
     must_kv_pessimistic_lock(&client, ctx.clone(), key_b.to_vec(), 40);
-    let rx_txn30_ka = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_a, 30);
+    let rx_txn30_ka =
+        async_pessimistic_lock_resumable_timeout(client.clone(), ctx.clone(), key_a, 30, 2000);
     assert_eq!(
         rx_txn30_ka
             .recv_timeout(Duration::from_millis(100))
             .unwrap_err(),
         RecvTimeoutError::Timeout
     );
-    let rx_txn40_ka = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_a, 40);
+    let rx_txn40_ka =
+        async_pessimistic_lock_resumable_timeout(client.clone(), ctx.clone(), key_a, 40, 400);
     assert_eq!(
         rx_txn40_ka
             .recv_timeout(Duration::from_millis(100))
@@ -689,16 +704,36 @@ fn test_shared_lock_deadlock_with_update_waiter() {
     assert!(resp.errors.is_empty(), "{:?}", resp.errors);
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
 
-    // txn30 now waits on key_b (held by txn40); deadlock should be detected only
-    // after update_waiter switches txn40's wait-for from shared-lock owners to
-    // txn30.
+    let resp = rx_txn40_ka.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(
+        resp.errors[0].has_locked(),
+        "first wait must time out, not deadlock: {:?}",
+        resp.errors[0]
+    );
+    assert!(
+        !resp.errors[0].has_deadlock(),
+        "owner change must not report deadlock on this wait: {:?}",
+        resp.errors[0]
+    );
+
+    // Retry registers 40→30. Then 30 waiting on key_b (held by 40) completes
+    // the cycle.
+    let rx_txn40_ka2 =
+        async_pessimistic_lock_resumable_timeout(client.clone(), ctx.clone(), key_a, 40, 2000);
+    assert_eq!(
+        rx_txn40_ka2
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
     let resp = kv_pessimistic_lock_resumable(
         &client,
         ctx.clone(),
         vec![key_b.to_vec()],
         30,
         30,
-        Some(1000),
+        Some(2000),
         false,
         false,
     );
@@ -706,11 +741,11 @@ fn test_shared_lock_deadlock_with_update_waiter() {
     assert_eq!(resp.results[0].get_type(), LockResultFailed);
     assert!(resp.errors[0].has_deadlock(), "{:?}", resp.errors[0]);
 
-    // Release txn30 on key_a, then rx_txn40_ka can finish.
+    // Release txn30 on key_a, then the retried txn40 can finish.
     must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 30, 30);
 
-    let resp = rx_txn40_ka
-        .recv_timeout(Duration::from_millis(100))
+    let resp = rx_txn40_ka2
+        .recv_timeout(Duration::from_millis(500))
         .unwrap();
     assert!(resp.region_error.is_none());
     assert!(resp.errors.is_empty(), "{:?}", resp.errors);

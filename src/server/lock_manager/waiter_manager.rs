@@ -600,6 +600,8 @@ impl WaiterManager {
                 if previous_wait_info.allow_lock_with_conflict {
                     // First owner change: clean up the registered edge and do
                     // not Detect the new owner. Later changes are no-ops.
+                    // A cycle that needs the new edge is invisible until this
+                    // wait ends (capped by wait-for-lock-timeout) and retries.
                     if let Some(edge) = wait_table.take_registered_edge(event.token) {
                         self.detector_scheduler
                             .clean_up_wait_for(event.start_ts, edge);
@@ -1441,7 +1443,7 @@ pub mod tests {
     /// original edge and zero Detects from update_wait_for. Message count
     /// does not grow with owner-change count (tikv#19846).
     #[test]
-    fn test_fair_waiter_detector_rpc_grows_with_owner_changes() {
+    fn test_fair_waiter_detector_rpc_bounded_across_owner_changes() {
         let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
         let raw_key = b"hot";
         let key = Key::from_raw(raw_key);
