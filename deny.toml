@@ -86,6 +86,13 @@ ignore = [
     # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Ignore RUSTSEC-2026-0253 for now: Cargo.lock shows `lru` 0.16.3 is pulled
+    # in only via `aws-sdk-s3`. The advisory is only relevant when unwinding
+    # panics are enabled and `std::panic::catch_unwind` is used with key types
+    # that may panic in `Drop`.
+    # 
+    # See: https://rustsec.org/advisories/RUSTSEC-2026-0253
+    "RUSTSEC-2026-0253",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

@@ -121,6 +121,9 @@ High-risk contracts:
 - `store/region_snapshot.rs` is the region-scoped snapshot view.
 - `store/snap/*` owns snapshot files and application helpers.
 - `store/async_io/*` separates read/write background IO from FSM execution.
+- The async writer observes `store/config.rs::Config` through `VersionTrack`.
+  After a database write it refreshes the configured write-wait duration and
+  hint, while preserving the adaptive wait learned by the recorder.
 
 ### Worker sub-systems
 
@@ -176,6 +179,11 @@ High-risk contracts:
 - logs around snapshot, split/merge, peer lifecycle, disk-full, and unsafe
   recovery paths
 - memory accounting for raft entries/messages/apply state
+- `tikv_config_raftstore` reports ordinary duration fields in seconds.
+  `raft_write_wait_duration` is the historical microsecond exception.
+- Startup and online updates share the
+  `consistency_check_interval_seconds` label; online updates must not create a
+  separate `consistency_check_interval` series.
 
 Open these first when triaging:
 
