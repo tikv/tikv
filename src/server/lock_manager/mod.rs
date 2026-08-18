@@ -609,10 +609,10 @@ mod tests {
         wait_info
     }
 
-    /// After DETACH, W no longer has W→A. A still-live waiting for W must not
-    /// be reported as deadlock.
+    /// After the owner change, W no longer has W→A. A still-live waiting for
+    /// W must not be reported as deadlock.
     #[test]
-    fn test_detach_does_not_false_deadlock_on_old_owner() {
+    fn test_dropped_edge_does_not_false_deadlock_on_old_owner() {
         let lock_mgr = start_lock_manager();
         let (mut w, _, mut f_w) = new_test_waiter_with_key(10.into(), 20.into(), b"hot");
         w.wait_info.allow_lock_with_conflict = true;
@@ -662,7 +662,7 @@ mod tests {
     /// Handoff then cycle: this wait must not report deadlock; a new Detect of
     /// the current owner (retry) must.
     #[test]
-    fn test_detach_misses_cycle_until_retry_detect() {
+    fn test_owner_change_misses_cycle_until_retry_detect() {
         let lock_mgr = start_lock_manager();
         let (mut w, _, f_w1) = new_test_waiter_with_key(10.into(), 20.into(), b"hot");
         w.wait_info.allow_lock_with_conflict = true;

@@ -374,8 +374,8 @@ fn test_detect_deadlock_when_merge_region() {
 #[test]
 fn test_detect_deadlock_when_updating_wait_info() {
     use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
-    // DETACH: an owner change no longer Detects the new owner in this wait.
-    // The cycle is visible only after this wait ends and the client retries.
+    // An owner change no longer Detects the new owner in this wait. The
+    // cycle is visible only after this wait ends and the client retries.
     // Keep 11→12 alive longer than 12's first wait so the retry is not a race
     // against 11's key2 timeout.
     let mut cluster = new_cluster_for_deadlock_test_with_lock_wait_timeout(3, 2000);
@@ -460,7 +460,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
     // 12 now waits for 11 on key1, which would form a cycle with 11→12, but
-    // DETACH does not register 12→11 on this owner change.
+    // this wait does not register 12→11 on the owner change.
     assert_eq!(
         rx_txn12_k1
             .recv_timeout(Duration::from_millis(150))
@@ -478,7 +478,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
     );
     assert!(
         !resp.errors[0].has_deadlock(),
-        "DETACH must not report deadlock on owner change: {:?}",
+        "owner change must not report deadlock on this wait: {:?}",
         resp.errors[0]
     );
     // Retry Detects the current owner and finds 12→11→12.

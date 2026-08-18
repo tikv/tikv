@@ -212,9 +212,9 @@ pub(crate) struct Waiter {
     delay: Delay,
     start_waiting_time: Instant,
     last_updated_time: Option<Instant>,
-    /// The wait-for edge last registered to DetectTable (or enqueued to the
-    /// detector). `None` if this waiter never registered (first lock) or
-    /// already detached after an owner change.
+    /// The wait-for edge last sent to DetectTable (or queued to send).
+    /// `None` if this waiter never registered (first lock) or the edge was
+    /// already cleaned up after an owner change.
     registered_edge: Option<KeyLockWaitInfo>,
 }
 
@@ -598,11 +598,12 @@ impl WaiterManager {
 
             if let Some((previous_wait_info, _diag_ctx)) = previous_wait_info {
                 if previous_wait_info.allow_lock_with_conflict {
-                    // DETACH: drop the registered edge once, do not Detect the new owner.
+                    // First owner change: clean up the registered edge and do
+                    // not Detect the new owner. Later changes are no-ops.
                     if let Some(edge) = wait_table.take_registered_edge(event.token) {
                         self.detector_scheduler
                             .clean_up_wait_for(event.start_ts, edge);
-                        TASK_COUNTER_METRICS.detach.inc();
+                        TASK_COUNTER_METRICS.drop_registered_edge.inc();
                     }
                 }
             }
@@ -1295,7 +1296,7 @@ pub mod tests {
 
     /// Counts Detect / CleanUpWaitFor tasks scheduled to the deadlock detector.
     /// Used to reproduce tikv#19846 (unbounded 2N fan-out per owner change)
-    /// and to verify DETACH bounds it.
+    /// and to check that owner-change updates no longer grow with waiter count.
     struct CountingDetector {
         detect: Arc<AtomicUsize>,
         cleanup_wait_for: Arc<AtomicUsize>,
@@ -1436,9 +1437,9 @@ pub mod tests {
         }
     }
 
-    /// After DETACH: N fair waiters × many owner changes produces N Cleanups
-    /// of the *original* edge and zero Detects from update_wait_for. Message
-    /// count does not grow with owner-change count (tikv#19846).
+    /// N fair waiters × many owner changes produces N Cleanups of the
+    /// original edge and zero Detects from update_wait_for. Message count
+    /// does not grow with owner-change count (tikv#19846).
     #[test]
     fn test_fair_waiter_detector_rpc_grows_with_owner_changes() {
         let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
@@ -1499,8 +1500,8 @@ pub mod tests {
             cleaned
         );
 
-        // Already detached: leaving the queue must not emit another Cleanup
-        // of the updated owner.
+        // Edge already cleaned on the first owner change: leaving must not
+        // emit another Cleanup of the updated owner.
         for i in 0..n {
             scheduler.remove_lock_wait(LockWaitToken(Some(i as u64 + 1)));
         }
@@ -1550,7 +1551,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_fair_waiter_cleanup_registered_edge_if_never_detached() {
+    fn test_fair_waiter_cleanup_registered_edge_if_owner_never_changed() {
         let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
         let raw_key = b"hot";
         let (waiter, ..) = new_fair_test_waiter(10.into(), 100.into(), raw_key);
@@ -1576,7 +1577,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_first_lock_does_not_register_or_detach() {
+    fn test_first_lock_does_not_register_or_drop_edge() {
         let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
         let raw_key = b"hot";
         let key = Key::from_raw(raw_key);
