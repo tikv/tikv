@@ -13,7 +13,7 @@ use kvproto::deadlock::*;
 use security::SecurityManager;
 use tikv_util::thread_name_prefix::DEADLOCK_CLIENT_THREAD;
 
-use super::{Error, Result};
+use super::{Error, Result, metrics::DETECTOR_PENDING_MSGS};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
@@ -60,12 +60,20 @@ impl Client {
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_map_err(Error::Grpc);
 
-            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+            let result = sink
+                .send_all(
+                    &mut rx
+                        .inspect(|_| DETECTOR_PENDING_MSGS.dec())
+                        .map(|r| Ok((r, WriteFlags::default()))),
+                )
                 .await
                 .map(|_| {
                     info!("cancel detect sender");
                     sink.get_mut().cancel();
-                })
+                });
+            // Stream ended (leader change / disconnect). Drop leftover accounting.
+            DETECTOR_PENDING_MSGS.set(0);
+            result
         });
         self.sender = Some(tx);
 
@@ -82,6 +90,9 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
+            .map(|()| {
+                DETECTOR_PENDING_MSGS.inc();
+            })
             .map_err(|e| Error::Other(box_err!(e)))
     }
 }

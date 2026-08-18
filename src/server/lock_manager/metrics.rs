@@ -14,6 +14,7 @@ make_auto_flush_static_metric! {
             clean_up_wait_for,
             clean_up,
             update_wait_for,
+            detach,
         },
     }
 
@@ -65,6 +66,14 @@ lazy_static! {
     pub static ref DETECTOR_LEADER_GAUGE: IntGauge = register_int_gauge!(
         "tikv_lock_manager_detector_leader_heartbeat",
         "Heartbeat of the leader of the deadlock detector"
+    )
+    .unwrap();
+    /// Depth of the follower-side outbound `DeadlockRequest` queue (the
+    /// unbounded channel drained by a single gRPC stream). Unbounded growth
+    /// here is the OOM path in tikv#19846.
+    pub static ref DETECTOR_PENDING_MSGS: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_detector_pending_msgs",
+        "Number of deadlock-detector requests queued to send to the leader"
     )
     .unwrap();
     pub static ref TASK_COUNTER_METRICS: LocalTaskCounter =
