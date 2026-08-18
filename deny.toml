@@ -93,6 +93,12 @@ ignore = [
     # 
     # See: https://rustsec.org/advisories/RUSTSEC-2026-0253
     "RUSTSEC-2026-0253",
+    # Ignore RUSTSEC-2026-0258 for the remaining h2 0.3.26 line. The advisory
+    # only ships a patch on >=0.4.16; h2 0.4 is bumped in Cargo.lock. h2 0.3
+    # comes from hyper 0.14 (AWS SDK / reqwest 0.11) and has no 0.3.x patch.
+    # Exploit requires a malicious HTTP/2 peer and a body that is never
+    # drained. TODO: Remove after hyper 0.14 / AWS SDK no longer pull h2 0.3.
+    "RUSTSEC-2026-0258",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
