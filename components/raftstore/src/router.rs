@@ -260,6 +260,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
     fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
         self.router.broadcast_normal(msg_gen)
     }
+
+    fn report_resolved(&self, store_id: u64, group_id: u64) {
+        self.router.report_resolved(store_id, group_id)
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
@@ -295,6 +299,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
 
     fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
         batch_system::Router::broadcast_normal(self, msg_gen)
+    }
+
+    fn report_resolved(&self, store_id: u64, group_id: u64) {
+        RaftRouter::report_resolved(self, store_id, group_id)
     }
 }
 
