@@ -873,7 +873,9 @@ impl Simulator for ServerCluster {
             }
             Some(meta) => {
                 let read_ctx = ReadContext::new(batch_id, None);
-                meta.sim_router.read(read_ctx, request, cb).unwrap();
+                meta.sim_router
+                    .read(read_ctx, request, cb, raftstore::store::RaftCmdExtraOpts::default())
+                    .unwrap();
             }
         };
     }

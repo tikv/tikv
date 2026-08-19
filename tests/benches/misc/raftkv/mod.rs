@@ -124,8 +124,9 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         _: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        extra_opts: RaftCmdExtraOpts,
     ) -> Result<()> {
-        self.send_command(req, cb, RaftCmdExtraOpts::default())
+        self.send_command(req, cb, extra_opts)
     }
 
     fn release_snapshot_cache(&mut self) {}
