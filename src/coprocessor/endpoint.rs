@@ -2032,6 +2032,65 @@ mod tests {
     }
 
     #[test]
+    fn test_dropped_batch_request_trackers() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // `GLOBAL_TRACKERS` is a process-wide slab shared by every test in this
+        // binary, so this test counts only the trackers carrying its own
+        // `start_ts`. The value is arbitrary: `u64::MAX` minus the date this
+        // test was written, chosen so no realistic timestamp collides with it.
+        const DROPPED_START_TS: u64 = u64::MAX - 20260819;
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        req.set_start_ts(DROPPED_START_TS);
+        for task_id in 1..=2 {
+            let mut task = coppb::StoreBatchTask::default();
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+
+        // `parse_and_handle_unary_request` is not an `async fn`: it registers
+        // the top tracker, and `process_batch_tasks` registers one tracker per
+        // batched task, all while building the future rather than while
+        // polling it. Dropping the future therefore exercises the window in
+        // which the trackers are registered but nothing has run.
+        let previous_tracker = ::tracker::get_tls_tracker_token();
+        let future = copr.parse_and_handle_unary_request(req, None);
+        drop(future);
+        // Building the request also overwrote this thread's tracker token.
+        // Restore it so the count below is the only state this test observes.
+        set_tls_tracker_token(previous_tracker);
+
+        let mut remaining = 0;
+        GLOBAL_TRACKERS.for_each(|tracker| {
+            if tracker.req_info.start_ts == DROPPED_START_TS {
+                remaining += 1;
+            }
+        });
+        // Every removal sits inside the dropped future, so the top tracker and
+        // both batched task trackers stay registered. `TrackerToken` is a
+        // `Copy` wrapper around a `u64` with no `Drop`, so nothing reclaims
+        // them.
+        assert_eq!(remaining, 3);
+    }
+
+    #[test]
     fn test_unary_response_bytes_in_ru_v2() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
