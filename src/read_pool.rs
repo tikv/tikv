@@ -1093,6 +1093,88 @@ mod tests {
     }
 
     #[test]
+    fn test_future_pools_spawn_submission_contract() {
+        use std::sync::mpsc;
+
+        use tracker::{
+            GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken,
+            get_tls_tracker_token, set_tls_tracker_token,
+        };
+
+        fn new_tracker() -> TrackerToken {
+            GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                &kvproto::kvrpcpb::Context::default(),
+                RequestType::Unknown,
+                0,
+            )))
+        }
+
+        // Use one underlying pool for all priorities so the test observes
+        // submission timing and tracker propagation, not priority routing.
+        let pool = YatpPoolBuilder::new(yatp_pool::DefaultTicker::default())
+            .name_prefix("test-future-pools-spawn-contract")
+            .build_future_pool();
+        let handle = ReadPoolHandle::FuturePools {
+            read_pool_high: pool.clone(),
+            read_pool_normal: pool.clone(),
+            read_pool_low: pool.clone(),
+        };
+
+        // Preserve the test thread's ambient tracker, then create distinct
+        // tokens for the submitted task and for the context that polls its
+        // submission, so the two can be told apart below.
+        let previous_tracker = get_tls_tracker_token();
+        let task_tracker = new_tracker();
+        let caller_tracker = new_tracker();
+        set_tls_tracker_token(task_tracker);
+
+        // `started` reports the token seen by the task, `release` keeps the
+        // task pending so the running-task gauge is stable while it is read,
+        // and `finished` makes teardown wait until the task reaches its end.
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+
+        let spawn_fut = handle.spawn(
+            async move {
+                started_tx.send(get_tls_tracker_token()).unwrap();
+                release_rx.await.unwrap();
+                finished_tx.send(()).unwrap();
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::default(),
+            None,
+        );
+        // Switch tracker before polling so the poller's context is
+        // distinguishable from the task's.
+        set_tls_tracker_token(caller_tracker);
+
+        // Current behavior on this backend: `spawn` enqueued the task before
+        // returning, so the task is already running and the gauge already
+        // counts it, without the submission future having been polled.
+        let observed_task_tracker = started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let running_tasks = pool.get_running_task_count();
+        block_on(spawn_fut).unwrap();
+        let observed_caller_tracker = get_tls_tracker_token();
+
+        // The task reads its token while it runs, so let it reach the end
+        // before removing the trackers it and the poller point at.
+        release_tx.send(()).unwrap();
+        finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        set_tls_tracker_token(previous_tracker);
+        GLOBAL_TRACKERS.remove(task_tracker);
+        GLOBAL_TRACKERS.remove(caller_tracker);
+
+        assert_eq!(running_tasks, 1);
+        // The task inherits its call-time tracker, and polling the submission
+        // leaves the poller's tracker intact. Both have to survive any change
+        // to when submission happens.
+        assert_eq!(observed_task_tracker, task_tracker);
+        assert_eq!(observed_caller_tracker, caller_tracker);
+    }
+
+    #[test]
     fn test_yatp_full() {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
