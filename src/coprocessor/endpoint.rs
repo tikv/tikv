@@ -34,6 +34,7 @@ use tidb_query_common::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
+    DeferContext,
     deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
@@ -717,6 +718,11 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
+        // Registered before the server-busy early return below, which is one of
+        // the paths that never reaches the future holding the removal.
+        let tracker_guard = DeferContext::new(move || {
+            GLOBAL_TRACKERS.remove(tracker);
+        });
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
@@ -741,6 +747,9 @@ impl<E: Engine> Endpoint<E> {
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
         let fut = async move {
+            // Moving the guard into the future ties removal to the future's
+            // lifetime, so cancellation cleans up as well as completion.
+            let _tracker_guard = tracker_guard;
             let res = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
@@ -760,7 +769,6 @@ impl<E: Engine> Endpoint<E> {
                     res
                 }
             };
-            GLOBAL_TRACKERS.remove(tracker);
             res
         };
         Either::Right(fut)
@@ -803,9 +811,13 @@ impl<E: Engine> Endpoint<E> {
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+                    let tracker_guard = DeferContext::new(move || {
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                    });
                     set_tls_tracker_token(cur_tracker);
                     let fut = self.handle_unary_request(r);
                     let fut = async move {
+                        let _tracker_guard = tracker_guard;
                         let res = fut.await;
                         match res {
                             Ok(mut resp) => {
@@ -829,7 +841,6 @@ impl<E: Engine> Endpoint<E> {
                                 make_error_batch_response(&mut response, e);
                             }
                         }
-                        GLOBAL_TRACKERS.remove(cur_tracker);
                         response
                     };
 
@@ -2083,11 +2094,7 @@ mod tests {
                 remaining += 1;
             }
         });
-        // Every removal sits inside the dropped future, so the top tracker and
-        // both batched task trackers stay registered. `TrackerToken` is a
-        // `Copy` wrapper around a `u64` with no `Drop`, so nothing reclaims
-        // them.
-        assert_eq!(remaining, 3);
+        assert_eq!(remaining, 0);
     }
 
     #[test]
