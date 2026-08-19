@@ -32,13 +32,15 @@ read as lifecycle glue, not business logic.
 
 Concrete startup checkpoints:
 
-1. `TikvServerCore::init_config`
-2. `check_conflict_addr`
-3. `init_fs`
-4. engine and utility initialization
-5. service registration and runtime start
-6. status server start
-7. service-event loop
+1. `TikvServerCore::init_config`, including the advisory advertised-address
+   probe after config validation and fallback expansion
+2. snapshot-recovery engine access and PD bootstrap, when recovery is enabled
+3. `check_conflict_addr`
+4. `init_fs`
+5. regular engine and utility initialization
+6. service registration and runtime start
+7. status server start
+8. service-event loop
 
 ## Data Model And Metadata Contracts
 
@@ -101,6 +103,14 @@ High-risk config contracts:
   dependents drain.
 - Config validation must remain backward-compatible with persisted data layout
   and engine selection.
+- The effective advertised store address, and the status address when enabled,
+  must be probed after config validation but before any path opens engines or
+  publishes store metadata to PD. Probe failures are advisory so deployments
+  using NAT, containers, Services, or load balancers remain compatible.
+- Numeric advertised addresses use a synchronous fast path. Hostname resolution
+  runs on TiKV's standard thread wrapper with a bounded per-endpoint wait; the
+  wait timeout cannot cancel libc, NSS, or system DNS resolution, so at most two
+  one-shot resolver threads may outlive the startup wait.
 - Service pause/resume must stay consistent with the small control plane in
   `components/service`.
 
@@ -110,6 +120,9 @@ High-risk config contracts:
 - config persistence and validation output
 - disk-space reservation and lock-file failures
 - memory/high-water signals registered during startup
+- `tikv_server_advertise_addr_probe_failure_total`, labeled by endpoint and
+  bounded failure reason; startup warnings remain the primary signal when the
+  advertised status endpoint itself is unreachable
 
 Start triage with:
 
@@ -147,6 +160,8 @@ Start triage with:
   reverse?
 - Does it alter graceful shutdown semantics?
 - Does it add expensive initialization to the critical startup path?
+- Does every store-bootstrap path, including snapshot recovery, run the
+  advertised-address probe before engine access and PD metadata publication?
 
 ## Observability And Tests
 
