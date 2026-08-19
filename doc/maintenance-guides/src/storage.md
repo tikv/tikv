@@ -120,6 +120,16 @@ High-risk contracts:
   service live under `src/server/lock_manager/*`.
 - `txn/flow_controller/*` controls write pressure behavior.
 
+### Max-ts dynamic configuration
+
+- `config.rs` validates `max_ts.max_drift` against `cache_sync_interval` using
+  their effective whole-millisecond values.
+- `config_manager.rs` dispatches the exact duration to `ConcurrencyManager`.
+- `ConcurrencyManager` deliberately stores the allowance in whole milliseconds
+  because TSO physical timestamps are millisecond-based. For example, a valid
+  configured value of `15s1us` has an effective enforcement allowance of
+  `15000ms`; this is a domain boundary, not online-config truncation.
+
 ## Critical Invariants
 
 - Command callbacks must complete exactly once with the correct error/result
@@ -130,6 +140,8 @@ High-risk contracts:
   relationships.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
+- Max-ts relational validation must use the same whole-millisecond precision as
+  runtime TSO enforcement.
 - Memory quota and pending-write thresholds must remain operationally effective.
 
 ## Observability And Operational Signals
