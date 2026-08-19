@@ -20,7 +20,7 @@ use fail;
 use health_controller::slow_score::NETWORK_TIMEOUT_THRESHOLD;
 use tikv::{
     config::{MetricConfig, TikvConfig},
-    server::metrics::ADVERTISE_ADDR_PROBE_FAILURE_COUNTER,
+    server::ADVERTISE_ADDR_PROBE_FAILURE_COUNTER,
 };
 use tikv_util::{self, config, logger, sys::thread::StdThreadBuildWrapper};
 
