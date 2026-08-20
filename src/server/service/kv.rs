@@ -1208,11 +1208,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 }
                 return Err(Error::from(e));
             }
-            let elapsed = begin_instant.saturating_elapsed();
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_leader
-                .unknown
-                .observe(elapsed.as_secs_f64());
             ServerResult::Ok(())
         }
         .map_err(move |e| {
@@ -1231,6 +1226,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut request: StoreSafeTsRequest,
         sink: UnarySink<StoreSafeTsResponse>,
     ) {
+        let begin_instant = Instant::now();
         let key_range = request.take_key_range();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
@@ -1239,9 +1235,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
             let store_safe_ts = resp.await?;
+            let elapsed = begin_instant.saturating_elapsed();
             let mut resp = StoreSafeTsResponse::default();
             resp.set_safe_ts(store_safe_ts);
             sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .get_store_safe_ts
+                .unknown
+                .observe(elapsed.as_secs_f64());
             ServerResult::Ok(())
         }
         .map_err(|e| {
