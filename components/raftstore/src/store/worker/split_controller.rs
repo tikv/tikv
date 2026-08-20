@@ -709,7 +709,7 @@ impl AutoSplitController {
                     .and_modify(|(cpu_time, _)| *cpu_time += record.cpu_time as f64)
                     .or_insert_with(|| (record.cpu_time as f64, None));
                 // Calculate the (Region ID, Key Range) -> CPU Time.
-                tag.key_ranges.iter().for_each(|key_range| {
+                tag.raw_key_ranges.iter().for_each(|key_range| {
                     region_key_range_cpu_time_map
                         .entry((tag.region_id, key_range))
                         .and_modify(|cpu_time| *cpu_time += record.cpu_time)
@@ -1435,7 +1435,7 @@ mod tests {
                 store_id: 0,
                 region_id,
                 peer_id: 0,
-                key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
+                raw_key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
                 extra_attachment: Arc::new(vec![]),
             });
             raw_records.records.insert(
@@ -1873,21 +1873,21 @@ mod tests {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
-            key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
+            raw_key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
             extra_attachment: Arc::new(vec![]),
         });
         let cd_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
-            key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
+            raw_key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
             extra_attachment: Arc::new(vec![]),
         });
         let multiple_key_ranges_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
-            key_ranges: vec![
+            raw_key_ranges: vec![
                 (b"a".to_vec(), b"b".to_vec()),
                 (b"c".to_vec(), b"d".to_vec()),
             ],
@@ -1897,7 +1897,7 @@ mod tests {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
-            key_ranges: vec![],
+            raw_key_ranges: vec![],
             extra_attachment: Arc::new(vec![]),
         });
 
