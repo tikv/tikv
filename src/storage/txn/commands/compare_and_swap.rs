@@ -124,6 +124,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     API,
                     match self.api_version {
                         ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                        ApiVersion::V3 => {
+                            unreachable!("API V3 is not supported by this TiKV build")
+                        }
                     }
                 );
 

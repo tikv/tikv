@@ -7,6 +7,8 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
+use resource_metering::record_logical_write_bytes;
+use tikv_kv::Engine;
 use txn_types::{Key, OldValues, insert_old_value_if_resolved};
 
 use crate::storage::{
@@ -16,6 +18,7 @@ use crate::storage::{
         LockManager, LockWaitToken, lock_wait_context::LockWaitContextSharedState,
         lock_waiting_queue::LockWaitEntry,
     },
+    metrics::RequestPerfContext,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         Error, Result, acquire_pessimistic_lock,
@@ -88,6 +91,33 @@ impl CommandExt for AcquirePessimisticLockResumed {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockResumed {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        self.process_write_impl(snapshot, context, |_, _| ())
+    }
+}
+
+impl AcquirePessimisticLockResumed {
+    pub(crate) fn process_write_with_perf_context<S: Snapshot, L: LockManager, E: Engine>(
+        self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+        perf_context: &RequestPerfContext<'_, E>,
+    ) -> Result<WriteResult> {
+        self.process_write_impl(snapshot, context, |ctx, write_bytes| {
+            let guard = perf_context.observe(ctx);
+            record_logical_write_bytes(write_bytes as u64);
+            guard
+        })
+    }
+
+    fn process_write_impl<S: Snapshot, L: LockManager, F, G>(
+        self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+        mut observe: F,
+    ) -> Result<WriteResult>
+    where
+        F: FnMut(&kvproto::kvrpcpb::Context, usize) -> G,
+    {
         fail_point!("acquire_pessimistic_lock_resumed_before_process_write");
         let mut modifies = vec![];
         let mut new_acquired_locks = vec![];
@@ -136,7 +166,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             let txn = txn.as_mut().unwrap();
             let reader = reader.as_mut().unwrap();
 
-            match acquire_pessimistic_lock(
+            let write_bytes = key.as_encoded().len();
+            let item_guard = observe(&params.pb_ctx, write_bytes);
+            let result = acquire_pessimistic_lock(
                 txn,
                 reader,
                 key.clone(),
@@ -151,7 +183,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 params.lock_only_if_exists,
                 true,
                 false,
-            ) {
+            );
+            drop(item_guard);
+
+            match result {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
                     new_locked_keys.push((params.start_ts, key.clone()));
@@ -222,9 +257,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             known_txn_status: vec![],
         })
     }
-}
 
-impl AcquirePessimisticLockResumed {
     pub fn from_lock_wait_entries(
         lock_wait_entries: impl IntoIterator<Item = Box<LockWaitEntry>>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
@@ -260,7 +293,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        TestEngineBuilder,
+        Statistics, TestEngineBuilder,
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::tests::{must_locked, write},
         txn::{
@@ -470,5 +503,55 @@ mod tests {
         must_rollback(&mut engine, b"k2", 40, false);
         must_pessimistic_rollback(&mut engine, b"k5", 45, 45);
         must_rollback(&mut engine, b"k2", 40, false);
+    }
+
+    #[test]
+    fn test_process_write_observes_each_original_request_context() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut first = make_lock_waiting(b"k1", 10, 15, false, false);
+        first
+            .parameters
+            .pb_ctx
+            .set_resource_group_tag(b"tag-1".to_vec());
+        let mut second = make_lock_waiting(b"k2", 20, 25, false, false);
+        second
+            .parameters
+            .pb_ctx
+            .set_resource_group_tag(b"tag-2".to_vec());
+
+        let command =
+            AcquirePessimisticLockResumed::from_lock_wait_entries(vec![first, second]).cmd;
+        let Command::AcquirePessimisticLockResumed(command) = command else {
+            unreachable!();
+        };
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let lock_mgr = MockLockManager::new();
+        let mut statistics = Statistics::default();
+        let mut observed = vec![];
+        command
+            .process_write_impl(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &lock_mgr,
+                    concurrency_manager: ConcurrencyManager::new_for_test(TimeStamp::zero()),
+                    extra_op: Default::default(),
+                    statistics: &mut statistics,
+                    async_apply_prewrite: false,
+                    raw_ext: None,
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                },
+                |ctx, write_bytes| {
+                    observed.push((ctx.get_resource_group_tag().to_vec(), write_bytes));
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            observed,
+            vec![
+                (b"tag-1".to_vec(), Key::from_raw(b"k1").as_encoded().len(),),
+                (b"tag-2".to_vec(), Key::from_raw(b"k2").as_encoded().len(),),
+            ]
+        );
     }
 }

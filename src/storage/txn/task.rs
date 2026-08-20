@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::kvrpcpb::ExtraOp;
-use tikv_kv::Snapshot;
+use resource_metering::ResourceTagFactory;
+use tikv_kv::{Engine, Snapshot};
 use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded, OwnedAllocated};
 use tracker::{TrackerToken, get_tls_tracker_token};
 
@@ -96,13 +97,23 @@ impl Task {
         self.extra_op = extra_op
     }
 
-    pub(super) fn process_write<S: Snapshot, L: LockManager>(
+    pub(super) fn process_write<E: Engine, S: Snapshot, L: LockManager>(
         mut self,
         snapshot: S,
         context: WriteContext<'_, L>,
+        resource_tag_factory: &ResourceTagFactory,
+        tag: CommandKind,
     ) -> super::Result<WriteResult> {
         let cmd = self.cmd.take().unwrap();
-        cmd.process_write(snapshot, context)
+        match cmd {
+            Command::AcquirePessimisticLockResumed(cmd) => {
+                let perf_context = RequestPerfContext::<E>::new(resource_tag_factory, tag);
+                cmd.process_write_with_perf_context(snapshot, context, &perf_context)
+            }
+            cmd => unsafe {
+                with_perf_context::<E, _, _>(tag, || cmd.process_write(snapshot, context))
+            },
+        }
     }
 
     pub(super) fn process_read<S: Snapshot>(

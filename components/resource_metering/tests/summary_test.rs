@@ -47,8 +47,11 @@ fn test_summary() {
         ..Default::default()
     };
 
-    let (_, collector_reg_handle, resource_tag_factory, mut recorder_worker) =
-        init_recorder(cfg.precision.as_millis(), cfg.enable_network_io_collection);
+    let (_, collector_reg_handle, resource_tag_factory, mut recorder_worker) = init_recorder(
+        cfg.precision.as_millis(),
+        cfg.enable_network_io_collection,
+        cfg.enable_detailed_io_collection,
+    );
     let (_, data_sink_reg_handle, mut reporter_worker) = init_reporter(cfg, collector_reg_handle);
 
     let data_sink = MockDataSink::default();

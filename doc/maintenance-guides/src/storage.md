@@ -150,6 +150,22 @@ High-risk contracts:
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
+- Resource metering / TopSQL records logical IO when
+  `resource-metering.enable-network-io-collection` is enabled. With
+  `resource-metering.enable-detailed-io-collection` also enabled, logical reads
+  and writes are selected independently and the foreground SQL request's
+  RocksDB PerfContext delta is recorded as `rocksdb_block_read_count`. This
+  field feeds the downstream `read_iops` dimension for relative attribution; it
+  is not a device-level IOPS measurement. Storage command boundaries in
+  `metrics.rs` own this attribution for read-only commands and read phases of
+  write commands. In particular, transactional writes and
+  `raw_compare_and_swap` must retain the `Storage` PerfContext because CAS reads
+  the prior value before deciding whether to write. Resumed pessimistic-lock
+  batches can contain work from multiple requests, so their read and logical
+  write accounting must use each item's original request context instead of the
+  synthetic command's first context. Do not attribute Raftstore
+  apply/store write-worker activity to the request: those paths use write-only
+  PerfContext metrics and may batch work from multiple requests.
 
 Start triage with:
 
