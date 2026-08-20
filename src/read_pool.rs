@@ -32,7 +32,7 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use tracker::TlsTrackedFuture;
+use tracker::{TlsTrackedFuture, get_tls_tracker_token, set_tls_tracker_token};
 use yatp::{
     metrics::MULTILEVEL_LEVEL_ELAPSED,
     pool::Remote,
@@ -189,6 +189,17 @@ async fn admission_and_enqueue(
 }
 
 impl ReadPoolHandle {
+    /// Spawns `f` in the pool selected by `priority`.
+    ///
+    /// On both backends the task is admitted and enqueued only when the
+    /// returned future is first polled, while the TLS tracker token the task
+    /// observes is captured here, at call time.
+    ///
+    /// Two consequences bind callers. A returned future that is never polled
+    /// never runs `f`. And the pool-full errors, `FuturePoolFull` and
+    /// `UnifiedReadPoolFull`, surface at that first poll rather than at this
+    /// call, so a caller that needs backpressure has to await the future
+    /// instead of inspecting the call.
     pub fn spawn<F>(
         &self,
         f: F,
@@ -210,9 +221,32 @@ impl ReadPoolHandle {
                     CommandPri::High => read_pool_high,
                     CommandPri::Normal => read_pool_normal,
                     CommandPri::Low => read_pool_low,
-                };
-                let res = pool.spawn(f).map_err(ReadPoolError::from);
-                futures::future::ready(res).boxed()
+                }
+                .clone();
+                // `FuturePool::spawn` wraps `f` in `TlsTrackedFuture`, which
+                // captures whichever token is set at the moment of that call.
+                // The token is therefore read here, at spawn time, and
+                // reinstalled around that call below, so the task observes its
+                // caller's tracker rather than the tracker of whoever polls
+                // the submission. This is load bearing: if `FuturePool::spawn`
+                // stopped wrapping the future, the task would silently lose
+                // its tracker instead of failing to compile.
+                //
+                // Wrapping the submission itself in `TlsTrackedFuture` would
+                // not work, because its `poll` resets the token to
+                // `INVALID_TRACKER_TOKEN` rather than restoring the previous
+                // value, clearing the poller's tracker. Wrapping `f` would
+                // repeat, on every poll of the task, the switching that
+                // `FuturePool::spawn` already does.
+                let task_tracker = get_tls_tracker_token();
+                async move {
+                    let caller_tracker = get_tls_tracker_token();
+                    set_tls_tracker_token(task_tracker);
+                    // Restore the caller's token on unwinding as well as return.
+                    tikv_util::defer!(set_tls_tracker_token(caller_tracker));
+                    pool.spawn(f).map_err(ReadPoolError::from)
+                }
+                .boxed()
             }
             ReadPoolHandle::Yatp {
                 remote,
@@ -1090,6 +1124,87 @@ mod tests {
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
         fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    #[test]
+    fn test_future_pools_spawn_submission_contract() {
+        use std::sync::mpsc;
+
+        use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken};
+
+        fn new_tracker() -> TrackerToken {
+            GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                &kvproto::kvrpcpb::Context::default(),
+                RequestType::Unknown,
+                0,
+            )))
+        }
+
+        // Use one underlying pool for all priorities so the test focuses on lazy
+        // submission and tracker propagation, not priority routing.
+        let pool = YatpPoolBuilder::new(yatp_pool::DefaultTicker::default())
+            .name_prefix("test-future-pools-spawn-contract")
+            .build_future_pool();
+        let handle = ReadPoolHandle::FuturePools {
+            read_pool_high: pool.clone(),
+            read_pool_normal: pool.clone(),
+            read_pool_low: pool.clone(),
+        };
+
+        // Preserve the test thread's ambient tracker, then create distinct tokens
+        // for the submitted task and the context that will poll its submission.
+        let previous_tracker = get_tls_tracker_token();
+        let task_tracker = new_tracker();
+        let caller_tracker = new_tracker();
+        set_tls_tracker_token(task_tracker);
+
+        // `started` reports the token seen by the task, `release` keeps the task
+        // pending so the running-task gauge is stable, and `finished` makes
+        // teardown wait until the task reaches its end.
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+
+        // Calling `spawn` must capture `task_tracker`, but must not enqueue the
+        // task until the returned submission future is polled.
+        let spawn_fut = handle.spawn(
+            async move {
+                started_tx.send(get_tls_tracker_token()).unwrap();
+                release_rx.await.unwrap();
+                finished_tx.send(()).unwrap();
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::default(),
+            None,
+        );
+
+        // Poll the submission under a different tracker to ensure polling does
+        // not overwrite the caller's TLS context.
+        set_tls_tracker_token(caller_tracker);
+
+        let running_tasks_before_poll = pool.get_running_task_count();
+        // The first poll only admits and enqueues the task; it does not await the
+        // task's completion.
+        block_on(spawn_fut).unwrap();
+        let observed_caller_tracker = get_tls_tracker_token();
+        let running_tasks_after_poll = pool.get_running_task_count();
+        let observed_task_tracker = started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        // The task reads its token while it runs, so let it reach the end
+        // before removing the trackers it and the poller point at.
+        release_tx.send(()).unwrap();
+        finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        set_tls_tracker_token(previous_tracker);
+        GLOBAL_TRACKERS.remove(task_tracker);
+        GLOBAL_TRACKERS.remove(caller_tracker);
+
+        assert_eq!(running_tasks_before_poll, 0);
+        assert_eq!(running_tasks_after_poll, 1);
+        // The task inherits its call-time tracker, while the poller's tracker is
+        // preserved across submission.
+        assert_eq!(observed_task_tracker, task_tracker);
+        assert_eq!(observed_caller_tracker, caller_tracker);
     }
 
     #[test]
