@@ -843,15 +843,36 @@ where
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
-            SplitConfigChange::UpdateRegionCpuCollector(is_register) => {
-                // If it's a deregister task, just take and drop the original collector.
-                if !is_register {
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector,
+            } => {
+                // Request old-collector deregistration before draining to
+                // narrow the window for late old-configuration intervals.
+                if update_region_cpu_collector == Some(false) {
                     region_cpu_records_collector.take();
-                } else {
+                }
+                // This only clears statistics already visible to the stats
+                // monitor. Queued PD-worker tasks, in-progress resource-metering
+                // intervals, and long-lived TLS observations can arrive later,
+                // so this is not a generation fence.
+                auto_split_controller_ctx
+                    .discard_pending_stats(read_stats_receiver, cpu_stats_receiver);
+                // Prime the next thread-CPU interval after the reset boundary.
+                thread_stats.record();
+                // Register a newly enabled collector only after old records are
+                // drained, so its first interval is not discarded here.
+                if update_region_cpu_collector == Some(true) {
                     region_cpu_records_collector.get_or_insert(
                         collector_reg_handle.register(Box::new(reporter.clone()), false),
                     );
                 }
+                for rank in 0..TOP_N {
+                    READ_QPS_TOPN
+                        .with_label_values(&[&rank.to_string()])
+                        .set(0.0);
+                }
+                LOAD_BASE_SPLIT_DURATION_HISTOGRAM.observe(start_time.saturating_elapsed_secs());
+                return;
             }
             SplitConfigChange::Noop => {}
         }
@@ -3073,16 +3094,151 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::thread::sleep;
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+            mpsc,
+        },
+        thread::sleep,
+    };
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use pd_client::{BucketMeta, new_bucket_stats};
-    use tikv_util::worker::LazyWorker;
+    use tikv_util::{config::VersionTrack, worker::LazyWorker};
 
     use super::*;
-    use crate::store::util::build_key_range;
+    use crate::store::{
+        util::build_key_range,
+        worker::{SplitConfig, SplitConfigManager},
+    };
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
+
+    #[derive(Clone, Default)]
+    struct TestStatsReporter {
+        auto_split_calls: Arc<AtomicUsize>,
+    }
+
+    impl Collector for TestStatsReporter {
+        fn collect(&self, _records: Arc<RawRecords>) {}
+    }
+
+    impl StoreStatsReporter for TestStatsReporter {
+        fn report_store_infos(
+            &self,
+            _cpu_usages: RecordPairVec,
+            _read_io_rates: RecordPairVec,
+            _write_io_rates: RecordPairVec,
+        ) {
+        }
+
+        fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) {}
+
+        fn auto_split(&self, _split_infos: Vec<SplitInfo>) {
+            self.auto_split_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+
+        fn update_latency_stats(&self, _timer_tick: u64, _factor: InspectFactor) {}
+    }
+
+    #[test]
+    fn test_load_base_split_reset_drains_queues_and_updates_collector_guard() {
+        let mut manager = SplitConfigManager(Arc::new(VersionTrack::new(SplitConfig::default())));
+        let mut controller = AutoSplitController::new(manager.clone(), 0, 0, None);
+        let mut context = AutoSplitControllerContext::new(8);
+        let mut thread_stats = ThreadInfoStatistics::default();
+        let split_validator = SplitValidator::new();
+        let (read_sender, read_receiver) = mpsc::sync_channel(8);
+        let (cpu_sender, cpu_receiver) = mpsc::sync_channel(8);
+        read_sender.send(ReadStats::with_sample_num(1)).unwrap();
+        cpu_sender.send(Arc::new(RawRecords::default())).unwrap();
+
+        let mut change = ConfigChange::new();
+        change.insert(String::from("sample_threshold"), ConfigValue::U64(101));
+        manager.dispatch(change).unwrap();
+
+        let reporter = TestStatsReporter::default();
+        let collector_reg_handle = CollectorRegHandle::new_for_test();
+        let mut collector = Some(collector_reg_handle.register(Box::new(reporter.clone()), false));
+        StatsMonitor::load_base_split(
+            &mut controller,
+            &mut context,
+            &read_receiver,
+            &cpu_receiver,
+            &mut thread_stats,
+            &reporter,
+            &collector_reg_handle,
+            &mut collector,
+            &split_validator,
+        );
+
+        assert_eq!(reporter.auto_split_calls.load(AtomicOrdering::SeqCst), 0);
+        assert!(matches!(
+            read_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            cpu_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(collector.is_some());
+
+        // A normal tick reaches the reporter, proving the reset path returned
+        // before flush rather than the mock swallowing every call.
+        StatsMonitor::load_base_split(
+            &mut controller,
+            &mut context,
+            &read_receiver,
+            &cpu_receiver,
+            &mut thread_stats,
+            &reporter,
+            &collector_reg_handle,
+            &mut collector,
+            &split_validator,
+        );
+        assert_eq!(reporter.auto_split_calls.load(AtomicOrdering::SeqCst), 1);
+
+        let mut change = ConfigChange::new();
+        change.insert(
+            String::from("region_cpu_overload_threshold_ratio"),
+            ConfigValue::F64(0.0),
+        );
+        manager.dispatch(change).unwrap();
+        StatsMonitor::load_base_split(
+            &mut controller,
+            &mut context,
+            &read_receiver,
+            &cpu_receiver,
+            &mut thread_stats,
+            &reporter,
+            &collector_reg_handle,
+            &mut collector,
+            &split_validator,
+        );
+        assert!(collector.is_none());
+        assert_eq!(reporter.auto_split_calls.load(AtomicOrdering::SeqCst), 1);
+
+        let mut change = ConfigChange::new();
+        change.insert(
+            String::from("region_cpu_overload_threshold_ratio"),
+            ConfigValue::F64(0.1),
+        );
+        manager.dispatch(change).unwrap();
+        StatsMonitor::load_base_split(
+            &mut controller,
+            &mut context,
+            &read_receiver,
+            &cpu_receiver,
+            &mut thread_stats,
+            &reporter,
+            &collector_reg_handle,
+            &mut collector,
+            &split_validator,
+        );
+        assert!(collector.is_some());
+        assert_eq!(reporter.auto_split_calls.load(AtomicOrdering::SeqCst), 1);
+    }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
