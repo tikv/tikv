@@ -2,6 +2,7 @@
 
 use std::{cell::RefCell, mem, sync::Arc};
 
+use ::tracker::{GLOBAL_TRACKERS, TrackerToken};
 use collections::HashMap;
 use kvproto::{metapb, pdpb::QueryKind};
 use lazy_static::lazy_static;
@@ -9,6 +10,7 @@ use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
+use resource_metering::record_network_out_bytes;
 use tikv_util::memory::MemoryQuota;
 
 use crate::{
@@ -310,6 +312,19 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::cache_missing_range => ScanKind::cache_missing_range,
         }
     }
+}
+
+/// Records response data against the coprocessor metrics and request identified
+/// by `tracker`.
+pub fn record_coprocessor_response_size(resp_size: u64, tracker: TrackerToken) {
+    COPR_RESP_SIZE.inc_by(resp_size);
+    record_network_out_bytes(resp_size);
+    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+        tracker.metrics.coprocessor_response_bytes = tracker
+            .metrics
+            .coprocessor_response_bytes
+            .saturating_add(resp_size);
+    });
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {

@@ -22,6 +22,46 @@ It is a read-heavy hot path and directly impacts query latency.
 - execute in read pool
 - collect stats and emit response
 
+### Batched unary result merging
+
+- Unary handlers return `Result<HandlerOutput>`. Response data is either ready
+  or kept as an unserialized `MergeableResult`. Currently only full-sampling
+  analyze produces mergeable results. All mergeable outputs of one request must
+  have the same concrete type and must produce the same logical result
+  regardless of merge order.
+- Merging is enabled only when the client sets
+  `Request::allow_batch_task_data_merge` and supplies batched tasks. Otherwise,
+  every task is serialized in its own read-pool task, preserving the existing
+  wire behavior.
+- Execution scheduling is negotiated independently. When the client sets
+  `Request::execute_batch_tasks_serially`, the top task and batched tasks are
+  polled one at a time so batching does not increase scan concurrency. This
+  relies on the `ReadPoolHandle::spawn` contract: on both backends a task is
+  admitted and enqueued only when the returned future is first polled. When the
+  field is unset, batched tasks retain the legacy concurrent polling behavior.
+  TiDB correlates child responses by task ID, so scheduling does not depend on
+  response order.
+- A successful mergeable batched result is folded into an error-free mergeable
+  top result. Its batch response contains no data, sets
+  `data_merged_into_response`, and keeps its execution details. Failed or
+  non-mergeable tasks keep normal per-task responses.
+- Final merging and serialization run in the read pool under the request's
+  deadline, resource-control settings, selected semaphore group, and tracker.
+  Outputs are buffered until finalization, so they contribute to peak request
+  memory; each buffered output rides in its memory-trace guard, and attachment
+  rebuilds the combined response's guard (adopting a batch response's node when
+  the top response is untracked, e.g. a top task error) so the retained data
+  stays accounted until the response drops.
+- Data, acknowledgments, response-byte accounting, and memory tracing are
+  published only after the final deadline check. Admission failure, deadline
+  expiry, or failure to serialize a top result that already consumed child
+  results returns no partial data or acknowledgments, allowing every task to be
+  retried safely.
+
+The main contracts live in `HandlerOutput` and `MergeableResult` in
+`src/coprocessor/mod.rs`; orchestration is in `src/coprocessor/endpoint.rs`;
+collection and finalization are in `src/coprocessor/batch.rs`.
+
 ## Process Lifecycle And Startup Sequencing
 
 - Endpoint and read pools are created during server startup.
@@ -59,6 +99,9 @@ It is a read-heavy hot path and directly impacts query latency.
   version, perf level.
 - Request parsing contract differs by request type:
   DAG, analyze, checksum.
+- `HandlerOutput` always owns the traced response and records separately
+  whether its data is ready or remains as a mergeable result until
+  finalization.
 - `ReqContextInner::new` is where deadline, bypass/access locks, and derived
   lower/upper bounds are normalized. Reviewers should treat changes there as
   cross-cutting request-semantic changes.
@@ -75,6 +118,7 @@ It is a read-heavy hot path and directly impacts query latency.
 
 - `src/coprocessor/mod.rs`
 - `src/coprocessor/endpoint.rs`
+- `src/coprocessor/batch.rs`
 - `src/coprocessor/readpool_impl.rs`
 - `src/coprocessor/dag/*`
 - `src/coprocessor/statistics/*`
@@ -85,12 +129,13 @@ It is a read-heavy hot path and directly impacts query latency.
 
 1. `src/coprocessor/mod.rs`
 2. `src/coprocessor/endpoint.rs`
-3. `src/coprocessor/tracker.rs`
-4. `src/coprocessor/readpool_impl.rs`
-5. `src/coprocessor/interceptors/deadline.rs`
-6. `src/coprocessor/interceptors/concurrency_limiter.rs`
-7. `src/coprocessor/dag/mod.rs`
-8. `src/coprocessor/statistics/analyze_context.rs`
+3. `src/coprocessor/batch.rs`
+4. `src/coprocessor/tracker.rs`
+5. `src/coprocessor/readpool_impl.rs`
+6. `src/coprocessor/interceptors/deadline.rs`
+7. `src/coprocessor/interceptors/concurrency_limiter.rs`
+8. `src/coprocessor/dag/mod.rs`
+9. `src/coprocessor/statistics/analyze_context.rs`
 
 ## Main Responsibilities
 
@@ -121,6 +166,10 @@ It is a read-heavy hot path and directly impacts query latency.
   shared semaphore.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
+- Batched unary result merging must preserve task identity, retry semantics,
+  deadline enforcement, response-byte accounting, and memory tracing.
+- Serial batch execution must keep at most one task from the request active
+  without changing result-merging or response-order semantics.
 
 ## Observability And Operational Signals
 
@@ -205,10 +254,11 @@ Suggested reading order:
 
 1. `mod.rs`
 2. `endpoint.rs`
-3. `readpool_impl.rs`
-4. `dag/mod.rs`
-5. `statistics/analyze_context.rs`
-6. `interceptors/*`
+3. `batch.rs`
+4. `readpool_impl.rs`
+5. `dag/mod.rs`
+6. `statistics/analyze_context.rs`
+7. `interceptors/*`
 
 Companion docs:
 

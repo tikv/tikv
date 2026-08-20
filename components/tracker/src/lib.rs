@@ -10,7 +10,7 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    future::{FutureTrack, track},
+    future::{FutureTrack, TokenFutureTracker, track},
     slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
     tls::*,
 };
@@ -322,5 +322,53 @@ mod tests {
         assert_eq!(detail_v2.get_processed_versions(), 11);
         assert_eq!(detail_v2.get_total_versions(), 13);
         assert_eq!(detail_v2.get_processed_versions_size(), 17);
+    }
+
+    #[test]
+    fn test_token_future_tracker_attributes_poll_time() {
+        use std::{
+            future::{Future, poll_fn},
+            pin::pin,
+            task::{Context, Poll, Waker},
+            time::Duration,
+        };
+
+        // Spinning self-measures, so assertions hold under arbitrary
+        // scheduling load, unlike sleeps.
+        fn spin(d: Duration) {
+            let begin = Instant::now();
+            while begin.elapsed() < d {}
+        }
+
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(new_req_info()));
+        let mut polled = false;
+        let fut = track(
+            poll_fn(move |_cx| {
+                spin(Duration::from_millis(2));
+                if polled {
+                    Poll::Ready(())
+                } else {
+                    polled = true;
+                    Poll::Pending
+                }
+            }),
+            TokenFutureTracker::new(token),
+        );
+        let mut fut = pin!(fut);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_ready());
+
+        let mut detail = pb::TimeDetailV2::default();
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| tracker.merge_time_detail(&mut detail));
+        GLOBAL_TRACKERS.remove(token);
+
+        // Two polls spun >= 2ms each; a >= 2ms gap preceded each poll.
+        let expected = Duration::from_millis(4).as_nanos() as u64;
+        assert!(detail.get_process_wall_time_ns() >= expected);
+        assert!(detail.get_process_suspend_wall_time_ns() >= expected);
     }
 }
