@@ -1903,4 +1903,78 @@ mod tests {
             },
         ])
     }
+
+    /// A DESC-encoded (bitwise-complemented, pingcap/tidb#2519) column inside
+    /// a common handle must be canonicalised back to ASC bytes by
+    /// `process_kv_pair` before it reaches the ASC-only chunk decoders. TiDB
+    /// currently rejects DESC on clustered primary keys, so this locks in the
+    /// defensive branch should that DDL rule ever relax.
+    #[test]
+    fn test_common_handle_desc_encoded_column() {
+        const TABLE_ID: i64 = 2333;
+
+        // Schema: clustered PK (c1 INT ASC, c2 VARCHAR DESC), no other
+        // columns.
+        let mut ci_int = ColumnInfo::default();
+        ci_int.set_column_id(1);
+        ci_int.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+        let mut ci_bytes = ColumnInfo::default();
+        ci_bytes.set_column_id(2);
+        ci_bytes.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+        let columns_info = vec![ci_int, ci_bytes];
+        let schema: Vec<FieldType> =
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::VarChar.into()];
+
+        // Common handle: ASC int column followed by a DESC bytes column
+        // (per-column complement, mirroring TiDB's EncodeKeyWithDesc).
+        let mut ctx = EvalContext::default();
+        let mut handle = datum::encode_key(&mut ctx, &[Datum::I64(42)]).unwrap();
+        let desc_bytes: Vec<u8> = datum::encode_key(&mut ctx, &[Datum::Bytes(b"abc".to_vec())])
+            .unwrap()
+            .iter()
+            .map(|b| !b)
+            .collect();
+        handle.extend_from_slice(&desc_bytes);
+
+        let key = table::encode_common_handle(TABLE_ID, &handle);
+
+        let mut key_range = KeyRange::default();
+        key_range.set_start(table::encode_common_handle(TABLE_ID - 1, &handle));
+        key_range.set_end(table::encode_common_handle(TABLE_ID + 1, &handle));
+
+        // An empty value forces both columns to be filled from the handle.
+        let store = FixtureStorage::new(iter::once((key, Ok(vec![]))).collect());
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![key_range],
+            vec![1, 2],
+            false,
+            false,
+            vec![],
+        )
+        .unwrap();
+
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.unwrap().stop());
+        assert_eq!(result.logical_rows.len(), 1);
+        assert_eq!(result.physical_columns.columns_len(), 2);
+
+        for i in 0..2 {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[i])
+                .unwrap();
+        }
+        assert_eq!(
+            result.physical_columns[0].decoded().to_int_vec(),
+            &[Some(42)]
+        );
+        assert_eq!(
+            result.physical_columns[1].decoded().to_bytes_vec(),
+            &[Some(b"abc".to_vec())],
+            "DESC common-handle column must be canonicalised before decoding"
+        );
+    }
 }

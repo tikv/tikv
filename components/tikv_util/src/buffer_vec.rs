@@ -95,7 +95,6 @@ impl BufferVec {
     pub fn push_inverted(&mut self, buffer: impl AsRef<[u8]>) {
         let buffer = buffer.as_ref();
         self.offsets.push(self.data.len());
-        self.data.reserve(buffer.len());
         self.data.extend(buffer.iter().map(|b| !b));
     }
 
