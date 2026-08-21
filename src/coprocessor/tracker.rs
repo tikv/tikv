@@ -192,10 +192,10 @@ impl<E: Engine> Tracker<E> {
     }
 
     fn on_poll_finish(&mut self) {
-        let report = self.with_perf_context(|perf_context| {
+        let delta = self.with_perf_context(|perf_context| {
             perf_context.report_metrics(&[get_tls_tracker_token()])
         });
-        record_rocksdb_block_read_count(report.block_read_count);
+        record_rocksdb_block_read_count(delta.block_read_count);
     }
 
     pub fn poll_perf_context_tracker(&mut self) -> impl FutureTrack + '_ {
