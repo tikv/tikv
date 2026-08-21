@@ -813,7 +813,16 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             Some(start_key),
             Some(end_key),
         ) {
-            Ok(key) => key,
+            Ok(Some(key)) => key,
+            Ok(None) => {
+                // The range sits entirely within a single compacted SST with no
+                // range-property index key inside it.  Fall back to a bounded
+                // iterator scan to find an actual midpoint key.
+                match self.scan_middle_in_range(tablet, region, start_key, end_key) {
+                    Some(key) => key,
+                    None => return None,
+                }
+            }
             Err(e) => {
                 error!(%e;
                     "failed to get approximate middle in key range";
@@ -823,7 +832,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 );
                 return None;
             }
-        }?;
+        };
 
         // Normalize to the same form used by SplitObserver before all checks,
         // so the candidate won't become invalid after timestamp stripping.
@@ -850,6 +859,50 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         } else {
             None
         }
+    }
+
+    /// Scans up to `MAX_SCAN_KEYS` keys across all large CFs in
+    /// `[start_key, end_key)` and returns the middle one as a candidate split
+    /// point, in data-key encoding.
+    ///
+    /// Used as a fallback when the range-property index has no entry strictly
+    /// inside the range (e.g. narrow hot range fully contained in a single
+    /// compacted SST).  Scanning LARGE_CFS mirrors `get_range_approximate_split_keys`
+    /// so the result is consistent even when data lives only in CF_WRITE
+    /// (short-value inline writes).
+    fn scan_middle_in_range(
+        &self,
+        tablet: &EK,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Option<Vec<u8>> {
+        const MAX_SCAN_KEYS: usize = 1024;
+        let mut iter = match MergedIterator::<<EK as Iterable>::Iterator>::new(
+            tablet, LARGE_CFS, start_key, end_key, false,
+        ) {
+            Ok(it) => it,
+            Err(e) => {
+                error!(%e;
+                    "failed to create iterator for load split fallback scan";
+                    "region_id" => region.get_id(),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+                return None;
+            }
+        };
+        let mut candidates: Vec<Vec<u8>> = Vec::new();
+        while let Some(e) = iter.next() {
+            candidates.push(e.key().to_vec());
+            if candidates.len() >= MAX_SCAN_KEYS {
+                break;
+            }
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        Some(candidates.swap_remove(candidates.len() / 2))
     }
 
     /// Gets the split keys by scanning the range.

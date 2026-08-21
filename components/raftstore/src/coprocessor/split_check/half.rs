@@ -702,6 +702,71 @@ mod tests {
         assert_ask_split_in_range(&rx, &region, &start_key, &end_key);
     }
 
+    #[test]
+    fn test_load_split_approximate_fallback_with_compacted_sst() {
+        // When all keys land in a single compacted SST the range-property index
+        // has no entry strictly inside the hot range, so
+        // get_region_approximate_middle_in_range returns None.  The iterator
+        // fallback must still produce a valid split key.
+        let path = Builder::new()
+            .prefix("test-load-split-compacted-sst")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        // Write all keys in a single batch and flush once so they all end up in
+        // one SST.  The SST's range-property index will only record the first
+        // and last key, leaving no index entry inside the hot range.
+        for i in 0..21 {
+            let k = format!("{:04}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+        }
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Pass raw user keys (not MVCC-encoded) so the runner converts them to
+        // the correct data-key range, matching the stored keys.  This makes the
+        // single-SST property index return None (no index key strictly inside
+        // the range), triggering the iterator fallback.
+        let start_key = b"0000".to_vec();
+        let end_key = b"0020".to_vec();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key.clone()),
+            Some(end_key.clone()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        assert_ask_split_in_range(&rx, &region, &start_key, &end_key);
+    }
+
     fn test_generate_region_bucket_impl(mvcc: bool) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
