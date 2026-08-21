@@ -395,15 +395,15 @@ fn start_perf_context<E: Engine>(cmd: CommandKind) -> bool {
 }
 
 fn finish_perf_context<E: Engine>(cmd: CommandKind, report_to_tracker: bool) {
-    let report = if report_to_tracker {
+    let delta = if report_to_tracker {
         with_perf_context_mut::<E, _>(cmd, |perf_context| {
             perf_context.report_metrics(&[get_tls_tracker_token()])
         })
     } else {
         with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.report_metrics(&[]))
     };
-    if let Some(report) = report {
-        record_rocksdb_block_read_count(report.block_read_count);
+    if let Some(delta) = delta {
+        record_rocksdb_block_read_count(delta.block_read_count);
     }
 }
 

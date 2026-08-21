@@ -161,7 +161,7 @@ impl engine_traits::PerfContext for RocksPerfContext {
         self.stats.start()
     }
 
-    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextReport {
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextDelta {
         self.stats.report(trackers)
     }
 }
@@ -291,7 +291,7 @@ impl PerfContextStatistics {
         self.apply_perf_settings();
     }
 
-    pub fn report(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextReport {
+    pub fn report(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextDelta {
         match self.kind {
             engine_traits::PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -303,7 +303,7 @@ impl PerfContextStatistics {
                         t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
-                engine_traits::PerfContextReport::default()
+                engine_traits::PerfContextDelta::default()
             }
             engine_traits::PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -315,12 +315,12 @@ impl PerfContextStatistics {
                         t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
-                engine_traits::PerfContextReport::default()
+                engine_traits::PerfContextDelta::default()
             }
             engine_traits::PerfContextKind::Storage(_)
             | engine_traits::PerfContextKind::Coprocessor(_) => {
                 if self.perf_level == engine_traits::PerfLevel::Disable {
-                    return engine_traits::PerfContextReport::default();
+                    return engine_traits::PerfContextDelta::default();
                 }
                 let perf_context = ReadPerfContext::capture();
                 let block_read_count = perf_context.block_read_count;
@@ -329,7 +329,7 @@ impl PerfContextStatistics {
                 }
                 self.read += perf_context;
                 self.maybe_flush_read_metrics();
-                engine_traits::PerfContextReport { block_read_count }
+                engine_traits::PerfContextDelta { block_read_count }
             }
         }
     }
