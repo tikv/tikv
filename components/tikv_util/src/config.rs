@@ -341,17 +341,13 @@ impl From<ReadableDuration> for Duration {
 
 impl From<ReadableDuration> for ConfigValue {
     fn from(duration: ReadableDuration) -> ConfigValue {
-        ConfigValue::Duration(duration.0.as_millis() as u64)
+        ConfigValue::Duration(duration.0)
     }
 }
 
 impl From<ConfigValue> for ReadableDuration {
     fn from(d: ConfigValue) -> ReadableDuration {
-        if let ConfigValue::Duration(d) = d {
-            ReadableDuration(Duration::from_millis(d))
-        } else {
-            panic!("expect: ConfigValue::Duration, got: {:?}", d);
-        }
+        ReadableDuration(Duration::from(d))
     }
 }
 
@@ -1845,6 +1841,39 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+
+    #[test]
+    fn test_config_value_duration_round_trip_preserves_sub_millisecond() {
+        let duration = ReadableDuration::micros(200);
+
+        let round_trip = ReadableDuration::from(ConfigValue::from(duration));
+
+        assert_eq!(round_trip, duration);
+    }
+
+    #[test]
+    fn test_config_value_duration_display_preserves_precision() {
+        let cases = [
+            (ReadableDuration::ZERO, "0ms"),
+            (ReadableDuration::millis(1), "1ms"),
+            (ReadableDuration::secs(1), "1000ms"),
+            (ReadableDuration::micros(200), "200us"),
+            (ReadableDuration::micros(1200), "1200us"),
+            (ReadableDuration(Duration::from_nanos(1)), "1ns"),
+            (
+                ReadableDuration(Duration::from_millis(u64::MAX)),
+                "18446744073709551615ms",
+            ),
+            (
+                ReadableDuration(Duration::MAX),
+                "18446744073709551615999999999ns",
+            ),
+        ];
+
+        for (duration, expected) in cases {
+            assert_eq!(ConfigValue::from(duration).to_string(), expected);
+        }
+    }
 
     #[test]
     fn test_readable_size() {

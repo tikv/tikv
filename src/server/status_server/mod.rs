@@ -1337,7 +1337,10 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::{config::VersionTrack, logger::get_log_level};
+    use tikv_util::{
+        config::{ReadableDuration, VersionTrack},
+        logger::get_log_level,
+    };
 
     use crate::{
         config::{ConfigController, TikvConfig},
@@ -1449,6 +1452,51 @@ mod tests {
         });
         block_on(handle).unwrap();
         status_server.stop();
+    }
+
+    #[test]
+    fn test_config_endpoint_preserves_duration_text() {
+        let mut config = TikvConfig::default();
+        config.raft_store.raft_write_wait_duration = ReadableDuration::micros(200);
+        config.raft_store.snap_wait_split_duration = ReadableDuration::millis(1);
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::new(config),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        status_server.start("127.0.0.1:0".to_owned()).unwrap();
+        let addr = status_server.listening_addr().to_string();
+        let handle = status_server.thread_pool.spawn(async move {
+            let client = Client::new();
+            let mut responses = Vec::new();
+            for path in ["/config", "/config?full=true"] {
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(addr.as_str())
+                    .path_and_query(path)
+                    .build()
+                    .unwrap();
+                let response = client.get(uri).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+                responses.push(serde_json::from_slice::<serde_json::Value>(&body).unwrap());
+            }
+            responses
+        });
+        let responses = block_on(handle);
+        status_server.stop();
+        let responses = responses.unwrap();
+
+        for response in responses {
+            assert_eq!(response["raftstore"]["raft-write-wait-duration"], "200us");
+            assert_eq!(response["raftstore"]["snap-wait-split-duration"], "1ms");
+        }
     }
 
     #[test]

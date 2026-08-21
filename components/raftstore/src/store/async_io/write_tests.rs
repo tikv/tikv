@@ -14,6 +14,7 @@ use kvproto::{
     raft_serverpb::{RaftApplyState, RaftMessage, RegionLocalState},
     resource_manager::{GroupMode, GroupRawResourceSettings, ResourceGroup},
 };
+use online_config::{ConfigChange, ConfigValue, OnlineConfig};
 use resource_control::ResourceGroupManager;
 use tempfile::Builder;
 
@@ -200,6 +201,7 @@ fn test_raft_kv(engine: &RaftTestEngine, key: u64) -> bool {
 
 struct TestWorker {
     worker: Worker<KvTestEngine, RaftTestEngine, TestNotifier, TestTransport>,
+    cfg_track: Arc<VersionTrack<Config>>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
     last_raft_append_success_at_millis: Arc<AtomicU64>,
@@ -215,6 +217,7 @@ impl TestWorker {
         let notifier = TestNotifier { tx: notify_tx };
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
         let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
+        let cfg_track = Arc::new(VersionTrack::new(cfg.clone()));
         Self {
             worker: Worker::new(
                 1,
@@ -224,16 +227,52 @@ impl TestWorker {
                 task_rx,
                 notifier,
                 trans,
-                &Arc::new(VersionTrack::new(cfg.clone())),
+                &cfg_track,
                 last_raft_append_success_at_millis.clone(),
                 last_kv_sync_success_at_millis.clone(),
             ),
+            cfg_track,
             msg_rx,
             notify_rx,
             last_raft_append_success_at_millis,
             last_kv_sync_success_at_millis,
         }
     }
+}
+
+#[test]
+fn test_async_writer_duration_hot_update_preserves_sub_millisecond() {
+    let path = Builder::new()
+        .prefix("async-io-duration-hot-update")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.raft_write_wait_duration = tikv_util::config::ReadableDuration::micros(300);
+    let mut test_worker = TestWorker::new(&cfg, &engines);
+    assert_eq!(
+        test_worker.worker.batch.recorder.wait_duration,
+        Duration::from_micros(300)
+    );
+    let mut change = ConfigChange::default();
+    change.insert(
+        "raft_write_wait_duration".to_owned(),
+        ConfigValue::from(tikv_util::config::ReadableDuration::micros(200)),
+    );
+    test_worker
+        .cfg_track
+        .update(move |cfg| cfg.update(change))
+        .unwrap();
+    let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 1);
+    init_write_batch(&engines, &mut task);
+    test_worker.worker.batch.add_write_task(&engines.raft, task);
+
+    test_worker.worker.write_to_db(true);
+
+    assert_eq!(
+        test_worker.worker.batch.recorder.wait_duration,
+        Duration::from_micros(200)
+    );
 }
 
 struct TestWriters {
