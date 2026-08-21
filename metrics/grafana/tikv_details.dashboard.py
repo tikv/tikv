@@ -881,6 +881,25 @@ def Server() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Advertised Address Probe Failures",
+                description=(
+                    "The count of advertised address probe failures per TiKV instance, "
+                    "grouped by loopback, unresolved, and timeout reasons"
+                ),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_server_advertise_addr_probe_failure_total"
+                        ),
+                        legend_format=r"{{instance}}-{{endpoint}}-{{reason}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Thread Pool Schedule Wait Duration" + OPTIONAL_QUANTILE_INPUT,
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[

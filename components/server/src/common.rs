@@ -52,7 +52,10 @@ use tikv_util::{
     worker::{LazyWorker, Worker},
 };
 
-use crate::{raft_engine_switch::*, setup::validate_and_persist_config};
+use crate::{
+    raft_engine_switch::*,
+    setup::{report_advertise_addr_probe_failures, validate_and_persist_config},
+};
 
 // minimum number of core kept for background requests
 const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
@@ -101,6 +104,7 @@ impl TikvServerCore {
     ///   the main database and the raft database.
     pub fn init_config(mut config: TikvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
+        report_advertise_addr_probe_failures(&config);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         if !config.rocksdb.wal_dir.is_empty() {
