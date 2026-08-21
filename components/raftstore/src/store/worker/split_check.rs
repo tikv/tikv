@@ -31,6 +31,7 @@ use crate::{
     coprocessor::{
         Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
+        get_region_approximate_middle_in_range,
         region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     },
@@ -630,17 +631,29 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             },
         };
         let region_id = region.get_id();
-        let is_key_range = start_key.is_some() && end_key.is_some();
-        let start_key = if is_key_range {
-            // This key is usually from a request, which should be encoded first.
-            keys::data_key(Key::from_raw(&start_key.unwrap()).as_encoded().as_slice())
-        } else {
-            keys::enc_start_key(region)
-        };
-        let end_key = if is_key_range {
-            keys::data_end_key(Key::from_raw(&end_key.unwrap()).as_encoded().as_slice())
-        } else {
-            keys::enc_end_key(region)
+        let requested_range = start_key.as_deref().zip(end_key.as_deref());
+        let is_key_range = requested_range.is_some();
+
+        let region_start_key = keys::enc_start_key(region);
+        let region_end_key = keys::enc_end_key(region);
+
+        let (start_key, end_key) = match requested_range {
+            Some((start_key, end_key)) => {
+                let start_key = if start_key.is_empty() {
+                    region_start_key.clone()
+                } else {
+                    keys::data_key(Key::from_raw(start_key).as_encoded())
+                };
+
+                let end_key = if end_key.is_empty() {
+                    region_end_key.clone()
+                } else {
+                    keys::data_end_key(Key::from_raw(end_key).as_encoded())
+                };
+
+                (start_key, end_key)
+            }
+            None => (region_start_key, region_end_key),
         };
         debug!(
             "executing task";
@@ -665,7 +678,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             return;
         }
 
-        let split_keys = match host.policy() {
+        let mut split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(
                     &mut host,
@@ -740,19 +753,28 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             CheckPolicy::Usekey => vec![], // Handled by pd worker directly.
         };
 
+        if split_keys.is_empty() && reason == SplitReason::Load && is_key_range {
+            if let Some(split_key) =
+                self.approximate_middle_for_load_key_range(tablet, region, &start_key, &end_key)
+            {
+                info!(
+                    "load split fallback to approximate middle in key range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(&start_key),
+                    "end_key" => log_wrappers::Value::key(&end_key),
+                    "split_key" => log_wrappers::Value::key(&split_key),
+                );
+                split_keys.push(split_key);
+            }
+        }
+
         if !split_keys.is_empty() {
             // Notify peer that if the region is truly splitable.
             // If it's truly splitable, then skip_split_check should be false;
-            self.router.update_approximate_size(
-                region.get_id(),
-                None,
-                Some(!split_keys.is_empty()),
-            );
-            self.router.update_approximate_keys(
-                region.get_id(),
-                None,
-                Some(!split_keys.is_empty()),
-            );
+            self.router
+                .update_approximate_size(region.get_id(), None, Some(true));
+            self.router
+                .update_approximate_keys(region.get_id(), None, Some(true));
 
             let region_epoch = region.get_region_epoch().clone();
             let source = match reason {
@@ -771,6 +793,116 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
 
             CHECK_SPILT_COUNTER.ignore.inc();
         }
+    }
+
+    /// Picks a load-split fallback key from approximate middle within a key
+    /// range.
+    ///
+    /// The candidate is normalized with the same timestamp-stripping behavior
+    /// as SplitObserver before boundary and region-validity checks.
+    fn approximate_middle_for_load_key_range(
+        &self,
+        tablet: &EK,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Option<Vec<u8>> {
+        let approximate_middle = match get_region_approximate_middle_in_range(
+            tablet,
+            region,
+            Some(start_key),
+            Some(end_key),
+        ) {
+            Ok(Some(key)) => key,
+            Ok(None) => {
+                // The range sits entirely within a single compacted SST with no
+                // range-property index key inside it.  Fall back to a bounded
+                // iterator scan to find an actual midpoint key.
+                match self.scan_middle_in_range(tablet, region, start_key, end_key) {
+                    Some(key) => key,
+                    None => return None,
+                }
+            }
+            Err(e) => {
+                error!(%e;
+                    "failed to get approximate middle in key range";
+                    "region_id" => region.get_id(),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+                return None;
+            }
+        };
+
+        // Normalize to the same form used by SplitObserver before all checks,
+        // so the candidate won't become invalid after timestamp stripping.
+        let split_key = strip_timestamp_if_exists(keys::origin_key(&approximate_middle).to_vec());
+        let range_start = keys::origin_key(start_key);
+        let range_end = keys::origin_end_key(end_key);
+
+        // Guard against split points that are equal to range boundaries.
+        if split_key.as_slice() <= range_start
+            || (!range_end.is_empty() && split_key.as_slice() >= range_end)
+        {
+            debug!(
+                "ignore out-of-range approximate split key";
+                "region_id" => region.get_id(),
+                "start_key" => log_wrappers::Value::key(range_start),
+                "end_key" => log_wrappers::Value::key(range_end),
+                "split_key" => log_wrappers::Value::key(&split_key),
+            );
+            return None;
+        }
+
+        if is_valid_split_key(&split_key, 0, region) {
+            Some(split_key)
+        } else {
+            None
+        }
+    }
+
+    /// Scans up to `MAX_SCAN_KEYS` keys across all large CFs in
+    /// `[start_key, end_key)` and returns the middle one as a candidate split
+    /// point, in data-key encoding.
+    ///
+    /// Used as a fallback when the range-property index has no entry strictly
+    /// inside the range (e.g. narrow hot range fully contained in a single
+    /// compacted SST).  Scanning LARGE_CFS mirrors `get_range_approximate_split_keys`
+    /// so the result is consistent even when data lives only in CF_WRITE
+    /// (short-value inline writes).
+    fn scan_middle_in_range(
+        &self,
+        tablet: &EK,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Option<Vec<u8>> {
+        const MAX_SCAN_KEYS: usize = 1024;
+        let mut iter = match MergedIterator::<<EK as Iterable>::Iterator>::new(
+            tablet, LARGE_CFS, start_key, end_key, false,
+        ) {
+            Ok(it) => it,
+            Err(e) => {
+                error!(%e;
+                    "failed to create iterator for load split fallback scan";
+                    "region_id" => region.get_id(),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+                return None;
+            }
+        };
+        let mut candidates: Vec<Vec<u8>> = Vec::new();
+        while let Some(e) = iter.next() {
+            candidates.push(e.key().to_vec());
+            if candidates.len() >= MAX_SCAN_KEYS {
+                break;
+            }
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        Some(candidates.swap_remove(candidates.len() / 2))
     }
 
     /// Gets the split keys by scanning the range.
