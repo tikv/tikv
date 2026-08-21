@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
-    cmp::{Ord, Ordering as CmpOrdering},
+    cmp::{self, Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
@@ -143,6 +143,52 @@ const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60)
 // Only when the count of regions which finish applying logs exceed
 // the threshold, can the raftstore supply service.
 const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
+// Keep store-to-peer broadcasts small enough to avoid monopolizing the
+// raftstore thread when a store has a large number of regions.
+const PEER_BROADCAST_REGION_BATCH_SIZE: usize = 4096;
+
+#[derive(Clone, Copy)]
+enum PeerBroadcast {
+    StoreUnreachable { store_id: u64 },
+    StoreResolved { store_id: u64, group_id: u64 },
+    UpdateReplicationMode,
+}
+
+impl PeerBroadcast {
+    fn to_peer_msg<EK: KvEngine>(self) -> PeerMsg<EK> {
+        match self {
+            PeerBroadcast::StoreUnreachable { store_id } => {
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
+            }
+            PeerBroadcast::StoreResolved { store_id, group_id } => {
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreResolved {
+                    store_id,
+                    group_id,
+                }))
+            }
+            PeerBroadcast::UpdateReplicationMode => PeerMsg::UpdateReplicationMode,
+        }
+    }
+
+    fn into_store_msg<EK: KvEngine>(self, region_ids: Arc<[u64]>, offset: usize) -> StoreMsg<EK> {
+        match self {
+            PeerBroadcast::StoreUnreachable { store_id } => StoreMsg::StoreUnreachableBatch {
+                store_id,
+                region_ids,
+                offset,
+            },
+            PeerBroadcast::StoreResolved { store_id, group_id } => StoreMsg::StoreResolvedBatch {
+                store_id,
+                group_id,
+                region_ids,
+                offset,
+            },
+            PeerBroadcast::UpdateReplicationMode => {
+                StoreMsg::UpdateReplicationModeBatch { region_ids, offset }
+            }
+        }
+    }
+}
 
 /// A trait that provide the meta information that can be accessed outside
 /// of raftstore.
@@ -476,24 +522,32 @@ where
         }
     }
 
-    fn report_unreachable(&self, store_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
-        });
+    fn send_peer_broadcast(&self, msg: PeerBroadcast, region_ids: &[u64]) {
+        for region_id in region_ids {
+            let _ = self.force_send(*region_id, msg.to_peer_msg());
+        }
+    }
+
+    fn schedule_peer_broadcast(&self, msg: PeerBroadcast, region_ids: Arc<[u64]>) {
+        if region_ids.is_empty() {
+            return;
+        }
+        let _ = self.force_send_control(msg.into_store_msg(region_ids, 0));
     }
 
     fn report_status_update(&self) {
-        self.broadcast_normal(|| PeerMsg::UpdateReplicationMode)
+        self.schedule_peer_broadcast(
+            PeerBroadcast::UpdateReplicationMode,
+            Arc::from(self.normal_ids()),
+        );
     }
 
     /// Broadcasts resolved result to all regions.
     pub fn report_resolved(&self, store_id: u64, group_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreResolved {
-                store_id,
-                group_id,
-            }))
-        })
+        self.schedule_peer_broadcast(
+            PeerBroadcast::StoreResolved { store_id, group_id },
+            Arc::from(self.normal_ids()),
+        );
     }
 
     pub fn register(&self, region_id: u64, mailbox: BasicMailbox<PeerFsm<EK, ER>>) {
@@ -902,6 +956,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
         let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        let mut region_ids = None;
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
 
@@ -935,7 +990,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
                 StoreMsg::StoreUnreachable { store_id } => {
-                    self.on_store_unreachable(store_id);
+                    self.on_store_unreachable(store_id, &mut region_ids);
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -987,6 +1042,28 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     region_ids,
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
+                }
+                StoreMsg::StoreUnreachableBatch {
+                    store_id,
+                    region_ids,
+                    offset,
+                } => self.on_peer_broadcast(
+                    PeerBroadcast::StoreUnreachable { store_id },
+                    region_ids,
+                    offset,
+                ),
+                StoreMsg::StoreResolvedBatch {
+                    store_id,
+                    group_id,
+                    region_ids,
+                    offset,
+                } => self.on_peer_broadcast(
+                    PeerBroadcast::StoreResolved { store_id, group_id },
+                    region_ids,
+                    offset,
+                ),
+                StoreMsg::UpdateReplicationModeBatch { region_ids, offset } => {
+                    self.on_peer_broadcast(PeerBroadcast::UpdateReplicationMode, region_ids, offset)
                 }
             }
         }
@@ -3359,7 +3436,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_store_unreachable(&mut self, store_id: u64) {
+    fn on_store_unreachable(&mut self, store_id: u64, region_ids: &mut Option<Arc<[u64]>>) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         let new_messages = MESSAGE_RECV_BY_STORE
@@ -3391,10 +3468,28 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        // It's possible to acquire the lock and only send notification to
-        // involved regions. However loop over all the regions can take a
-        // lot of time, which may block other operations.
-        self.ctx.router.report_unreachable(store_id);
+        let region_ids =
+            region_ids.get_or_insert_with(|| Arc::<[u64]>::from(self.ctx.router.normal_ids()));
+        self.ctx.router.schedule_peer_broadcast(
+            PeerBroadcast::StoreUnreachable { store_id },
+            Arc::clone(region_ids),
+        );
+    }
+
+    fn on_peer_broadcast(&mut self, msg: PeerBroadcast, region_ids: Arc<[u64]>, offset: usize) {
+        if offset >= region_ids.len() {
+            return;
+        }
+        let next_offset = cmp::min(offset + PEER_BROADCAST_REGION_BATCH_SIZE, region_ids.len());
+        self.ctx
+            .router
+            .send_peer_broadcast(msg, &region_ids[offset..next_offset]);
+        if next_offset < region_ids.len() {
+            let _ = self
+                .ctx
+                .router
+                .force_send_control(msg.into_store_msg(region_ids, next_offset));
+        }
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {

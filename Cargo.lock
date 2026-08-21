@@ -634,7 +634,7 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "h2 0.3.26",
- "h2 0.4.13",
+ "h2 0.4.16",
  "http 0.2.12",
  "http 1.4.0",
  "http-body 0.4.6",
@@ -2428,6 +2428,7 @@ dependencies = [
  "log_wrappers",
  "num_cpus",
  "online_config",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "proptest",
@@ -3558,9 +3559,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.13"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f44da3a8150a6703ed5d34e164b875fd14c2cdab9af1252a9a1020bde2bdc54"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3870,7 +3871,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.13",
+ "h2 0.4.16",
  "http 1.4.0",
  "http-body 1.0.1",
  "httparse",
@@ -4492,7 +4493,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4511,7 +4512,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6708,7 +6709,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#64a092fd3b4b1639b42fdc3c5f31edbd05528177"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
@@ -9215,7 +9216,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

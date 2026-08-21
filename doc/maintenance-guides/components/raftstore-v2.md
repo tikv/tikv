@@ -117,6 +117,9 @@ High-risk contracts:
   apply guarantees.
 - Tablet-backed state transitions must remain aligned with region/raft
   metadata.
+- A maybe-tombstone store hint may come from an ambiguous PD not-found response.
+  It may only confirm peers already present in removal records; connection
+  retry and tombstone blocking remain owned by the raft client.
 - Pending pre-transfer-leader messages and cache warm-up state belong to the
   leader ID and term that accepted them. They must be discarded when either
   changes, including term changes that do not yield a new Raft `SoftState`.

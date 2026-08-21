@@ -34,6 +34,7 @@ use tidb_query_common::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
+    DeferContext,
     deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
@@ -65,13 +66,6 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-/// Reserve up to one quarter of the configured heavy-task budget (but never
-/// less than 1 permit) as an extra cap for request classes that are already
-/// throttled by the background quota limiter. The dedicated cap is computed
-/// once from `end_point_max_concurrency` during endpoint construction rather
-/// than following read-pool worker autoscaling at runtime.
-const BACKGROUND_LIMITED_CONCURRENCY_DIVISOR: usize = 4;
-
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
@@ -134,35 +128,23 @@ impl<Snap> ParseCopRequestResult<Snap> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    /// Compute the dedicated cap for request classes that intentionally use
-    /// the background quota limiter. Ordinary coprocessor traffic keeps the
-    /// full configured shared budget, so this additional semaphore can raise
-    /// the total number of concurrent heavy tasks when both groups are active.
-    fn background_limited_request_concurrency(max_concurrency: usize) -> usize {
-        std::cmp::max(1, max_concurrency / BACKGROUND_LIMITED_CONCURRENCY_DIVISOR)
-    }
-
     fn build_request_semaphores(
         read_pool: &ReadPoolHandle,
         max_concurrency: usize,
+        max_bg_concurrency: Option<usize>,
     ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
         match read_pool {
             ReadPoolHandle::Yatp { .. } => {
-                // Ordinary coprocessor requests keep the full heavy-task
-                // budget. Requests that are intentionally throttled by the
-                // background quota limiter also receive a bounded dedicated cap
-                // so they do not bypass admission entirely.
-                if max_concurrency > 1 {
-                    let background_concurrency =
-                        Self::background_limited_request_concurrency(max_concurrency);
-                    (
-                        Some(Arc::new(Semaphore::new(max_concurrency))),
-                        Some(Arc::new(Semaphore::new(background_concurrency))),
-                    )
-                } else {
-                    let semaphore = Arc::new(Semaphore::new(max_concurrency));
-                    (Some(semaphore.clone()), Some(semaphore))
-                }
+                // Keep the legacy shared behavior unless the operator explicitly
+                // enables a positive background-limited Analyze cap.
+                let shared = Arc::new(Semaphore::new(max_concurrency));
+                let background = match max_bg_concurrency {
+                    Some(max_bg_concurrency) if max_bg_concurrency > 0 => {
+                        Arc::new(Semaphore::new(max_bg_concurrency))
+                    }
+                    _ => shared.clone(),
+                };
+                (Some(shared), Some(background))
             }
             _ => (None, None),
         }
@@ -183,8 +165,11 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        let (shared_semaphore, background_limited_semaphore) =
-            Self::build_request_semaphores(&read_pool, cfg.end_point_max_concurrency);
+        let (shared_semaphore, background_limited_semaphore) = Self::build_request_semaphores(
+            &read_pool,
+            cfg.end_point_max_concurrency,
+            cfg.end_point_max_bg_concurrency,
+        );
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
@@ -367,10 +352,10 @@ impl<E: Engine> Endpoint<E> {
 
                 (req_tag, semaphore_group) = match analyze.get_tp() {
                     AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
-                        (ReqTag::analyze_index, SemaphoreGroup::Shared)
+                        (ReqTag::analyze_index, SemaphoreGroup::BackgroundLimited)
                     }
                     AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => {
-                        (ReqTag::analyze_table, SemaphoreGroup::Shared)
+                        (ReqTag::analyze_table, SemaphoreGroup::BackgroundLimited)
                     }
                     AnalyzeType::TypeFullSampling => (
                         ReqTag::analyze_full_sampling,
@@ -733,6 +718,11 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
+        // Registered before the server-busy early return below, which is one of
+        // the paths that never reaches the future holding the removal.
+        let tracker_guard = DeferContext::new(move || {
+            GLOBAL_TRACKERS.remove(tracker);
+        });
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
@@ -757,6 +747,9 @@ impl<E: Engine> Endpoint<E> {
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
         let fut = async move {
+            // Moving the guard into the future ties removal to the future's
+            // lifetime, so cancellation cleans up as well as completion.
+            let _tracker_guard = tracker_guard;
             let res = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
@@ -776,7 +769,6 @@ impl<E: Engine> Endpoint<E> {
                     res
                 }
             };
-            GLOBAL_TRACKERS.remove(tracker);
             res
         };
         Either::Right(fut)
@@ -819,9 +811,13 @@ impl<E: Engine> Endpoint<E> {
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+                    let tracker_guard = DeferContext::new(move || {
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                    });
                     set_tls_tracker_token(cur_tracker);
                     let fut = self.handle_unary_request(r);
                     let fut = async move {
+                        let _tracker_guard = tracker_guard;
                         let res = fut.await;
                         match res {
                             Ok(mut resp) => {
@@ -845,7 +841,6 @@ impl<E: Engine> Endpoint<E> {
                                 make_error_batch_response(&mut response, e);
                             }
                         }
-                        GLOBAL_TRACKERS.remove(cur_tracker);
                         response
                     };
 
@@ -1331,6 +1326,8 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
                 // supported currently.
                 check_term: None,
             }),
+
+            deadline: Some(self.req_ctx.deadline),
         };
 
         let snap = unsafe {
@@ -1848,6 +1845,7 @@ mod tests {
     fn test_background_limited_semaphore_preserves_shared_capacity() {
         let config = Config {
             end_point_max_concurrency: 8,
+            end_point_max_bg_concurrency: Some(3),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
@@ -1856,7 +1854,7 @@ mod tests {
         let background = copr.background_limited_semaphore.as_ref().unwrap();
         assert!(!Arc::ptr_eq(shared, background));
         assert_eq!(shared.available_permits(), 8);
-        assert_eq!(background.available_permits(), 2);
+        assert_eq!(background.available_permits(), 3);
         assert!(Arc::ptr_eq(
             shared,
             copr.request_semaphore(SemaphoreGroup::Shared)
@@ -1872,18 +1870,35 @@ mod tests {
     }
 
     #[test]
-    fn test_small_semaphore_budget_reuses_single_limit() {
+    fn test_small_shared_semaphore_keeps_background_limit_independent() {
         let config = Config {
             end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(7),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
 
         let shared = copr.shared_semaphore.as_ref().unwrap();
         let background = copr.background_limited_semaphore.as_ref().unwrap();
-        assert!(Arc::ptr_eq(shared, background));
+        assert!(!Arc::ptr_eq(shared, background));
         assert_eq!(shared.available_permits(), 1);
-        assert_eq!(background.available_permits(), 1);
+        assert_eq!(background.available_permits(), 7);
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_disabled_by_default_or_zero() {
+        for background_limited_semaphore in [None, Some(0)] {
+            let config = Config {
+                end_point_max_concurrency: 8,
+                end_point_max_bg_concurrency: background_limited_semaphore,
+                ..Default::default()
+            };
+            let (copr, _read_pool) = build_yatp_copr(config);
+            assert!(Arc::ptr_eq(
+                copr.shared_semaphore.as_ref().unwrap(),
+                copr.background_limited_semaphore.as_ref().unwrap(),
+            ));
+        }
     }
 
     #[test]
@@ -1916,19 +1931,31 @@ mod tests {
             .parse_request_and_check_memory_locks(req, None, false)
             .unwrap();
         assert_eq!(parsed.req_tag, ReqTag::analyze_table);
-        assert_eq!(parsed.semaphore_group, SemaphoreGroup::Shared);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
         assert!(Arc::ptr_eq(
-            copr.shared_semaphore.as_ref().unwrap(),
+            copr.background_limited_semaphore.as_ref().unwrap(),
             copr.request_semaphore(parsed.semaphore_group)
                 .as_ref()
                 .unwrap()
         ));
+
+        let mut index = AnalyzeReq::default();
+        index.set_tp(AnalyzeType::TypeIndex);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(index.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_index);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
     }
 
     #[test]
     fn test_background_limited_requests_progress_when_shared_semaphore_is_full() {
         let config = Config {
             end_point_max_concurrency: 4,
+            end_point_max_bg_concurrency: Some(2),
             ..Default::default()
         };
         let (copr, _read_pool) = build_yatp_copr(config);
@@ -2013,6 +2040,61 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn test_dropped_batch_request_trackers() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // `GLOBAL_TRACKERS` is a process-wide slab shared by every test in this
+        // binary, so this test counts only the trackers carrying its own
+        // `start_ts`. The value is arbitrary: `u64::MAX` minus the date this
+        // test was written, chosen so no realistic timestamp collides with it.
+        const DROPPED_START_TS: u64 = u64::MAX - 20260819;
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        req.set_start_ts(DROPPED_START_TS);
+        for task_id in 1..=2 {
+            let mut task = coppb::StoreBatchTask::default();
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+
+        // `parse_and_handle_unary_request` is not an `async fn`: it registers
+        // the top tracker, and `process_batch_tasks` registers one tracker per
+        // batched task, all while building the future rather than while
+        // polling it. Dropping the future therefore exercises the window in
+        // which the trackers are registered but nothing has run.
+        let previous_tracker = ::tracker::get_tls_tracker_token();
+        let future = copr.parse_and_handle_unary_request(req, None);
+        drop(future);
+        // Building the request also overwrote this thread's tracker token.
+        // Restore it so the count below is the only state this test observes.
+        set_tls_tracker_token(previous_tracker);
+
+        let mut remaining = 0;
+        GLOBAL_TRACKERS.for_each(|tracker| {
+            if tracker.req_info.start_ts == DROPPED_START_TS {
+                remaining += 1;
+            }
+        });
+        assert_eq!(remaining, 0);
     }
 
     #[test]

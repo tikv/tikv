@@ -121,6 +121,9 @@ High-risk contracts:
 - `store/region_snapshot.rs` is the region-scoped snapshot view.
 - `store/snap/*` owns snapshot files and application helpers.
 - `store/async_io/*` separates read/write background IO from FSM execution.
+- The async writer observes `store/config.rs::Config` through `VersionTrack`.
+  After a database write it refreshes the configured write-wait duration and
+  hint, while preserving the adaptive wait learned by the recorder.
 
 ### Worker sub-systems
 
@@ -153,6 +156,18 @@ High-risk contracts:
   valid.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
+- Store-to-peer broadcasts can fan out one peer message per region. Keep this
+  work bounded on the store FSM. `StoreUnreachable` must only do its per-store
+  backoff check, snapshot the target region IDs, and enqueue the first
+  `StoreUnreachableBatch`.
+- `StoreUnreachableBatch`, `StoreResolvedBatch`, and
+  `UpdateReplicationModeBatch` process one bounded slice of a fixed region-ID
+  snapshot and self-enqueue the next offset when more regions remain. The
+  self-enqueued batch must stay out of the current `handle_msgs` drain; it is
+  handled by the next control-message drain. That next drain may still run
+  immediately inside the same `Poller::poll()`, because batch-system can release
+  and re-take the control FSM without waiting for another poller scheduling
+  cycle.
 - Pending pre-transfer-leader messages and cache warm-up state belong to the
   leader ID and term that accepted them. They must be discarded when either
   changes, including term changes that do not yield a new Raft `SoftState`.
@@ -166,6 +181,11 @@ High-risk contracts:
 - logs around snapshot, split/merge, peer lifecycle, disk-full, and unsafe
   recovery paths
 - memory accounting for raft entries/messages/apply state
+- `tikv_config_raftstore` reports ordinary duration fields in seconds.
+  `raft_write_wait_duration` is the historical microsecond exception.
+- Startup and online updates share the
+  `consistency_check_interval_seconds` label; online updates must not create a
+  separate `consistency_check_interval` series.
 
 Open these first when triaging:
 

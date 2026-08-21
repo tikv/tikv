@@ -41,6 +41,12 @@ deny = [
     { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac", "crc-fast"] },
     { name = "password-hash" },
     { name = "signature" },
+    # Advisory exceptions apply by ID rather than package version. Restrict
+    # the unpatched h2 0.3 line to its known direct consumers, and reject all
+    # other versions affected by RUSTSEC-2026-0258.
+    { crate = "h2:<0.3", reason = "not part of the temporary h2 0.3 exception" },
+    { crate = "h2:>=0.3,<0.4", wrappers = ["aws-smithy-http-client", "hyper", "reqwest"], reason = "only the existing h2 0.3 dependency chains are temporarily accepted" },
+    { crate = "h2:>=0.4,<0.4.16", reason = "upgrade h2 0.4 to at least 0.4.16" },
 ]
 multiple-versions = "allow"
 
@@ -86,6 +92,21 @@ ignore = [
     # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Ignore RUSTSEC-2026-0253 for now: Cargo.lock shows `lru` 0.16.3 is pulled
+    # in only via `aws-sdk-s3`. The advisory is only relevant when unwinding
+    # panics are enabled and `std::panic::catch_unwind` is used with key types
+    # that may panic in `Drop`.
+    # 
+    # See: https://rustsec.org/advisories/RUSTSEC-2026-0253
+    "RUSTSEC-2026-0253",
+    # Ignore RUSTSEC-2026-0258 for the legacy h2 0.3 dependency chains only.
+    # Cargo.lock upgrades h2 0.4 to the patched 0.4.16 release, but hyper 0.14,
+    # reqwest 0.11, and aws-smithy-http-client still require h2 0.3, for which
+    # upstream has not released a patch. Exploitation requires a malicious
+    # direct HTTP/2 peer and an incoming body that is not fully drained.
+    #
+    # TODO: Remove after the legacy clients move off h2 0.3.
+    "RUSTSEC-2026-0258",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

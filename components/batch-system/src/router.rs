@@ -217,11 +217,11 @@ where
     pub fn force_send(&self, addr: u64, msg: N::Message) -> Result<(), SendError<N::Message>> {
         match self.send(addr, msg) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(m)) => self
-                .normals
-                .get(&addr)
-                .unwrap()
-                .force_send(m, &self.normal_scheduler),
+            Err(TrySendError::Full(m)) => match self.normals.get(&addr) {
+                Some(mailbox) => mailbox.force_send(m, &self.normal_scheduler),
+                None if self.is_shutdown() => Ok(()),
+                None => Err(SendError(m)),
+            },
             Err(TrySendError::Disconnected(m)) => {
                 if self.is_shutdown() {
                     Ok(())
@@ -260,6 +260,11 @@ where
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         });
         BROADCAST_NORMAL_DURATION.observe(timer.saturating_elapsed_secs());
+    }
+
+    /// Returns the addresses of all registered normal FSMs.
+    pub fn normal_ids(&self) -> Vec<u64> {
+        self.normals.iter().map(|mailbox| *mailbox.key()).collect()
     }
 
     /// Try to notify all FSMs that the cluster is being shutdown.
