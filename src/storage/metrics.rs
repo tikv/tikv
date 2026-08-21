@@ -2,16 +2,23 @@
 
 //! Prometheus metrics for storage functionality.
 
-use std::{cell::RefCell, mem, sync::Arc};
+use std::{cell::RefCell, marker::PhantomData, mem, sync::Arc};
 
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
-use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange},
+    metapb,
+    pdpb::QueryKind,
+};
 use lazy_static::lazy_static;
 use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
+use resource_metering::{
+    Guard as ResourceMeteringGuard, ResourceTagFactory, record_rocksdb_block_read_count,
+};
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
@@ -320,11 +327,10 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
     }
 }
 
-// Safety: It should be only called when the thread-local engine exists.
-pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
-where
-    Fn: FnOnce() -> T,
-{
+fn with_perf_context_mut<E: Engine, T>(
+    cmd: CommandKind,
+    f: impl FnOnce(&mut dyn PerfContext) -> T,
+) -> Option<T> {
     thread_local! {
         static GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
@@ -332,10 +338,12 @@ where
         static SCAN: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static PREWRITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static ACQUIRE_PESSIMISTIC_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static ACQUIRE_PESSIMISTIC_LOCK_RESUMED: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static COMMIT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static CLEANUP: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static PESSIMISTIC_ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static PESSIMISTIC_ROLLBACK_READ_PHASE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static TXN_HEART_BEAT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static CHECK_TXN_STATUS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static CHECK_SECONDARY_LOCKS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
@@ -344,6 +352,7 @@ where
         static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static FLUSH: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static BUFFER_BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static RAW_COMPARE_AND_SWAP: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
     }
     let tls_cell = match cmd {
         CommandKind::get => &GET,
@@ -353,10 +362,12 @@ where
         CommandKind::scan => &SCAN,
         CommandKind::prewrite => &PREWRITE,
         CommandKind::acquire_pessimistic_lock => &ACQUIRE_PESSIMISTIC_LOCK,
+        CommandKind::acquire_pessimistic_lock_resumed => &ACQUIRE_PESSIMISTIC_LOCK_RESUMED,
         CommandKind::commit => &COMMIT,
         CommandKind::cleanup => &CLEANUP,
         CommandKind::rollback => &ROLLBACK,
         CommandKind::pessimistic_rollback => &PESSIMISTIC_ROLLBACK,
+        CommandKind::pessimistic_rollback_read_phase => &PESSIMISTIC_ROLLBACK_READ_PHASE,
         CommandKind::txn_heart_beat => &TXN_HEART_BEAT,
         CommandKind::check_txn_status => &CHECK_TXN_STATUS,
         CommandKind::check_secondary_locks => &CHECK_SECONDARY_LOCKS,
@@ -364,7 +375,8 @@ where
         CommandKind::resolve_lock => &RESOLVE_LOCK,
         CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
         CommandKind::flush => &FLUSH,
-        _ => return f(),
+        CommandKind::raw_compare_and_swap => &RAW_COMPARE_AND_SWAP,
+        _ => return None,
     };
     tls_cell.with(|c| {
         let mut c = c.borrow_mut();
@@ -374,11 +386,81 @@ where
                 PerfContextKind::Storage(cmd.get_str()),
             )) as Box<dyn PerfContext>
         });
-        perf_context.start_observe();
-        let res = f();
-        perf_context.report_metrics(&[get_tls_tracker_token()]);
-        res
+        Some(f(perf_context.as_mut()))
     })
+}
+
+fn start_perf_context<E: Engine>(cmd: CommandKind) -> bool {
+    with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.start_observe()).is_some()
+}
+
+fn finish_perf_context<E: Engine>(cmd: CommandKind, report_to_tracker: bool) {
+    let delta = if report_to_tracker {
+        with_perf_context_mut::<E, _>(cmd, |perf_context| {
+            perf_context.report_metrics(&[get_tls_tracker_token()])
+        })
+    } else {
+        with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.report_metrics(&[]))
+    };
+    if let Some(delta) = delta {
+        record_rocksdb_block_read_count(delta.block_read_count);
+    }
+}
+
+// Safety: It should be only called when the thread-local engine exists.
+pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
+where
+    Fn: FnOnce() -> T,
+{
+    if !start_perf_context::<E>(cmd) {
+        return f();
+    }
+    let res = f();
+    finish_perf_context::<E>(cmd, true);
+    res
+}
+
+pub(crate) struct RequestPerfContext<'a, E: Engine> {
+    resource_tag_factory: &'a ResourceTagFactory,
+    cmd: CommandKind,
+    _phantom: PhantomData<fn() -> E>,
+}
+
+impl<'a, E: Engine> RequestPerfContext<'a, E> {
+    pub(crate) fn new(resource_tag_factory: &'a ResourceTagFactory, cmd: CommandKind) -> Self {
+        Self {
+            resource_tag_factory,
+            cmd,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn observe(&self, context: &Context) -> RequestPerfContextGuard<E> {
+        let tag_guard = self.resource_tag_factory.new_tag(context).attach();
+        let observed = start_perf_context::<E>(self.cmd);
+        debug_assert!(observed);
+        RequestPerfContextGuard {
+            _tag_guard: tag_guard,
+            cmd: self.cmd,
+            observed,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct RequestPerfContextGuard<E: Engine> {
+    _tag_guard: ResourceMeteringGuard,
+    cmd: CommandKind,
+    observed: bool,
+    _phantom: PhantomData<fn() -> E>,
+}
+
+impl<E: Engine> Drop for RequestPerfContextGuard<E> {
+    fn drop(&mut self) {
+        if self.observed {
+            finish_perf_context::<E>(self.cmd, false);
+        }
+    }
 }
 
 make_static_metric! {
