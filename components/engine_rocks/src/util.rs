@@ -1,6 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
+use std::{
+    ffi::CString,
+    fs::{self, OpenOptions},
+    io::{Read, Write},
+    path::Path,
+    str::FromStr,
+    sync::Arc,
+};
 
 use engine_traits::{CF_DEFAULT, Engines, Range, Result};
 use fail::fail_point;
@@ -70,6 +77,15 @@ pub fn new_engine_opt_with_snapshot_sequence_number_check(
         .into_iter()
         .map(|(name, opt)| (name, opt.into_raw()))
         .collect();
+
+    // A crash while RocksDB was switching CURRENT (or a filesystem losing the
+    // write on power failure) can leave it empty, truncated or pointing at a
+    // deleted MANIFEST: the open below then fails forever even though the
+    // MANIFEST is intact. Worse, a *missing* CURRENT makes `db_exist` report
+    // false, and creating the "new" DB either fails on the leftover WAL or
+    // silently starts an empty DB over the old data when no WAL survived.
+    // Repair the pointer from the newest MANIFEST on disk before opening.
+    recover_current_if_needed(path)?;
 
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -170,6 +186,332 @@ pub fn db_exist(path: &str) -> bool {
     // `DB::list_column_families` fails and we can clean up the directory by
     // this indication.
     fs::read_dir(path).unwrap().next().is_some()
+}
+
+/// Temp file used to atomically rewrite RocksDB's `CURRENT`. The `dbtmp.plain`
+/// suffix matches the temp files RocksDB itself uses when updating `CURRENT`:
+/// `KeyManagedEncryptedEnv` always keeps such files (and `CURRENT` itself)
+/// plaintext, so accessing them through the raw filesystem is consistent with
+/// encryption-at-rest.
+const CURRENT_RECOVER_TMP: &str = "CURRENT.recover.dbtmp.plain";
+
+/// State of RocksDB's `CURRENT` pointer file, classified for crash recovery.
+enum CurrentState {
+    /// `CURRENT` names a `MANIFEST-*` file that exists.
+    Healthy,
+    /// `CURRENT` does not exist. Either the DB was never created, or a crash
+    /// during DB creation lost it while other files remain.
+    Missing,
+    /// `CURRENT` exists but its content is not `MANIFEST-<digits>\n`: empty,
+    /// zero-filled or otherwise truncated by an incomplete write. The payload
+    /// is kept for logging.
+    Truncated(Vec<u8>),
+    /// `CURRENT` parses but the MANIFEST it names is gone; the referenced
+    /// manifest number is kept to forbid rolling back to an older one.
+    Dangling(u64),
+}
+
+fn classify_current(dir: &Path) -> std::io::Result<CurrentState> {
+    let bytes = match fs::read(dir.join("CURRENT")) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CurrentState::Missing),
+        Err(e) => return Err(e),
+    };
+    match parse_current_manifest(&bytes) {
+        Some((name, num)) => {
+            if dir.join(name).is_file() {
+                Ok(CurrentState::Healthy)
+            } else {
+                Ok(CurrentState::Dangling(num))
+            }
+        }
+        None => Ok(CurrentState::Truncated(bytes)),
+    }
+}
+
+/// Parses a RocksDB `CURRENT` payload, which must be exactly
+/// `MANIFEST-<digits>\n` (single trailing newline, no other whitespace).
+/// Returns the manifest file name and its number.
+fn parse_current_manifest(bytes: &[u8]) -> Option<(&str, u64)> {
+    let name = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
+    let digits = name.strip_prefix("MANIFEST-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((name, digits.parse().ok()?))
+}
+
+/// Returns every `MANIFEST-<digits>` regular file in `dir`, sorted by number,
+/// highest first. Errors on directory entries that name a manifest are
+/// propagated rather than skipped: the unreadable entry could be the newest
+/// manifest, and silently choosing among the remaining ones could roll the
+/// store back to older metadata.
+fn manifest_candidates(dir: &Path) -> std::io::Result<Vec<(String, u64)>> {
+    let mut found = Vec::new();
+    for ent in fs::read_dir(dir)? {
+        let ent = ent?;
+        let name = ent.file_name();
+        // Non-UTF-8 names cannot match `MANIFEST-<digits>` (pure ASCII).
+        let Some(name) = name.to_str() else { continue };
+        let Some(digits) = name.strip_prefix("MANIFEST-") else {
+            continue;
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        // RocksDB file numbers are u64; digits that overflow cannot name a
+        // real manifest.
+        let Ok(num) = digits.parse::<u64>() else {
+            continue;
+        };
+        // A directory (or other non-file) named like a manifest is not one.
+        if !ent.file_type()?.is_file() {
+            continue;
+        }
+        found.push((name.to_owned(), num));
+    }
+    found.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    Ok(found)
+}
+
+/// RocksDB log format, shared by WAL and MANIFEST files: 32 KiB blocks of
+/// records, each led by a 7-byte header of masked crc32c (4 bytes, LE),
+/// payload length (2 bytes, LE) and record type (1 byte). Records never span
+/// a block boundary; a block tail shorter than a header is zero-padded.
+const LOG_BLOCK_SIZE: usize = 32 * 1024;
+const LOG_HEADER_SIZE: usize = 7;
+/// Legacy record types (`kZeroType`..`kLastType`). MANIFEST files never use
+/// the recyclable WAL types (5..=8) or the optional-feature types (9..).
+const LOG_RECORD_ZERO: u8 = 0;
+const LOG_RECORD_FULL: u8 = 1;
+const LOG_RECORD_FIRST: u8 = 2;
+const LOG_RECORD_MIDDLE: u8 = 3;
+const LOG_RECORD_LAST: u8 = 4;
+
+/// RocksDB's `crc32c::Mask`, applied to every stored log record checksum.
+fn mask_crc32c(crc: u32) -> u32 {
+    crc.rotate_right(15).wrapping_add(0xa282_ead8)
+}
+
+/// Reads until `buf` is full or EOF; returns how many bytes were read.
+fn read_full(file: &mut fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
+/// Returns whether the `MANIFEST-*` at `path` can be a committed manifest,
+/// by checking the same invariants RocksDB's own manifest read
+/// (`VersionSet::Recover` via `log::Reader` with checksums) enforces:
+///
+/// - every complete record must carry a valid crc32c and a known record type,
+///   and fragmented records must form `FIRST (MIDDLE)* LAST` chains; a
+///   violation anywhere marks the file unusable, exactly where RocksDB would
+///   report `Corruption`;
+/// - a record torn at end-of-file is tolerated, exactly as RocksDB tolerates
+///   it: manifest edits are fully synced before they are acknowledged, so a
+///   torn tail is only ever the edit that was in flight at the crash;
+/// - at least one complete logical record must exist. RocksDB writes and syncs
+///   the initial version snapshot before pointing `CURRENT` at a new manifest,
+///   so a zero-length, zero-filled or prefix-only file was never committed and
+///   must not become the recovery target.
+fn manifest_is_usable(path: &Path) -> std::io::Result<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut block = vec![0u8; LOG_BLOCK_SIZE];
+    let mut have_logical_record = false;
+    let mut in_fragment = false;
+    loop {
+        let filled = read_full(&mut file, &mut block)?;
+        if filled == 0 {
+            return Ok(have_logical_record);
+        }
+        // A short read only happens on the file's final, partial block.
+        let at_eof = filled < LOG_BLOCK_SIZE;
+        let mut off = 0;
+        while filled - off >= LOG_HEADER_SIZE {
+            let header = &block[off..off + LOG_HEADER_SIZE];
+            let stored_crc = u32::from_le_bytes(header[..4].try_into().unwrap());
+            let len = u16::from_le_bytes(header[4..6].try_into().unwrap()) as usize;
+            let typ = header[6];
+            if typ == LOG_RECORD_ZERO && len == 0 && stored_crc == 0 {
+                // Zero-filled preallocation padding: RocksDB skips the rest
+                // of the block without reporting a drop — unless it lands in
+                // the middle of a fragmented record, which it reports as
+                // corruption ("error in middle of record").
+                if in_fragment {
+                    return Ok(false);
+                }
+                break;
+            }
+            let end = off + LOG_HEADER_SIZE + len;
+            if end > filled {
+                // Payload runs past the data read. In the final partial
+                // block this is the torn in-flight edit RocksDB tolerates at
+                // EOF; anywhere else it is a structural corruption (records
+                // never span blocks).
+                return Ok(at_eof && have_logical_record);
+            }
+            let crc = crc32c::crc32c(&block[off + 6..end]);
+            if mask_crc32c(crc) != stored_crc {
+                return Ok(false);
+            }
+            match (typ, in_fragment) {
+                (LOG_RECORD_FULL, false) => have_logical_record = true,
+                (LOG_RECORD_FIRST, false) => in_fragment = true,
+                (LOG_RECORD_MIDDLE, true) => {}
+                (LOG_RECORD_LAST, true) => {
+                    in_fragment = false;
+                    have_logical_record = true;
+                }
+                // Broken fragment chain or a record type manifests never
+                // contain: RocksDB reports corruption for both.
+                _ => return Ok(false),
+            }
+            off = end;
+        }
+        if at_eof {
+            return Ok(have_logical_record);
+        }
+    }
+}
+
+fn recover_io_err(op: &str, e: std::io::Error) -> engine_traits::Error {
+    engine_traits::Error::Engine(engine_traits::Status::with_error(
+        engine_traits::Code::IoError,
+        format!("recover CURRENT: {}: {}", op, e),
+    ))
+}
+
+/// Repairs RocksDB's `CURRENT` file when a crash left it unusable, by
+/// atomically rewriting it to name the newest usable `MANIFEST-*` on disk
+/// (write + fsync temp file, rename over `CURRENT`, fsync directory — the
+/// same durability sequence RocksDB uses when switching `CURRENT`).
+///
+/// A crash or power loss while RocksDB updates its meta files can leave
+/// `CURRENT` empty, zero-filled or without its trailing newline; RocksDB then
+/// refuses to open the DB forever ("CURRENT file does not end with newline")
+/// even though the MANIFEST it needs is intact on disk. A *missing* `CURRENT`
+/// is worse: `db_exist` reports false, so the open path tries to create a new
+/// DB — it fails on the leftover WAL ("While creating a new Db, wal_dir
+/// contains existing log file") or, when no WAL file survived, silently
+/// creates a brand-new empty DB over the old data. Repairing the pointer
+/// restores access to the newest MANIFEST that survived, which is what
+/// RocksDB would have pointed to.
+///
+/// Repair is conservative:
+/// - Candidate manifests are validated against RocksDB's own manifest read
+///   invariants (see [`manifest_is_usable`]) before `CURRENT` is pointed at
+///   one. RocksDB always writes and syncs a new manifest in full *before*
+///   switching `CURRENT` to it, so a higher-numbered but incomplete manifest
+///   was never committed: it is skipped in favor of the newest usable one,
+///   never chosen by filename order alone. If no usable manifest remains,
+///   `CURRENT` is left untouched and open fails exactly as today.
+/// - When `CURRENT` still parses but names a missing MANIFEST, it is only
+///   rewritten to an equal-or-higher-numbered manifest, never to an older one,
+///   so a store cannot silently roll back to earlier metadata.
+/// - Errors while scanning directory entries or reading a candidate are
+///   propagated — never skipped, since the unreadable entry could be the newest
+///   manifest — and `CURRENT` is left untouched.
+/// - MANIFEST contents are never modified; only the pointer file is repaired,
+///   and RocksDB's own manifest validation still runs at open.
+/// - `CURRENT` is always plaintext even with encryption-at-rest enabled
+///   (`KeyManagedEncryptedEnv` intentionally skips it), so reading and
+///   rewriting it through the raw filesystem is safe.
+///
+/// Returns `Ok(true)` when `CURRENT` was rewritten.
+fn recover_current_if_needed(path: &str) -> Result<bool> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    let state = classify_current(dir).map_err(|e| recover_io_err("read CURRENT", e))?;
+    if matches!(state, CurrentState::Healthy) {
+        return Ok(false);
+    }
+    let candidates =
+        manifest_candidates(dir).map_err(|e| recover_io_err("scan MANIFEST files", e))?;
+    if candidates.is_empty() {
+        // Nothing to repair from. For a fresh (or empty) DB dir this is the
+        // normal creation path; otherwise RocksDB will report the corruption.
+        return Ok(false);
+    }
+    // Forward-only floor: when CURRENT still parses, never consider a
+    // manifest older than the one it names.
+    let floor = match &state {
+        CurrentState::Dangling(named) => Some(*named),
+        _ => None,
+    };
+    let mut chosen = None;
+    for (name, num) in &candidates {
+        if floor.is_some_and(|f| *num < f) {
+            break;
+        }
+        if manifest_is_usable(&dir.join(name))
+            .map_err(|e| recover_io_err("read candidate MANIFEST", e))?
+        {
+            chosen = Some(name.as_str());
+            break;
+        }
+        // Expected after a crash: RocksDB fully syncs a new manifest before
+        // committing it via CURRENT, so an incomplete higher-numbered one was
+        // never the committed state. Fall through to the next-newest.
+        warn!(
+            "skipping unusable MANIFEST while recovering RocksDB CURRENT";
+            "path" => %dir.display(),
+            "manifest" => %name,
+        );
+    }
+    let Some(manifest) = chosen else {
+        warn!(
+            "RocksDB CURRENT is unusable but no usable recovery MANIFEST remains; \
+             leaving CURRENT untouched";
+            "path" => %dir.display(),
+            "latest_manifest_num" => candidates[0].1,
+            "named_manifest_num" => ?floor,
+        );
+        return Ok(false);
+    };
+    let reason = match state {
+        CurrentState::Healthy => unreachable!(),
+        CurrentState::Missing => "CURRENT is missing".to_owned(),
+        CurrentState::Truncated(payload) => format!(
+            "CURRENT is truncated (payload {:?}, {} bytes)",
+            String::from_utf8_lossy(&payload[..payload.len().min(32)]),
+            payload.len()
+        ),
+        CurrentState::Dangling(named) => format!("CURRENT names missing MANIFEST-{:06}", named),
+    };
+
+    let tmp = dir.join(CURRENT_RECOVER_TMP);
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)
+            .map_err(|e| recover_io_err("open temp file", e))?;
+        f.write_all(format!("{}\n", manifest).as_bytes())
+            .map_err(|e| recover_io_err("write temp file", e))?;
+        f.sync_all()
+            .map_err(|e| recover_io_err("sync temp file", e))?;
+    }
+    fs::rename(&tmp, dir.join("CURRENT")).map_err(|e| recover_io_err("rename over CURRENT", e))?;
+    file_system::sync_dir(dir).map_err(|e| recover_io_err("sync db dir", e))?;
+
+    warn!(
+        "recovered RocksDB CURRENT to the newest usable MANIFEST";
+        "path" => %dir.display(),
+        "manifest" => %manifest,
+        "reason" => %reason,
+    );
+    Ok(true)
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
@@ -662,6 +1004,430 @@ mod tests {
             .get_options_cf("cf_dynamic_level_bytes_disabled")
             .unwrap();
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    fn current_is_healthy(path_str: &str) -> bool {
+        matches!(
+            classify_current(Path::new(path_str)),
+            Ok(CurrentState::Healthy)
+        )
+    }
+
+    /// Creates a DB with committed data in two CFs and closes it.
+    fn build_db_with_data(path_str: &str) {
+        let db = new_engine(path_str, &[CF_DEFAULT, "write"]).unwrap();
+        db.put(b"k1", b"v-committed").unwrap();
+        db.put_cf("write", b"wk", b"wv").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        db.flush_cf("write", true).unwrap();
+        drop(db);
+    }
+
+    fn open_db(path_str: &str) -> Result<RocksEngine> {
+        new_engine_opt(
+            path_str,
+            RocksDbOptions::default(),
+            vec![
+                (CF_DEFAULT, Default::default()),
+                ("write", Default::default()),
+            ],
+        )
+    }
+
+    fn assert_data_intact(db: &RocksEngine) {
+        assert_eq!(
+            db.get_value(b"k1").unwrap().unwrap().as_ref(),
+            b"v-committed"
+        );
+        assert_eq!(
+            db.get_value_cf("write", b"wk").unwrap().unwrap().as_ref(),
+            b"wv"
+        );
+    }
+
+    #[test]
+    fn test_parse_current_manifest_strict() {
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-000001\n"),
+            Some(("MANIFEST-000001", 1))
+        );
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-018446744073709551615\n"),
+            Some(("MANIFEST-018446744073709551615", u64::MAX))
+        );
+        // Empty / missing newline.
+        assert!(parse_current_manifest(b"").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001").is_none());
+        // Whitespace, extra newlines, junk, non-digits, overflow.
+        assert!(parse_current_manifest(b" MANIFEST-000001\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001\n\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001 \n").is_none());
+        assert!(parse_current_manifest(b"NOT-A-MANIFEST\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-abc\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-99999999999999999999\n").is_none());
+        assert!(parse_current_manifest(b"\x00\x00\x00\n").is_none());
+    }
+
+    #[test]
+    fn test_manifest_candidates_selection() {
+        let path = Builder::new()
+            .prefix("rocksdb_manifest_candidates")
+            .tempdir()
+            .unwrap();
+        let dir = path.path();
+        assert_eq!(manifest_candidates(dir).unwrap(), vec![]);
+
+        // Numeric ordering must win over lexicographic (9 vs 10), invalid
+        // names are ignored, and so are directories named like a MANIFEST.
+        std::fs::write(dir.join("MANIFEST-000009"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-000010"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-1x"), b"x").unwrap();
+        std::fs::write(dir.join("MANIFEST-"), b"x").unwrap();
+        std::fs::create_dir(dir.join("MANIFEST-999999")).unwrap();
+        assert_eq!(
+            manifest_candidates(dir).unwrap(),
+            vec![
+                ("MANIFEST-000010".to_owned(), 10),
+                ("MANIFEST-000009".to_owned(), 9)
+            ]
+        );
+    }
+
+    /// Builds a RocksDB log-format record (7-byte header of masked crc32c,
+    /// length and type, then the payload) as MANIFEST files contain.
+    fn log_record(typ: u8, payload: &[u8]) -> Vec<u8> {
+        let mut crc_input = vec![typ];
+        crc_input.extend_from_slice(payload);
+        let mut rec = Vec::with_capacity(LOG_HEADER_SIZE + payload.len());
+        rec.extend_from_slice(&mask_crc32c(crc32c::crc32c(&crc_input)).to_le_bytes());
+        rec.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        rec.push(typ);
+        rec.extend_from_slice(payload);
+        rec
+    }
+
+    #[test]
+    fn test_manifest_is_usable() {
+        let path = Builder::new()
+            .prefix("rocksdb_manifest_is_usable")
+            .tempdir()
+            .unwrap();
+        let dir = path.path();
+        let check = |name: &str, content: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, content).unwrap();
+            manifest_is_usable(&p).unwrap()
+        };
+
+        // Never-committed shapes a crash can leave behind: zero-length,
+        // zero-filled, garbage shorter than a header, torn first record.
+        assert!(!check("empty", b""));
+        assert!(!check("zero_filled", &[0u8; 4096]));
+        assert!(!check("short_garbage", b"junk"));
+        let full = log_record(LOG_RECORD_FULL, b"version-edit");
+        assert!(!check("torn_first_record", &full[..full.len() - 3]));
+
+        // A complete FULL record commits; FIRST..LAST chains commit; a FIRST
+        // fragment without its LAST does not.
+        assert!(check("one_full", &full));
+        let chain = [
+            log_record(LOG_RECORD_FIRST, b"snapshot-part-1"),
+            log_record(LOG_RECORD_MIDDLE, b"snapshot-part-2"),
+            log_record(LOG_RECORD_LAST, b"snapshot-part-3"),
+        ]
+        .concat();
+        assert!(check("fragment_chain", &chain));
+        assert!(!check(
+            "prefix_only",
+            &log_record(LOG_RECORD_FIRST, b"snapshot-part-1")
+        ));
+
+        // A torn record *after* a committed one is the in-flight edit RocksDB
+        // tolerates at EOF; the same bytes mid-file would be corruption.
+        let next = log_record(LOG_RECORD_FULL, b"in-flight-edit");
+        assert!(check(
+            "torn_tail",
+            &[full.clone(), next[..next.len() - 5].to_vec()].concat()
+        ));
+        assert!(check(
+            "torn_header_tail",
+            &[full.clone(), vec![0xAA; 3]].concat()
+        ));
+
+        // Checksum mismatch, unknown record type and broken fragment chains
+        // are corruption wherever they appear.
+        let mut bad_crc = full.clone();
+        *bad_crc.last_mut().unwrap() ^= 0x01;
+        assert!(!check("bad_crc", &bad_crc));
+        assert!(!check(
+            "recyclable_type",
+            &log_record(5, b"wal-only-record-type")
+        ));
+        assert!(!check(
+            "middle_without_first",
+            &log_record(LOG_RECORD_MIDDLE, b"orphan")
+        ));
+
+        // The real manifest of a healthy store passes, with or without a torn
+        // in-flight tail.
+        let db_path = Builder::new()
+            .prefix("rocksdb_manifest_is_usable_db")
+            .tempdir()
+            .unwrap();
+        let db_path_str = db_path.path().to_str().unwrap();
+        build_db_with_data(db_path_str);
+        let (name, _) = manifest_candidates(db_path.path()).unwrap().remove(0);
+        let manifest = db_path.path().join(name);
+        assert!(manifest_is_usable(&manifest).unwrap());
+        let mut torn = std::fs::read(&manifest).unwrap();
+        torn.extend_from_slice(&next[..next.len() - 5]);
+        std::fs::write(&manifest, torn).unwrap();
+        assert!(manifest_is_usable(&manifest).unwrap());
+    }
+
+    /// Empty CURRENT (crash mid-meta-write) makes raw RocksDB open fail with
+    /// "CURRENT file does not end with newline" while MANIFEST remains.
+    #[test]
+    fn test_truncated_current_raw_open_fails() {
+        let path = Builder::new()
+            .prefix("rocksdb_truncated_current_raw_fail")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        // Simulate incomplete CURRENT write leaving an empty file.
+        let current = path.path().join("CURRENT");
+        let before = std::fs::read(&current).unwrap();
+        assert!(before.ends_with(b"\n"), "precondition: CURRENT valid");
+        assert!(
+            !manifest_candidates(path.path()).unwrap().is_empty(),
+            "precondition: MANIFEST present"
+        );
+        std::fs::write(&current, b"").unwrap();
+        assert!(!current_is_healthy(path_str));
+
+        // Direct open without the recovery path must fail.
+        let opts = RocksDbOptions::default().into_raw();
+        let err = DB::open_cf(opts, path_str, vec![(CF_DEFAULT, Default::default())]).unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("CURRENT") || msg.contains("Corruption") || msg.contains("newline"),
+            "expected CURRENT corruption error, got: {}",
+            msg
+        );
+    }
+
+    /// Every truncation shape a crash can leave in CURRENT (empty, missing
+    /// newline, zero-filled, garbage, extra newline) is repaired and committed
+    /// data stays readable.
+    #[test]
+    fn test_recover_truncated_current_variants() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_truncated_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+
+        type Corruptor = fn(&[u8]) -> Vec<u8>;
+        let corruptions: [(&str, Corruptor); 5] = [
+            ("empty", |_| Vec::new()),
+            ("missing trailing newline", |healthy| {
+                healthy[..healthy.len() - 1].to_vec()
+            }),
+            ("zero-filled", |healthy| vec![0; healthy.len()]),
+            ("garbage", |_| b"\xff\xfegarbage".to_vec()),
+            ("extra newline", |healthy| [healthy, b"\n"].concat()),
+        ];
+        for (name, corrupt) in corruptions {
+            let healthy = std::fs::read(&current).unwrap();
+            std::fs::write(&current, corrupt(&healthy)).unwrap();
+            assert!(!current_is_healthy(path_str), "case {}", name);
+
+            // Recover explicitly, then verify the pointer is healthy again
+            // and the engine opens with all committed data.
+            assert!(
+                recover_current_if_needed(path_str).unwrap(),
+                "case {}",
+                name
+            );
+            assert!(current_is_healthy(path_str), "case {}", name);
+            let db = open_db(path_str).unwrap_or_else(|e| panic!("case {}: {:?}", name, e));
+            assert_data_intact(&db);
+            drop(db);
+        }
+
+        // End to end: new_engine_opt itself must auto-recover.
+        std::fs::write(&current, b"").unwrap();
+        let db = open_db(path_str).expect("new_engine_opt should recover empty CURRENT");
+        assert_data_intact(&db);
+    }
+
+    /// A missing CURRENT makes `db_exist` report false, so without recovery
+    /// the open path tries to create a brand-new DB: it fails on a leftover
+    /// WAL file, or silently succeeds with an empty DB when no WAL remains.
+    /// Recovery must reconstruct the pointer and preserve the data instead.
+    #[test]
+    fn test_recover_missing_current_preserves_data() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_missing_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        std::fs::remove_file(path.path().join("CURRENT")).unwrap();
+        assert!(!db_exist(path_str), "precondition: db_exist is fooled");
+
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+    }
+
+    /// RocksDB writes and syncs a new MANIFEST fully before switching CURRENT
+    /// to it, so a crash can leave a higher-numbered zero-byte or partial
+    /// MANIFEST that was never committed. Recovery must skip it and repair
+    /// CURRENT to the newest *usable* manifest — never select by filename
+    /// order alone — and must refuse when no usable manifest remains.
+    #[test]
+    fn test_recover_skips_uncommitted_manifest() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_uncommitted_manifest")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+
+        // A crash mid-switch: the new manifest exists but is zero-byte, or
+        // holds only a torn prefix of its initial snapshot.
+        std::fs::write(path.path().join("MANIFEST-999990"), b"").unwrap();
+        std::fs::write(
+            path.path().join("MANIFEST-999991"),
+            log_record(LOG_RECORD_FIRST, b"torn snapshot prefix"),
+        )
+        .unwrap();
+
+        // Truncated CURRENT: recovery must land on the committed manifest.
+        std::fs::write(&current, b"").unwrap();
+        assert!(recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        drop(db);
+
+        // Missing CURRENT: same outcome. Re-read the healthy pointer first:
+        // the reopen above rolled the store onto a fresh manifest.
+        let healthy = std::fs::read(&current).unwrap();
+        std::fs::remove_file(&current).unwrap();
+        assert!(recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        drop(db);
+
+        // No usable manifest at all: CURRENT is left untouched.
+        let path = Builder::new()
+            .prefix("rocksdb_recover_no_usable_manifest")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        std::fs::write(path.path().join("MANIFEST-000005"), b"").unwrap();
+        std::fs::write(path.path().join("CURRENT"), b"").unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(path.path().join("CURRENT")).unwrap(), b"");
+    }
+
+    /// CURRENT pointing at a deleted MANIFEST is repaired only forward (to an
+    /// equal-or-higher-numbered manifest), never back to an older one.
+    #[test]
+    fn test_dangling_current_forward_only() {
+        let path = Builder::new()
+            .prefix("rocksdb_dangling_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+
+        // Forward repair: named manifest is gone, a higher-numbered one exists.
+        assert!(!path.path().join("MANIFEST-000000").exists());
+        std::fs::write(&current, b"MANIFEST-000000\n").unwrap();
+        assert!(recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        drop(db);
+
+        // Rollback refused: named manifest is newer than anything on disk.
+        // CURRENT must stay untouched and open must fail (status quo), not
+        // silently regress to older metadata.
+        let healthy = std::fs::read(&current).unwrap();
+        std::fs::write(&current, b"MANIFEST-999999\n").unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), b"MANIFEST-999999\n");
+        open_db(path_str).unwrap_err();
+
+        // Still refused when the only equal-or-newer manifest is unusable:
+        // an uncommitted higher-numbered file must not mask the rollback.
+        std::fs::write(&current, b"MANIFEST-999998\n").unwrap();
+        std::fs::write(path.path().join("MANIFEST-999999"), b"").unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), b"MANIFEST-999998\n");
+        std::fs::remove_file(path.path().join("MANIFEST-999999")).unwrap();
+
+        // Restoring the real pointer opens fine again.
+        std::fs::write(&current, &healthy).unwrap();
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+    }
+
+    /// Healthy stores and fresh directories are never touched, and recovery
+    /// is idempotent.
+    #[test]
+    fn test_recover_current_noop_when_healthy() {
+        // Nonexistent path: nothing to do.
+        assert!(!recover_current_if_needed("/nonexistent/db/path").unwrap());
+
+        // Fresh empty dir: untouched, normal creation still works after.
+        let path = Builder::new()
+            .prefix("rocksdb_recover_current_noop")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        build_db_with_data(path_str);
+
+        // Healthy store: byte-identical no-op, idempotently.
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert!(!recover_current_if_needed(path_str).unwrap());
+        assert_eq!(std::fs::read(&current).unwrap(), healthy);
+    }
+
+    /// A temp file orphaned by a crash during a previous recovery attempt
+    /// does not prevent recovering again.
+    #[test]
+    fn test_recover_current_with_orphaned_tmp() {
+        let path = Builder::new()
+            .prefix("rocksdb_recover_orphaned_tmp")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        let tmp = path.path().join(CURRENT_RECOVER_TMP);
+        std::fs::write(&tmp, b"stale junk from interrupted recovery").unwrap();
+        std::fs::write(path.path().join("CURRENT"), b"").unwrap();
+
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+        assert!(!tmp.exists(), "tmp must be consumed by the rename");
     }
 
     #[test]
