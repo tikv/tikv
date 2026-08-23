@@ -32,6 +32,7 @@ use crate::{
     metrics,
     metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::{ResourceLimiter, ResourceType},
+    score::PEAK_CPU_PCT,
 };
 
 // a read task cost at least 50us.
@@ -690,8 +691,52 @@ impl ResourceGroupManager {
         self.adjust_group_scheduling(cpu_score);
     }
 
-    /// Per-group CPU rate-limit throttling. Only groups whose current rate
-    /// exceeds their historical rate are limited.
+    /// Picks the groups responsible for the current overload.
+    ///
+    /// Every group whose current rate sits above its own burst target is a
+    /// candidate, but only the biggest movers are selected: candidates are
+    /// sorted by absolute excess over their own baseline and taken from the
+    /// top until that excess covers `PEAK_CPU_PCT -
+    /// fg_cpu_throttle_threshold` percent of total usage across all groups.
+    /// A tenant that grew 2× is therefore left alone while one that grew 10×
+    /// is penalized. The top candidate is always selected, so an overloaded
+    /// node never ends a tick having spared every group.
+    fn select_noisy_groups(&self, now: u64) -> HashSet<String> {
+        let cfg = self.config.value();
+        let burst_factor = 1.0 + cfg.baseline_burst_pct / 100.0;
+        let overshoot_pct = (PEAK_CPU_PCT - cfg.fg_cpu_throttle_threshold).max(0.0);
+
+        let mut total_usage = 0.0;
+        // (group, excess over its own baseline)
+        let mut candidates: Vec<(String, f64)> = Vec::new();
+        for entry in &self.ru_trackers {
+            let guard = entry.lock().unwrap();
+            let hist = guard.0.cached_historical_rate;
+            let current = guard.0.current_rate(now);
+            drop(guard);
+            total_usage += current;
+            if hist > 0.0 && current > hist * burst_factor {
+                candidates.push((entry.key().clone(), current - hist));
+            }
+        }
+        candidates.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
+
+        let target = total_usage * overshoot_pct / 100.0;
+        let mut selected = HashSet::with_capacity(candidates.len());
+        let mut excess_sum = 0.0;
+        for (name, excess) in candidates {
+            if !selected.is_empty() && excess_sum >= target {
+                break;
+            }
+            excess_sum += excess;
+            selected.insert(name);
+        }
+        selected
+    }
+
+    /// Per-group CPU rate-limit throttling. Only the noisy groups picked by
+    /// [`Self::select_noisy_groups`] are limited; a group over its own
+    /// baseline that is not among the biggest movers is left alone.
     ///
     /// Ramp-up: when CPU drops below threshold, recover ×1.1/tick until
     /// NO_LIMIT is restored.
@@ -722,7 +767,11 @@ impl ResourceGroupManager {
 
         let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
         if engaged {
+            let noisy = self.select_noisy_groups(now);
             for entry in &self.ru_trackers {
+                if !noisy.contains(entry.key()) {
+                    continue;
+                }
                 let mut guard = entry.lock().unwrap();
                 let hist = guard.0.cached_historical_rate;
                 let burst_target = hist * burst_factor;
@@ -816,10 +865,10 @@ impl ResourceGroupManager {
             .store(cpu_score < leeway_threshold, Ordering::Relaxed);
     }
 
-    /// Marks resource groups that have exceeded their own quota (current
-    /// rate over their historical baseline by more than `baseline_burst_pct`)
-    /// as over-quota (phase 1), deprioritizing them. A group within its
-    /// baseline is left untouched.
+    /// Marks the noisy resource groups picked by
+    /// [`Self::select_noisy_groups`] as over-quota (phase 1), deprioritizing
+    /// them. A group within its baseline — or over it but not among the
+    /// biggest movers — is left untouched.
     ///
     /// This function only ever sets the over-quota flag, never clears it —
     /// clearing is the caller's responsibility, once the unified read pool
@@ -833,18 +882,9 @@ impl ResourceGroupManager {
             return;
         }
         let now = RuTracker::now_secs();
-        let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
-        for entry in &self.ru_trackers {
-            let group_bytes = entry.key().as_bytes();
-            let guard = entry.value().lock().unwrap();
-            let hist = guard.0.cached_historical_rate;
-            let current = guard.0.current_rate(now);
-            let over_quota = hist > 0.0 && current > hist * burst_factor;
-            drop(guard);
-            if over_quota {
-                for controller in self.registry.read().iter() {
-                    controller.set_group_phase(group_bytes, true);
-                }
+        for name in self.select_noisy_groups(now) {
+            for controller in self.registry.read().iter() {
+                controller.set_group_phase(name.as_bytes(), true);
             }
         }
     }
@@ -1567,10 +1607,7 @@ pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
-    use crate::{
-        resource_limiter::ResourceType::{Cpu, Io},
-        score::TARGET_CPU,
-    };
+    use crate::resource_limiter::ResourceType::{Cpu, Io};
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
@@ -2096,6 +2133,67 @@ pub(crate) mod tests {
         assert!(high_phase1 < low_phase0);
     }
 
+    // Inserts a tracker whose current rate is `current` and whose cached
+    // baseline is `hist`, both in RU/s.
+    fn seed_tracker(mgr: &ResourceGroupManager, name: &str, hist: f64, current: f64, t0: u64) {
+        let e = mgr.ru_trackers.entry(name.to_owned()).or_insert_with(|| {
+            Mutex::new((
+                RuTracker::new(t0, 30),
+                Arc::new(ResourceLimiter::new(
+                    name.into(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                    false,
+                )),
+            ))
+        });
+        let mut tr = e.lock().unwrap();
+        tr.0.record_at((current * RU_BUCKET_SECS as f64) as u64, t0);
+        tr.0.cached_historical_rate = hist;
+        assert!((tr.0.current_rate(t0) - current).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_select_noisy_groups_prefers_biggest_movers() {
+        // Default threshold 70 → target reduction is 20% of total usage.
+        // "noisy" alone covers that, so "mild" is spared even though it is
+        // over its own burst target.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        seed_tracker(&mgr, "noisy", 100.0, 3000.0, t0);
+        seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
+        seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
+
+        let selected = mgr.select_noisy_groups(t0);
+        assert!(selected.contains("noisy"), "biggest mover must be selected");
+        assert!(
+            !selected.contains("mild"),
+            "2x mover must be spared once the 10x mover covers the target"
+        );
+        assert!(
+            !selected.contains("steady"),
+            "within burst target → never a candidate"
+        );
+    }
+
+    #[test]
+    fn test_select_noisy_groups_always_takes_top_candidate() {
+        // No single group can cover the target, so selection walks down the
+        // sorted list; the group within its burst target stays out.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
+        seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
+
+        let selected = mgr.select_noisy_groups(t0);
+        assert!(
+            selected.contains("mild"),
+            "the only candidate must still be penalized"
+        );
+        assert!(!selected.contains("steady"));
+    }
+
     #[test]
     fn test_deprioritize_over_quota_groups_ru_based() {
         // Two-phase scheduling driven by real RU (CPU µs) from
@@ -2430,7 +2528,7 @@ pub(crate) mod tests {
 
         // Pressure is still tracked (adjust_group_scheduling is not gated)...
         mgr.set_bg_cpu_at_floor(true);
-        mgr.online_adjust_resource_quota(TARGET_CPU);
+        mgr.online_adjust_resource_quota(PEAK_CPU_PCT);
         assert_eq!(mgr.read_pool_cpu_pressure(), 1.0);
 
         // ...but it must not turn into a ceiling, or hold back scale-out.
@@ -2492,9 +2590,9 @@ pub(crate) mod tests {
         cfg.enable_fair_scheduling = true;
         let mgr = ResourceGroupManager::new(cfg);
         // Seed a historical floor of 0 cores (cold tracker), then engage
-        // pressure (cpu_score == TARGET_CPU).
+        // pressure (cpu_score == PEAK_CPU_PCT).
         mgr.set_bg_cpu_at_floor(true);
-        mgr.online_adjust_resource_quota(TARGET_CPU);
+        mgr.online_adjust_resource_quota(PEAK_CPU_PCT);
         assert_eq!(mgr.read_pool_cpu_pressure(), 1.0);
 
         // Once engaged, the ceiling is 10% below the currently measured
