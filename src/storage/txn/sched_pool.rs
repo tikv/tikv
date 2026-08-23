@@ -455,6 +455,11 @@ pub fn tls_can_enable(feature: Feature) -> bool {
 }
 
 #[cfg(test)]
+pub fn set_tls_feature_gate(feature_gate: FeatureGate) {
+    TLS_FEATURE_GATE.with(|f| *f.borrow_mut() = feature_gate);
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
 
@@ -522,9 +527,4 @@ mod tests {
         tls_flush(&reporter);
         assert_eq!(reporter.read_stats.lock().unwrap().len(), stats_before + 2);
     }
-}
-
-#[cfg(test)]
-pub fn set_tls_feature_gate(feature_gate: FeatureGate) {
-    TLS_FEATURE_GATE.with(|f| *f.borrow_mut() = feature_gate);
 }
