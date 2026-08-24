@@ -1467,10 +1467,7 @@ where
                             "reason" => error_kind,
                         );
                         match e.into_inner() {
-                            Task::AskSplit {
-                                callback,
-                                ..
-                            } => {
+                            Task::AskSplit { callback, .. } => {
                                 callback.invoke_with_response(new_error(box_err!(
                                     "failed to split: {}",
                                     error_kind

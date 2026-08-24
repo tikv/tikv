@@ -143,12 +143,13 @@ const SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE: u64 = 100;
 const SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE: u64 = 10;
 const SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE: u64 = 1024;
 
-const LOAD_SPLIT_CHECKER_SOURCE: &str = "split_checker_by_load";
+const LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD: &str = "split_checker_by_load";
+const LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE: &str = "split_checker_by_size";
 
 fn split_reason_for_source(source: &str) -> SplitReason {
     match source {
-        "split_checker_by_size" => SplitReason::Size,
-        LOAD_SPLIT_CHECKER_SOURCE | AUTO_SPLIT_SOURCE => SplitReason::Load,
+        LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE => SplitReason::Size,
+        LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD | AUTO_SPLIT_SOURCE => SplitReason::Load,
         _ => SplitReason::Admin,
     }
 }
@@ -6762,7 +6763,8 @@ where
                 PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!(
                         "{} failed to split: {}",
-                        self.fsm.peer.tag, error_kind
+                        self.fsm.peer.tag,
+                        error_kind
                     )));
                 }
                 _ => unreachable!(),
@@ -7872,12 +7874,15 @@ mod tests {
         assert!(right_derive_for_source(AUTO_SPLIT_SOURCE, false));
 
         assert_eq!(
-            split_reason_for_source(LOAD_SPLIT_CHECKER_SOURCE),
+            split_reason_for_source(LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD),
             SplitReason::Load
         );
-        assert!(!right_derive_for_source(LOAD_SPLIT_CHECKER_SOURCE, false));
+        assert!(!right_derive_for_source(
+            LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD,
+            false
+        ));
         assert_eq!(
-            split_reason_for_source("split_checker_by_size"),
+            split_reason_for_source(LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE),
             SplitReason::Size
         );
         assert_eq!(split_reason_for_source("test"), SplitReason::Admin);
