@@ -83,6 +83,20 @@ const THROTTLE_DECREASE_FACTOR: f64 = 0.9;
 /// Duration of each bucket in the RuTracker ring buffer.
 const RU_BUCKET_SECS: u64 = 30;
 
+/// How much a selected group is expected to give back, used to size the noisy
+/// set in [`ResourceGroupManager::select_noisy_groups`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoisyRelief {
+    /// Throttling clamps a group toward its own baseline, so only what it uses
+    /// above that baseline is recovered.
+    Excess,
+    /// Deprioritizing does not cap a group at its baseline — it puts all of the
+    /// group's tasks behind phase-0 work, so under contention its whole share
+    /// yields. Sizing the set by excess would select far more groups than the
+    /// relief requires.
+    Total,
+}
+
 /// Sliding-window RU consumption tracker for both Tier-1 admission control
 /// and two-phase scheduling phase decisions.
 ///
@@ -695,20 +709,26 @@ impl ResourceGroupManager {
     ///
     /// Every group whose current rate sits above its own burst target is a
     /// candidate, but only the biggest movers are selected: candidates are
-    /// sorted by absolute excess over their own baseline and taken from the
-    /// top until that excess covers `PEAK_CPU_PCT -
-    /// fg_cpu_throttle_threshold` percent of total usage across all groups.
-    /// A tenant that grew 2× is therefore left alone while one that grew 10×
-    /// is penalized. The top candidate is always selected, so an overloaded
-    /// node never ends a tick having spared every group.
-    fn select_noisy_groups(&self, now: u64) -> HashSet<String> {
+    /// sorted by absolute excess over their own baseline — the biggest movers
+    /// first — and taken from the top until the relief they provide covers
+    /// `PEAK_CPU_PCT - fg_cpu_throttle_threshold` percent of total usage across
+    /// all groups. A tenant that grew 2× is therefore left alone while one that
+    /// grew 10× is penalized. The top candidate is always selected, so an
+    /// overloaded node never ends a tick having spared every group.
+    ///
+    /// Ranking is always by excess, since that is what identifies the group
+    /// responsible for the change. `relief` only decides how much each selected
+    /// group is credited with giving back, which differs between throttling and
+    /// scheduling — see [`NoisyRelief`].
+
+    fn select_noisy_groups(&self, now: u64, relief: NoisyRelief) -> HashSet<String> {
         let cfg = self.config.value();
         let burst_factor = 1.0 + cfg.baseline_burst_pct / 100.0;
         let overshoot_pct = (PEAK_CPU_PCT - cfg.fg_cpu_throttle_threshold).max(0.0);
 
         let mut total_usage = 0.0;
-        // (group, excess over its own baseline)
-        let mut candidates: Vec<(String, f64)> = Vec::new();
+        // (group, excess over its own baseline, current rate)
+        let mut candidates: Vec<(String, f64, f64)> = Vec::new();
         for entry in &self.ru_trackers {
             let guard = entry.lock().unwrap();
             let hist = guard.0.cached_historical_rate;
@@ -716,19 +736,22 @@ impl ResourceGroupManager {
             drop(guard);
             total_usage += current;
             if hist > 0.0 && current > hist * burst_factor {
-                candidates.push((entry.key().clone(), current - hist));
+                candidates.push((entry.key().clone(), current - hist, current));
             }
         }
         candidates.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
 
         let target = total_usage * overshoot_pct / 100.0;
         let mut selected = HashSet::with_capacity(candidates.len());
-        let mut excess_sum = 0.0;
-        for (name, excess) in candidates {
-            if !selected.is_empty() && excess_sum >= target {
+        let mut relieved = 0.0;
+        for (name, excess, current) in candidates {
+            if !selected.is_empty() && relieved >= target {
                 break;
             }
-            excess_sum += excess;
+            relieved += match relief {
+                NoisyRelief::Excess => excess,
+                NoisyRelief::Total => current,
+            };
             selected.insert(name);
         }
         selected
@@ -767,7 +790,7 @@ impl ResourceGroupManager {
 
         let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
         if engaged {
-            let noisy = self.select_noisy_groups(now);
+            let noisy = self.select_noisy_groups(now, NoisyRelief::Excess);
             for entry in &self.ru_trackers {
                 if !noisy.contains(entry.key()) {
                     continue;
@@ -867,8 +890,9 @@ impl ResourceGroupManager {
 
     /// Marks the noisy resource groups picked by
     /// [`Self::select_noisy_groups`] as over-quota (phase 1), deprioritizing
-    /// them. A group within its baseline — or over it but not among the
-    /// biggest movers — is left untouched.
+    /// them. Sized with [`NoisyRelief::Total`]: phase 1 yields a group's whole
+    /// share, not just the part above its baseline. A group within its baseline
+    /// — or over it but not among the biggest movers — is left untouched.
     ///
     /// This function only ever sets the over-quota flag, never clears it —
     /// clearing is the caller's responsibility, once the unified read pool
@@ -882,7 +906,7 @@ impl ResourceGroupManager {
             return;
         }
         let now = RuTracker::now_secs();
-        for name in self.select_noisy_groups(now) {
+        for name in self.select_noisy_groups(now, NoisyRelief::Total) {
             for controller in self.registry.read().iter() {
                 controller.set_group_phase(name.as_bytes(), true);
             }
@@ -2155,6 +2179,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_select_noisy_groups_relief_mode_sizes_the_set() {
+        // Four groups each 1.25x their own baseline: excess 20 apiece, current
+        // 100 apiece, total usage 400. Default threshold 70 → target is 20% of
+        // 400 = 80. Crediting excess needs all four to reach it; crediting the
+        // whole share, which is what phase 1 actually yields, needs one.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        for name in ["g1", "g2", "g3", "g4"] {
+            seed_tracker(&mgr, name, 80.0, 100.0, t0);
+        }
+
+        assert_eq!(
+            mgr.select_noisy_groups(t0, NoisyRelief::Excess).len(),
+            4,
+            "excess credit only reclaims 20 per group, so the target needs all four"
+        );
+        assert_eq!(
+            mgr.select_noisy_groups(t0, NoisyRelief::Total).len(),
+            1,
+            "deprioritizing yields the whole 100, so one group covers the target"
+        );
+    }
+
+    #[test]
     fn test_select_noisy_groups_prefers_biggest_movers() {
         // Default threshold 70 → target reduction is 20% of total usage.
         // "noisy" alone covers that, so "mild" is spared even though it is
@@ -2165,7 +2213,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
         seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
 
-        let selected = mgr.select_noisy_groups(t0);
+        let selected = mgr.select_noisy_groups(t0, NoisyRelief::Excess);
         assert!(selected.contains("noisy"), "biggest mover must be selected");
         assert!(
             !selected.contains("mild"),
@@ -2186,7 +2234,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
         seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
 
-        let selected = mgr.select_noisy_groups(t0);
+        let selected = mgr.select_noisy_groups(t0, NoisyRelief::Excess);
         assert!(
             selected.contains("mild"),
             "the only candidate must still be penalized"
