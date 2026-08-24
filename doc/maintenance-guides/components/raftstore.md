@@ -159,6 +159,11 @@ High-risk contracts:
 ## Observability And Operational Signals
 
 - metrics under `store/metrics.rs`, `store/local_metrics.rs`, and worker metrics
+- `split_success` and `split_failed` cover load-split attempts after they reach
+  PD split-ID allocation or admin-request handling; candidates rejected earlier
+  by routing, leadership, epoch/key validation, or scheduler delivery are
+  logged where applicable and are not included; CPU half-split candidates use
+  the split-check outcome metrics
 - PD heartbeat and region/store statistics
 - logs around snapshot, split/merge, peer lifecycle, disk-full, and unsafe
   recovery paths
