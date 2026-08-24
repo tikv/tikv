@@ -675,6 +675,62 @@ fn test_worker() {
 }
 
 #[test]
+fn test_unsafe_no_raft_log_fsync_skips_sync_for_pure_append() {
+    let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.unsafe_no_raft_log_fsync = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    let before_skipped = STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+        .with_label_values(&["skipped"])
+        .get();
+
+    // A pure-append task: no raft_state, no snapshot.
+    let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
+    init_write_batch(&engines, &mut task);
+    task.entries.append(&mut vec![new_entry(5, 5)]);
+
+    t.worker.batch.add_write_task(&engines.raft, task);
+    assert!(!t.worker.batch.needs_sync);
+    t.worker.write_to_db(true);
+
+    let after_skipped = STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+        .with_label_values(&["skipped"])
+        .get();
+    assert!(after_skipped > before_skipped);
+}
+
+#[test]
+fn test_unsafe_no_raft_log_fsync_still_syncs_on_hard_state_change() {
+    let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.unsafe_no_raft_log_fsync = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    let before_synced = STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+        .with_label_values(&["synced"])
+        .get();
+
+    // A task with a hard-state change: must always sync, even with the
+    // option enabled.
+    let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
+    init_write_batch(&engines, &mut task);
+    task.entries.append(&mut vec![new_entry(5, 5)]);
+    task.raft_state = Some(new_raft_state(5, 123, 5, 5));
+
+    t.worker.batch.add_write_task(&engines.raft, task);
+    assert!(t.worker.batch.needs_sync);
+    t.worker.write_to_db(true);
+
+    let after_synced = STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+        .with_label_values(&["synced"])
+        .get();
+    assert!(after_synced > before_synced);
+}
+
+#[test]
 fn test_worker_split_raft_wb() {
     let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
     let engines = new_temp_engine(&path);

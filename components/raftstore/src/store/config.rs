@@ -112,6 +112,16 @@ pub struct Config {
     /// deployed on different mount points). The default is 1 minute. Set it
     /// to `0s` to disable fail-fast disk hang detection explicitly. Any
     /// non-zero value must be at least 30 seconds.
+
+    /// Testing only. When enabled, raft log write batches that only append
+    /// entries (no term/vote change, no snapshot) skip fsync. Batches that
+    /// change hard state or contain a snapshot always sync regardless of
+    /// this option, since raft requires the former to be durable before
+    /// responding to RPCs and the latter's metadata cannot be replayed.
+    ///
+    /// This gives up durability and must never be enabled in production.
+    #[doc(hidden)]
+    pub unsafe_no_raft_log_fsync: bool,
     pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
@@ -555,6 +565,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            unsafe_no_raft_log_fsync: false,
             disk_hang_timeout: Some(ReadableDuration::minutes(1)),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
