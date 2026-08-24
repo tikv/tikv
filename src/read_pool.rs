@@ -946,14 +946,13 @@ impl ReadPoolConfigRunner {
 
         self.set_thread_count(new_thread_count);
 
-        // While we haven't scaled back up to core_thread_count, keep noisy
-        // resource groups deprioritized. Once recovered, release everyone —
-        // which also clears any flags left over from when fair scheduling was
-        // last enabled, since deprioritizing is a no-op while it is off.
+        // Only CPU pressure justifies penalizing a tenant — the thread ladder
+        // also scales in when the pool is merely oversized. Release at full
+        // recovery also clears flags left from when fair scheduling was off.
         if let Some(rm) = resource_manager.as_ref() {
-            if self.cur_thread_count < self.core_thread_count {
+            if busy_cpu_scale_in {
                 rm.deprioritize_over_quota_groups();
-            } else {
+            } else if self.cur_thread_count == self.core_thread_count {
                 rm.reset_group_priorities();
             }
         }
