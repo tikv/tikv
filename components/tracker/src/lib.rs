@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn test_token_future_tracker_attributes_poll_time() {
+    fn test_poll_time_tracker_attributes_process_and_suspend_time() {
         use std::{
             future::{Future, poll_fn},
             pin::pin,
