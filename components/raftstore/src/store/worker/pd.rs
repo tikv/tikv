@@ -1469,12 +1469,8 @@ where
                         match e.into_inner() {
                             Task::AskSplit {
                                 callback,
-                                split_reason,
                                 ..
                             } => {
-                                if split_reason == pdpb::SplitReason::Load {
-                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                                }
                                 callback.invoke_with_response(new_error(box_err!(
                                     "failed to split: {}",
                                     error_kind
