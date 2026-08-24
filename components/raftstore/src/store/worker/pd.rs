@@ -2633,8 +2633,8 @@ where
                         };
                         // Try to split the region with the given split key.
                         // Classic raftstore intentionally ignores the telemetry peer here.
-                        // The current peer FSM owns execution identity and rejects a leader
-                        // transfer locally instead of forwarding the candidate.
+                        // The current peer FSM owns execution identity and rejects candidates
+                        // received after leadership is lost instead of forwarding them.
                         if let Some(msg) = take_auto_split_message(
                             region.get_region_epoch().clone(),
                             &mut split_info,
