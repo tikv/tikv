@@ -6706,9 +6706,6 @@ where
             "source" => source,
         );
 
-        // A load-based split candidate that is rejected here never creates an
-        // admin command, so it is counted as failed at the rejection point.
-        let is_load_split = split_reason_for_source(source) == SplitReason::Load;
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
             info!(
@@ -6716,9 +6713,6 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
-            if is_load_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             cb.invoke_with_response(new_error(Error::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
@@ -6740,9 +6734,6 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "source" => %source
             );
-            if is_load_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             cb.invoke_with_response(new_error(e));
             return;
         }
@@ -6756,20 +6747,22 @@ where
             callback: cb,
             split_reason: split_reason_for_source(source),
         };
-        if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            let error_kind: &'static str = match &e {
+                ScheduleError::Stopped(_) => "Stopped",
+                ScheduleError::Full(_) => "Full",
+            };
             warn!(
-                "failed to notify pd to split: Stopped";
+                "failed to notify pd to split";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "reason" => error_kind,
             );
-            if is_load_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
-            match t {
+            match e.into_inner() {
                 PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!(
-                        "{} failed to split: Stopped",
-                        self.fsm.peer.tag
+                        "{} failed to split: {}",
+                        self.fsm.peer.tag, error_kind
                     )));
                 }
                 _ => unreachable!(),

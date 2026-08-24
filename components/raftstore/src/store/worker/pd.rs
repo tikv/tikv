@@ -647,17 +647,8 @@ where
             return;
         }
         let candidate_count = split_infos.len() as u64;
-        // CPU half-split candidates are accounted by the split checker stage;
-        // split_failed tracks normal split-key candidates only.
-        let split_key_candidate_count = split_infos
-            .iter()
-            .filter(|split_info| split_info.split_key.is_some())
-            .count() as u64;
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
-            LOAD_BASE_SPLIT_EVENT
-                .split_failed
-                .inc_by(split_key_candidate_count);
             warn!(
                 "failed to send split infos to pd worker";
                 "candidate_count" => candidate_count,
@@ -1464,13 +1455,18 @@ where
                         callback,
                         split_reason: reason,
                     };
-                    if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
+                    if let Err(e) = scheduler.schedule(task) {
+                        let error_kind: &'static str = match &e {
+                            ScheduleError::Stopped(_) => "Stopped",
+                            ScheduleError::Full(_) => "Full",
+                        };
                         error!(
-                            "failed to notify pd to split: Stopped";
+                            "failed to notify pd to split";
                             "region_id" => region_id,
-                            "peer_id" =>  peer_id
+                            "peer_id" => peer_id,
+                            "reason" => error_kind,
                         );
-                        match t {
+                        match e.into_inner() {
                             Task::AskSplit {
                                 callback,
                                 split_reason,
@@ -1480,7 +1476,8 @@ where
                                     LOAD_BASE_SPLIT_EVENT.split_failed.inc();
                                 }
                                 callback.invoke_with_response(new_error(box_err!(
-                                    "failed to split: Stopped"
+                                    "failed to split: {}",
+                                    error_kind
                                 )));
                             }
                             _ => unreachable!(),
@@ -2620,13 +2617,9 @@ where
                 let f = async move {
                     for mut split_info in split_infos {
                         let region_id = split_info.region_id;
-                        let is_split_key = split_info.split_key.is_some();
                         let region = match pd_client.get_region_by_id(region_id).await {
                             Ok(Some(region)) => region,
                             Ok(None) => {
-                                if is_split_key {
-                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                                }
                                 warn!(
                                     "region disappeared before auto split dispatch";
                                     "region_id" => region_id,
@@ -2634,9 +2627,6 @@ where
                                 continue;
                             }
                             Err(e) => {
-                                if is_split_key {
-                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                                }
                                 warn!(
                                     "failed to load region before auto split dispatch";
                                     "region_id" => region_id,
@@ -2655,7 +2645,6 @@ where
                         ) {
                             let result = router.send_casual_msg(region_id, msg);
                             if let Err(e) = result {
-                                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
                                 warn!(
                                     "failed to route auto split through current peer";
                                     "region_id" => region_id,
@@ -3124,42 +3113,12 @@ mod tests {
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
     use pd_client::{BucketMeta, new_bucket_stats};
-    use tikv_util::worker::{LazyWorker, dummy_scheduler};
+    use tikv_util::worker::LazyWorker;
 
     use super::*;
     use crate::store::util::build_key_range;
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
-
-    #[test]
-    fn test_auto_split_schedule_failure_only_records_split_key_candidates() {
-        let (scheduler, receiver) = dummy_scheduler::<Task<KvTestEngine>>();
-        let reporter = WrappedScheduler(scheduler);
-        drop(receiver);
-
-        let failed_before = LOAD_BASE_SPLIT_EVENT.split_failed.get();
-        reporter.auto_split(vec![SplitInfo {
-            region_id: 42,
-            peer: metapb::Peer::default(),
-            split_key: None,
-            start_key: Some(b"a".to_vec()),
-            end_key: Some(b"z".to_vec()),
-        }]);
-        assert_eq!(
-            LOAD_BASE_SPLIT_EVENT.split_failed.get(),
-            failed_before,
-            "CPU half-split candidates are accounted by the split checker stage"
-        );
-
-        reporter.auto_split(vec![SplitInfo {
-            region_id: 42,
-            peer: metapb::Peer::default(),
-            split_key: Some(b"k".to_vec()),
-            start_key: None,
-            end_key: None,
-        }]);
-        assert_eq!(LOAD_BASE_SPLIT_EVENT.split_failed.get(), failed_before + 1);
-    }
 
     #[test]
     fn test_auto_split_message_ignores_sampled_peer() {
