@@ -10,7 +10,7 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    future::{FutureTrack, TokenFutureTracker, track},
+    future::{FutureTrack, PollTimeTracker, track},
     slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
     tls::*,
 };
@@ -352,7 +352,7 @@ mod tests {
                     Poll::Pending
                 }
             }),
-            TokenFutureTracker::new(token),
+            PollTimeTracker::new(token),
         );
         let mut fut = pin!(fut);
         let mut cx = Context::from_waker(Waker::noop());

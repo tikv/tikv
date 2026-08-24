@@ -38,13 +38,13 @@ pub fn track<F: Future, T: FutureTrack>(fut: F, fut_tracker: T) -> impl Future<O
 /// first poll has no poll callback and therefore cannot flush that initial
 /// wait.
 #[derive(Debug)]
-pub struct TokenFutureTracker {
+pub struct PollTimeTracker {
     token: TrackerToken,
     poll_began: Instant,
     last_finished: Instant,
 }
 
-impl TokenFutureTracker {
+impl PollTimeTracker {
     /// Creates a poll-time tracker for the slab tracker addressed by `token`.
     pub fn new(token: TrackerToken) -> Self {
         let now = Instant::now();
@@ -56,7 +56,7 @@ impl TokenFutureTracker {
     }
 }
 
-impl FutureTrack for TokenFutureTracker {
+impl FutureTrack for PollTimeTracker {
     fn on_poll_begin(&mut self) {
         self.poll_began = Instant::now();
     }
