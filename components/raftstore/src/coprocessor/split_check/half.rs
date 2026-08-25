@@ -1252,4 +1252,93 @@ mod tests {
         ));
         must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
     }
+
+    /// Regression test: the iterator fallback must not select an invalid MVCC
+    /// boundary version and give up.  Here the range start user key `a` has two
+    /// physical versions (`a@43`, `a@42`) plus a valid interior key `b@1`.  The
+    /// middle *physical* entry is `a@42`, which normalizes to the range start
+    /// `a` and is not a usable split key.  The fallback must normalize and
+    /// deduplicate logical user keys so it still proposes the interior key `b`
+    /// rather than emitting no AskSplit.
+    #[test]
+    fn test_iterator_fallback_skips_mvcc_boundary_versions() {
+        let path = Builder::new()
+            .prefix("test-iterator-fallback-mvcc-boundary")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        region.set_start_key(Key::from_raw(b"a").into_encoded());
+        region.set_end_key(Key::from_raw(b"c").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        // Flush a@43 alone so the range-property index records it as the
+        // property candidate; it normalizes to the range start `a`.
+        let property_boundary =
+            keys::data_key(Key::from_raw(b"a").append_ts(43.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &property_boundary, &property_boundary)
+            .unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Add a second version a@42 and the only valid interior key b@1.  The
+        // merged iterator sees a@43, a@42, b@1, so the middle physical entry is
+        // a@42 which also collapses onto the range start.
+        let second_boundary =
+            keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &second_boundary, &second_boundary)
+            .unwrap();
+        let interior_key = keys::data_key(Key::from_raw(b"b").append_ts(1.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &interior_key, &interior_key)
+            .unwrap();
+
+        let data_start = keys::data_key(Key::from_raw(b"a").as_encoded());
+        let data_end = keys::data_end_key(Key::from_raw(b"c").as_encoded());
+        let property_candidate = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&data_start),
+            Some(&data_end),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            property_candidate, property_boundary,
+            "the property candidate must normalize to the region boundary"
+        );
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"a".to_vec()),
+            Some(b"c".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
+    }
 }

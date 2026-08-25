@@ -865,42 +865,29 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
 
         // Fallback: bounded iterator scan to find an actual midpoint key.
-        let scanned = self.scan_middle_in_range(tablet, region, start_key, end_key)?;
-
-        // Apply the same normalization and validation to the scanned candidate.
-        let split_key = strip_timestamp_if_exists(keys::origin_key(&scanned).to_vec());
-        let range_start = keys::origin_key(start_key);
-        let range_end = keys::origin_end_key(end_key);
-
-        if split_key.as_slice() <= range_start
-            || (!range_end.is_empty() && split_key.as_slice() >= range_end)
-        {
-            debug!(
-                "ignore out-of-range scanned split key";
-                "region_id" => region.get_id(),
-                "start_key" => log_wrappers::Value::key(range_start),
-                "end_key" => log_wrappers::Value::key(range_end),
-                "split_key" => log_wrappers::Value::key(&split_key),
-            );
-            return None;
-        }
-
-        if is_valid_split_key(&split_key, 0, region) {
-            Some(split_key)
-        } else {
-            None
-        }
+        // scan_middle_in_range normalizes, boundary-checks, region-validates,
+        // and deduplicates every candidate itself, returning a ready-to-use
+        // split key in origin-key encoding.
+        self.scan_middle_in_range(tablet, region, start_key, end_key)
     }
 
     /// Scans up to `MAX_SCAN_KEYS` keys across all large CFs in
-    /// `[start_key, end_key)` and returns the middle one as a candidate split
-    /// point, in data-key encoding.
+    /// `[start_key, end_key)` and returns a middle logical user key as a
+    /// candidate split point, normalized to origin-key encoding.
     ///
-    /// Used as a fallback when the range-property index has no entry strictly
-    /// inside the range (e.g. narrow hot range fully contained in a single
-    /// compacted SST).  Scanning LARGE_CFS mirrors `get_range_approximate_split_keys`
-    /// so the result is consistent even when data lives only in CF_WRITE
-    /// (short-value inline writes).
+    /// Used as a fallback when the range-property index has no usable entry
+    /// strictly inside the range (e.g. narrow hot range fully contained in a
+    /// single compacted SST).  Scanning LARGE_CFS mirrors
+    /// `get_range_approximate_split_keys` so the result is consistent even when
+    /// data lives only in CF_WRITE (short-value inline writes).
+    ///
+    /// The merged iterator yields physical MVCC versions, so several entries
+    /// can share one logical user key and multiple leading versions can
+    /// collapse onto the range start after timestamp stripping.  Every
+    /// candidate is therefore normalized, boundary-checked, region-validated,
+    /// and deduplicated *before* the midpoint is chosen, so the fallback never
+    /// selects an invalid boundary version and gives up while a valid interior
+    /// user key still exists.
     fn scan_middle_in_range(
         &self,
         tablet: &EK,
@@ -923,13 +910,38 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 return None;
             }
         };
+
+        let range_start = keys::origin_key(start_key);
+        let range_end = keys::origin_end_key(end_key);
+
         let mut candidates: Vec<Vec<u8>> = Vec::new();
+        let mut scanned = 0;
         while let Some(e) = iter.next() {
-            candidates.push(e.key().to_vec());
-            if candidates.len() >= MAX_SCAN_KEYS {
+            scanned += 1;
+            // Normalize each entry the same way SplitObserver does, so a
+            // candidate cannot become an invalid boundary after timestamp
+            // stripping.
+            let split_key = strip_timestamp_if_exists(keys::origin_key(e.key()).to_vec());
+
+            // Keep only candidates that stay strictly inside the range and are
+            // valid region split points.  Skipping invalid boundary versions
+            // here (rather than only inspecting the middle physical entry)
+            // ensures a valid interior key is still selectable.
+            let boundary_ok = split_key.as_slice() > range_start
+                && (range_end.is_empty() || split_key.as_slice() < range_end);
+            if boundary_ok && is_valid_split_key(&split_key, 0, region) {
+                // Deduplicate consecutive logical user keys; different MVCC
+                // versions of one key normalize to the same value.
+                if candidates.last().map(Vec::as_slice) != Some(split_key.as_slice()) {
+                    candidates.push(split_key);
+                }
+            }
+
+            if scanned >= MAX_SCAN_KEYS {
                 break;
             }
         }
+
         if candidates.is_empty() {
             return None;
         }
