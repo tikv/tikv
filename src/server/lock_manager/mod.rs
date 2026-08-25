@@ -614,7 +614,7 @@ mod tests {
             token: token_w,
             start_ts: 10.into(),
             is_first_lock: false,
-            wait_info: fair_wait_info_for_owner(w.wait_info.clone(), 30.into()),
+            wait_info: fair_wait_info_for_owner(w.wait_info, 30.into()),
         }]);
         thread::sleep(Duration::from_millis(50));
 
@@ -664,7 +664,7 @@ mod tests {
             token: token_w,
             start_ts: 10.into(),
             is_first_lock: false,
-            wait_info: fair_wait_info_for_owner(w.wait_info.clone(), 30.into()),
+            wait_info: fair_wait_info_for_owner(w.wait_info, 30.into()),
         }]);
         thread::sleep(Duration::from_millis(50));
 
