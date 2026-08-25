@@ -1665,7 +1665,7 @@ fn unix_timestamp_to_mysql_unix_timestamp(
     Ok(value?)
 }
 
-fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
+fn get_micro_timestamp(time: &DateTime, tz: &Tz, adjust_gap: bool) -> Result<i64> {
     let year = time.year() as i32;
     let month = time.month();
     let day = time.day();
@@ -1687,6 +1687,13 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
     let res = match tz.from_local_datetime(&naive_datetime).earliest() {
         Some(val) => val,
         None => {
+            if !adjust_gap {
+                // Decimal UNIX_TIMESTAMP returns zero for a nonexistent
+                // local time in a DST spring-forward gap, matching TiDB's
+                // GoTime-based root evaluation, rather than adjusting to
+                // the nearest zone transition boundary.
+                return Ok(0);
+            }
             let chrono_tz = match tz.get_chrono_tz() {
                 Some(val) => val,
                 None => return Err(Error::incorrect_parameters("Can't get chrono tz").into()),
@@ -1709,7 +1716,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
-    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz)?;
+    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz, true)?;
 
     let res: std::result::Result<i64, Error> =
         unix_timestamp_to_mysql_unix_timestamp(ctx, timestamp, 1)?
@@ -1725,7 +1732,7 @@ pub fn unix_timestamp_decimal(
     extra: &RpnFnCallExtra,
     time: &DateTime,
 ) -> Result<Option<Decimal>> {
-    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz)?;
+    let timestamp = get_micro_timestamp(time, &ctx.cfg.tz, false)?;
 
     let res = unix_timestamp_to_mysql_unix_timestamp(
         ctx,
@@ -4374,11 +4381,14 @@ mod tests {
                 Decimal::from_str("1253446359").unwrap(),
             ),
             (
+                // A nonexistent local time in a DST spring-forward gap.
+                // Decimal UNIX_TIMESTAMP returns zero here, unlike the
+                // integer signature, which adjusts to the zone transition.
                 "2020-03-29 03:45:03.123",
                 0,
                 "Europe/Vilnius",
                 0,
-                Decimal::from_str("1585443600").unwrap(),
+                Decimal::zero(),
             ),
         ];
 
