@@ -863,7 +863,7 @@ where
             last_raft_append_success_at_millis,
             last_kv_sync_success_at_millis,
 
-            unsafe_no_raft_log_fsync: cfg.value().unsafe_no_raft_log_fsync,
+            unsafe_no_raft_log_fsync: cfg.value().unsafe_no_raft_log_fsync(),
 
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
@@ -1315,7 +1315,7 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-            self.unsafe_no_raft_log_fsync = incoming.unsafe_no_raft_log_fsync;
+            self.unsafe_no_raft_log_fsync = incoming.unsafe_no_raft_log_fsync();
             self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
             self.adaptive_high_qps_threshold = incoming.adaptive_high_qps_threshold;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
