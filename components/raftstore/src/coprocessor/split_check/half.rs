@@ -1113,4 +1113,143 @@ mod tests {
             .unwrap();
         assert!(middle_key.as_slice() >= &b"key_090"[..]);
     }
+
+    /// Regression test: `get_region_approximate_middle_in_range` can return
+    /// `Err("all CFs are empty")` for a non-empty narrow range because range
+    /// sizes are derived from discrete property offsets.  The iterator fallback
+    /// must still produce a valid split key.
+    #[test]
+    fn test_zero_property_size_still_uses_iterator_fallback() {
+        let path = Builder::new()
+            .prefix("test-zero-property-size")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        for i in 0..100 {
+            let key = format!("{:04}", i).into_bytes();
+            let data_key = keys::data_key(Key::from_raw(&key).as_encoded());
+            engine.put_cf(CF_DEFAULT, &data_key, &data_key).unwrap();
+        }
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        let data_start = keys::data_key(Key::from_raw(b"0040").as_encoded());
+        let data_end = keys::data_end_key(Key::from_raw(b"0060").as_encoded());
+        let property_error = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&data_start),
+            Some(&data_end),
+        )
+        .unwrap_err();
+        assert!(property_error.to_string().contains("all CFs are empty"));
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"0040".to_vec()),
+            Some(b"0060".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"0050").into_encoded()]);
+    }
+
+    /// Regression test: when the property candidate normalizes to a range
+    /// boundary (e.g. after timestamp stripping it equals region start), the
+    /// function must continue to the iterator fallback rather than returning
+    /// None.
+    #[test]
+    fn test_invalid_property_candidate_continues_to_iterator_fallback() {
+        let path = Builder::new()
+            .prefix("test-invalid-property-candidate")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        region.set_start_key(Key::from_raw(b"a").into_encoded());
+        region.set_end_key(Key::from_raw(b"c").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        let boundary_key =
+            keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &boundary_key, &boundary_key)
+            .unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        let interior_key =
+            keys::data_key(Key::from_raw(b"b").append_ts(42.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &interior_key, &interior_key)
+            .unwrap();
+
+        let data_start = keys::data_key(Key::from_raw(b"a").as_encoded());
+        let data_end = keys::data_end_key(Key::from_raw(b"c").as_encoded());
+        let property_candidate = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&data_start),
+            Some(&data_end),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(property_candidate, boundary_key);
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"a".to_vec()),
+            Some(b"c".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
+    }
 }

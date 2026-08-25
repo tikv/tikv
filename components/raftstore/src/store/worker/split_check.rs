@@ -813,39 +813,70 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             Some(start_key),
             Some(end_key),
         ) {
-            Ok(Some(key)) => key,
+            Ok(Some(key)) => Some(key),
             Ok(None) => {
                 // The range sits entirely within a single compacted SST with no
-                // range-property index key inside it.  Fall back to a bounded
-                // iterator scan to find an actual midpoint key.
-                match self.scan_middle_in_range(tablet, region, start_key, end_key) {
-                    Some(key) => key,
-                    None => return None,
-                }
+                // range-property index key inside it.  Fall through to iterator
+                // fallback below.
+                None
             }
             Err(e) => {
+                // Range sizes are derived from discrete property offsets, so
+                // both bounds can map to the same offset (yielding "all CFs are
+                // empty") even when physical keys exist between them.  Log the
+                // error and let the bounded iterator handle this outcome.
                 error!(%e;
-                    "failed to get approximate middle in key range";
+                    "failed to get approximate middle in key range, trying iterator fallback";
                     "region_id" => region.get_id(),
                     "start_key" => log_wrappers::Value::key(start_key),
                     "end_key" => log_wrappers::Value::key(end_key),
                 );
-                return None;
+                None
             }
         };
 
-        // Normalize to the same form used by SplitObserver before all checks,
-        // so the candidate won't become invalid after timestamp stripping.
-        let split_key = strip_timestamp_if_exists(keys::origin_key(&approximate_middle).to_vec());
+        // Try to validate the property-based candidate if we got one.
+        if let Some(ref candidate) = approximate_middle {
+            // Normalize to the same form used by SplitObserver before all
+            // checks, so the candidate won't become invalid after timestamp
+            // stripping.
+            let split_key = strip_timestamp_if_exists(keys::origin_key(candidate).to_vec());
+            let range_start = keys::origin_key(start_key);
+            let range_end = keys::origin_end_key(end_key);
+
+            // Guard against split points that are equal to range boundaries.
+            let boundary_ok = split_key.as_slice() > range_start
+                && (range_end.is_empty() || split_key.as_slice() < range_end);
+
+            if boundary_ok && is_valid_split_key(&split_key, 0, region) {
+                return Some(split_key);
+            }
+
+            // The property candidate is unusable (collapsed to a boundary or
+            // failed region-validity checks).  A later interior key may still
+            // exist and be visible to the bounded iterator, so fall through.
+            debug!(
+                "property candidate unusable, trying iterator fallback";
+                "region_id" => region.get_id(),
+                "start_key" => log_wrappers::Value::key(range_start),
+                "end_key" => log_wrappers::Value::key(range_end),
+                "split_key" => log_wrappers::Value::key(&split_key),
+            );
+        }
+
+        // Fallback: bounded iterator scan to find an actual midpoint key.
+        let scanned = self.scan_middle_in_range(tablet, region, start_key, end_key)?;
+
+        // Apply the same normalization and validation to the scanned candidate.
+        let split_key = strip_timestamp_if_exists(keys::origin_key(&scanned).to_vec());
         let range_start = keys::origin_key(start_key);
         let range_end = keys::origin_end_key(end_key);
 
-        // Guard against split points that are equal to range boundaries.
         if split_key.as_slice() <= range_start
             || (!range_end.is_empty() && split_key.as_slice() >= range_end)
         {
             debug!(
-                "ignore out-of-range approximate split key";
+                "ignore out-of-range scanned split key";
                 "region_id" => region.get_id(),
                 "start_key" => log_wrappers::Value::key(range_start),
                 "end_key" => log_wrappers::Value::key(range_end),
