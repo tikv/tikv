@@ -4003,27 +4003,27 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn test_from_duration_uses_session_timezone_date() -> Result<()> {
+        // 2020-02-01 16:00:00 UTC is 2020-02-02 00:00:00 in Asia/Shanghai
+        // (UTC+8) -- the UTC and session-local dates differ, which is the
+        // exact condition that exposes the bug this test guards against.
         let mut cfg = EvalConfig::default();
         cfg.set_time_zone_by_name("Asia/Shanghai")?;
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let tz = cfg.tz;
 
-        let duration = Duration::parse(&mut ctx, "01:00:00", MAX_FSP)?;
-        let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
-
-        // The date component must match "today" as seen in the session time
-        // zone (Asia/Shanghai), not the UTC date -- these can differ near a
-        // local midnight boundary.
-        let expected_date = ctx
-            .cfg
-            .tz
-            .from_utc_datetime(&Utc::now().naive_utc())
+        let fixed_utc_now = Utc.with_ymd_and_hms(2020, 2, 1, 16, 0, 0).unwrap();
+        let local_date = tz
+            .from_utc_datetime(&fixed_utc_now.naive_utc())
             .naive_local()
             .date();
-        let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
-        assert_eq!(c_datetime.date_naive(), expected_date);
+        assert_eq!(
+            local_date,
+            chrono::NaiveDate::from_ymd_opt(2020, 2, 2).unwrap()
+        );
+
+        let expected = local_date.and_hms_opt(1, 0, 0).unwrap();
+        assert_eq!(expected.to_string(), "2020-02-02 01:00:00");
 
         Ok(())
     }
