@@ -1133,8 +1133,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.on_force_leader_fail();
             }
 
-            self.read_progress()
-                .update_leader_info(ss.leader_id, term, self.region());
+            self.read_progress().update_leader_info_with_source(
+                "v2_on_role_changed",
+                ss.leader_id,
+                term,
+                self.region(),
+            );
             let target = self.refresh_leader_transferee();
             ctx.coprocessor_host.on_role_change(
                 self.region(),

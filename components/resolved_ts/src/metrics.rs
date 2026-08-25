@@ -128,6 +128,25 @@ lazy_static! {
         exponential_buckets(0.005, 2.0, 20).unwrap(),
     )
     .unwrap();
+    pub static ref RTS_CHECK_LEADER_UNRESOLVED_REGION_COUNTER: IntCounter = register_int_counter!(
+        "tikv_resolved_ts_check_leader_unresolved_region_total",
+        "Total number of region-rounds filtered by the check-leader fast path"
+    )
+    .unwrap();
+    pub static ref RTS_CHECK_LEADER_READ_INDEX_FALLBACK_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_resolved_ts_check_leader_read_index_fallback_total",
+            "Total number of region-rounds handled by the read-index fallback after check-leader fast-path failures",
+            &["result"]
+        )
+        .unwrap();
+    pub static ref RTS_CHECK_LEADER_READ_INDEX_FALLBACK_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_resolved_ts_check_leader_read_index_fallback_duration_seconds",
+            "Bucketed histogram of resolved-ts read-index fallback duration",
+            exponential_buckets(0.005, 2.0, 20).unwrap(),
+        )
+        .unwrap();
     pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_resolved_ts_tikv_client_init_duration_seconds",
         "Bucketed histogram of resolved-ts tikv client initializing duration",

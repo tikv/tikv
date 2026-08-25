@@ -1014,6 +1014,7 @@ where
             leader_resolver,
             self.cfg.advance_ts_interval.0,
             self.advance_notify.clone(),
+            self.scanner_pool.cdc_handle(),
         );
     }
 

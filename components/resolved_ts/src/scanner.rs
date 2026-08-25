@@ -105,6 +105,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         }
     }
 
+    pub fn cdc_handle(&self) -> T {
+        self.cdc_handle.clone()
+    }
+
     pub fn spawn_task(&self, mut task: ScanTask, concurrency_semaphore: Arc<Semaphore>) {
         let cdc_handle = self.cdc_handle.clone();
         let fut = async move {

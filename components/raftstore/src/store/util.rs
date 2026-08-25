@@ -35,6 +35,7 @@ use tikv_util::{
     debug, info,
     store::{find_peer_by_id, region},
     time::{Instant, Timespec, monotonic_raw_now},
+    warn,
 };
 use time::Duration;
 use tokio::sync::Notify;
@@ -48,6 +49,8 @@ use crate::{
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
+const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+const CHECK_LEADER_REGISTRY_MUTATION_LIMIT: usize = 10;
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
@@ -1238,12 +1241,14 @@ impl Display for MsgType<'_> {
 #[derive(Clone)]
 pub struct RegionReadProgressRegistry {
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+    diagnostics: Arc<Mutex<CheckLeaderRegistryDiagnostics>>,
 }
 
 impl RegionReadProgressRegistry {
     pub fn new() -> RegionReadProgressRegistry {
         RegionReadProgressRegistry {
             registry: Arc::new(Mutex::new(HashMap::new())),
+            diagnostics: Arc::new(Mutex::new(CheckLeaderRegistryDiagnostics::new())),
         }
     }
 
@@ -1252,14 +1257,35 @@ impl RegionReadProgressRegistry {
         region_id: u64,
         read_progress: Arc<RegionReadProgress>,
     ) -> Option<Arc<RegionReadProgress>> {
-        self.registry
+        let previous = self
+            .registry
             .lock()
             .unwrap()
-            .insert(region_id, read_progress)
+            .insert(region_id, read_progress);
+        self.record_registry_mutation("insert", region_id, previous.is_some());
+        previous
     }
 
     pub fn remove(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
-        self.registry.lock().unwrap().remove(region_id)
+        let previous = self.registry.lock().unwrap().remove(region_id);
+        self.record_registry_mutation("remove", *region_id, previous.is_some());
+        previous
+    }
+
+    fn record_registry_mutation(
+        &self,
+        kind: &'static str,
+        region_id: u64,
+        had_previous_entry: bool,
+    ) {
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .record(kind, region_id, had_previous_entry);
+    }
+
+    fn recent_registry_mutations(&self, region_id: u64) -> Vec<CheckLeaderRegistryMutation> {
+        self.diagnostics.lock().unwrap().recent_mutations(region_id)
     }
 
     pub fn get(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
@@ -1313,16 +1339,61 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
-        let registry = self.registry.lock().unwrap();
-        let now = Some(Instant::now_coarse());
-        for leader_info in &leaders {
-            let region_id = leader_info.get_region_id();
-            if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor, now) {
-                    regions.push(region_id);
+        let mut registry_miss_count = 0;
+        let mut leader_info_mismatch_count = 0;
+        let mut unreturned_regions = Vec::new();
+        let mut unreturned_regions_truncated = false;
+        {
+            let registry = self.registry.lock().unwrap();
+            let now = Some(Instant::now_coarse());
+            for leader_info in &leaders {
+                let region_id = leader_info.get_region_id();
+                if let Some(rp) = registry.get(&region_id) {
+                    if let Some(mismatch_info) =
+                        rp.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+                    {
+                        leader_info_mismatch_count += 1;
+                        if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                            unreturned_regions.push(CheckLeaderUnreturnedRegion::new(
+                                leader_info,
+                                CheckLeaderUnreturnedReason::LeaderInfoMismatch {
+                                    leader_info_mismatch: mismatch_info,
+                                },
+                            ));
+                        } else {
+                            unreturned_regions_truncated = true;
+                        }
+                    } else {
+                        regions.push(region_id);
+                    }
+                } else {
+                    registry_miss_count += 1;
+                    if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                        unreturned_regions.push(CheckLeaderUnreturnedRegion::new(
+                            leader_info,
+                            CheckLeaderUnreturnedReason::RegistryMiss {
+                                registry_recent_mutations: self
+                                    .recent_registry_mutations(region_id),
+                            },
+                        ));
+                    } else {
+                        unreturned_regions_truncated = true;
+                    }
                 }
             }
+        }
+        if regions.len() < request_count {
+            warn!(
+                "[resolved-ts-stuck] check leader task returned partial regions";
+                "request_count" => request_count,
+                "response_count" => regions.len(),
+                "registry_miss_count" => registry_miss_count,
+                "leader_info_mismatch_count" => leader_info_mismatch_count,
+                "unreturned_regions" => ?unreturned_regions,
+                "unreturned_regions_truncated" => unreturned_regions_truncated,
+            );
         }
         regions
     }
@@ -1342,6 +1413,140 @@ impl RegionReadProgressRegistry {
 impl Default for RegionReadProgressRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum CheckLeaderUnreturnedReason {
+    RegistryMiss {
+        registry_recent_mutations: Vec<CheckLeaderRegistryMutation>,
+    },
+    LeaderInfoMismatch {
+        leader_info_mismatch: CheckLeaderLeaderInfoMismatch,
+    },
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderRegistryMutation {
+    kind: &'static str,
+    had_previous_entry: bool,
+}
+
+struct CheckLeaderRegistryDiagnostics {
+    recent_mutations_by_region: HashMap<u64, VecDeque<CheckLeaderRegistryMutation>>,
+}
+
+impl CheckLeaderRegistryDiagnostics {
+    fn new() -> Self {
+        Self {
+            recent_mutations_by_region: HashMap::default(),
+        }
+    }
+
+    fn record(&mut self, kind: &'static str, region_id: u64, had_previous_entry: bool) {
+        let recent_mutations = self
+            .recent_mutations_by_region
+            .entry(region_id)
+            .or_default();
+        if recent_mutations.len() >= CHECK_LEADER_REGISTRY_MUTATION_LIMIT {
+            recent_mutations.pop_front();
+        }
+        recent_mutations.push_back(CheckLeaderRegistryMutation {
+            kind,
+            had_previous_entry,
+        });
+    }
+
+    fn recent_mutations(&self, region_id: u64) -> Vec<CheckLeaderRegistryMutation> {
+        self.recent_mutations_by_region
+            .get(&region_id)
+            .map(|mutations| mutations.iter().copied().collect())
+            .unwrap_or_default()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoSnapshot {
+    leader_id: u64,
+    leader_term: u64,
+    epoch_conf_ver: u64,
+    epoch_version: u64,
+    leader_store_id: Option<u64>,
+    peer_count: usize,
+}
+
+impl CheckLeaderLeaderInfoSnapshot {
+    fn from_local_info(local_info: &LocalLeaderInfo) -> Self {
+        Self {
+            leader_id: local_info.leader_id,
+            leader_term: local_info.leader_term,
+            epoch_conf_ver: local_info.epoch.get_conf_ver(),
+            epoch_version: local_info.epoch.get_version(),
+            leader_store_id: local_info.leader_store_id,
+            peer_count: local_info.peers.len(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoUpdate {
+    source: &'static str,
+    update_count: u64,
+    before: CheckLeaderLeaderInfoSnapshot,
+    after: CheckLeaderLeaderInfoSnapshot,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoMismatch {
+    leader_id_matched: bool,
+    leader_term_matched: bool,
+    region_epoch_matched: bool,
+    current: CheckLeaderLeaderInfoSnapshot,
+    last_update: Option<CheckLeaderLeaderInfoUpdate>,
+}
+
+impl CheckLeaderLeaderInfoMismatch {
+    fn from_core(core: &RegionReadProgressCore, leader_info: &LeaderInfo) -> Self {
+        Self {
+            leader_id_matched: core.leader_info.leader_id == leader_info.peer_id,
+            leader_term_matched: core.leader_info.leader_term == leader_info.term,
+            region_epoch_matched: is_region_epoch_equal(
+                &core.leader_info.epoch,
+                leader_info.get_region_epoch(),
+            ),
+            current: CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info),
+            last_update: core.last_leader_info_update,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CheckLeaderUnreturnedRegion {
+    region_id: u64,
+    reason: CheckLeaderUnreturnedReason,
+    request_peer_id: u64,
+    request_term: u64,
+    request_epoch_conf_ver: u64,
+    request_epoch_version: u64,
+}
+
+impl CheckLeaderUnreturnedRegion {
+    fn new(leader_info: &LeaderInfo, reason: CheckLeaderUnreturnedReason) -> Self {
+        let region_epoch = leader_info.get_region_epoch();
+        Self {
+            region_id: leader_info.get_region_id(),
+            reason,
+            request_peer_id: leader_info.peer_id,
+            request_term: leader_info.term,
+            request_epoch_conf_ver: region_epoch.get_conf_ver(),
+            request_epoch_version: region_epoch.get_version(),
+        }
     }
 }
 
@@ -1479,6 +1684,16 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
         now: Option<Instant>,
     ) -> bool {
+        self.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+            .is_none()
+    }
+
+    fn consume_leader_info_and_get_mismatch<E: KvEngine>(
+        &self,
+        leader_info: &LeaderInfo,
+        coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
+    ) -> Option<CheckLeaderLeaderInfoMismatch> {
         let mut core = self.core.lock().unwrap();
         if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
             || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
@@ -1500,9 +1715,14 @@ impl RegionReadProgress {
             coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }
         // whether the provided `LeaderInfo` is same as ours
-        core.leader_info.leader_term == leader_info.term
+        if core.leader_info.leader_term == leader_info.term
             && core.leader_info.leader_id == leader_info.peer_id
             && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+        {
+            None
+        } else {
+            Some(CheckLeaderLeaderInfoMismatch::from_core(&core, leader_info))
+        }
     }
 
     // Dump the `LeaderInfo` and the peer list
@@ -1515,19 +1735,33 @@ impl RegionReadProgress {
     }
 
     pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
+        self.update_leader_info_with_source("update_leader_info", peer_id, term, region)
+    }
+
+    pub fn update_leader_info_with_source(
+        &self,
+        source: &'static str,
+        peer_id: u64,
+        term: u64,
+        region: &Region,
+    ) {
         let mut core = self.core.lock().unwrap();
+        let before = CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info);
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
-        if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
-            core.leader_info.epoch = region.get_region_epoch().clone();
-        }
-        if core.leader_info.peers != region.get_peers() {
-            // In v2, we check peers and region epoch independently, because
-            // peers are incomplete but epoch is set correctly during split.
-            core.leader_info.peers = region.get_peers().to_vec();
-        }
-        core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+        core.update_region(region);
+        core.record_leader_info_update(source, before);
+    }
+
+    pub fn update_region(&self, region: &Region) {
+        self.update_region_with_source("update_region", region);
+    }
+
+    pub fn update_region_with_source(&self, source: &'static str, region: &Region) {
+        let mut core = self.core.lock().unwrap();
+        let before = CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info);
+        core.update_region(region);
+        core.record_leader_info_update(source, before);
     }
 
     /// Reset `safe_ts` and `read_index_safe_ts` to 0 and stop updating them
@@ -1610,6 +1844,11 @@ pub struct RegionReadProgressCore {
     read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,
+    // Number of in-memory updates to `leader_info`, used only for diagnosis.
+    leader_info_update_count: u64,
+    // Last in-memory update to `leader_info`, printed only by check-leader
+    // anomaly logs.
+    last_leader_info_update: Option<CheckLeaderLeaderInfoUpdate>,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
     // After the region commit merged, the region's key range is extended and the region's
@@ -1695,6 +1934,8 @@ impl RegionReadProgressCore {
             applied_index,
             read_state: ReadState::default(),
             leader_info: LocalLeaderInfo::new(region),
+            leader_info_update_count: 0,
+            last_leader_info_update: None,
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
             pause: is_witness,
@@ -1703,6 +1944,33 @@ impl RegionReadProgressCore {
             last_instant_of_update_safe_ts: None,
             last_instant_of_consume_leader: None,
         }
+    }
+
+    fn update_region(&mut self, region: &Region) {
+        if !is_region_epoch_equal(region.get_region_epoch(), &self.leader_info.epoch) {
+            self.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if self.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
+            self.leader_info.peers = region.get_peers().to_vec();
+        }
+        self.leader_info.leader_store_id =
+            find_store_id(&self.leader_info.peers, self.leader_info.leader_id);
+    }
+
+    fn record_leader_info_update(
+        &mut self,
+        source: &'static str,
+        before: CheckLeaderLeaderInfoSnapshot,
+    ) {
+        self.leader_info_update_count += 1;
+        self.last_leader_info_update = Some(CheckLeaderLeaderInfoUpdate {
+            source,
+            update_count: self.leader_info_update_count,
+            before,
+            after: CheckLeaderLeaderInfoSnapshot::from_local_info(&self.leader_info),
+        });
     }
 
     // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
@@ -1905,7 +2173,7 @@ pub fn validate_split_region(
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{sync::Arc, thread};
 
     use engine_test::kv::KvTestEngine;
     use kvproto::{
@@ -2520,6 +2788,113 @@ mod tests {
         assert_eq!(
             rrp.core.lock().unwrap().get_local_leader_info().peers,
             *region.get_peers(),
+        );
+    }
+
+    #[test]
+    fn test_check_leader_rejects_stale_epoch_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut old_region = metapb::Region::default();
+        old_region.set_id(1);
+        old_region.mut_region_epoch().set_version(10);
+        old_region.mut_region_epoch().set_conf_ver(10);
+        old_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let mut changed_region = old_region.clone();
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.mut_peers().push(new_peer(3, 3));
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 5, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&old_region, 10, 10, 2));
+        follower_progress.update_leader_info(1, 5, &old_region);
+
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress.clone());
+
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        follower_progress.update_leader_info(1, 5, &changed_region);
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn test_check_leader_rejects_stale_leader_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut changed_region = metapb::Region::default();
+        changed_region.set_id(1);
+        changed_region.mut_region_epoch().set_version(10);
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)].into());
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 6, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&changed_region, 10, 10, 3));
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress.clone());
+
+        follower_progress.update_leader_info(raft::INVALID_ID, 6, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        follower_progress.update_leader_info(1, 5, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        follower_progress.update_leader_info(1, 6, &changed_region);
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn test_region_update_keeps_resolved_ts_leader_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut old_region = metapb::Region::default();
+        old_region.set_id(1);
+        old_region.mut_region_epoch().set_version(10);
+        old_region.mut_region_epoch().set_conf_ver(10);
+        old_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let mut changed_region = old_region.clone();
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.mut_peers().push(new_peer(3, 3));
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 6, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&old_region, 10, 10, 2));
+        follower_progress.update_leader_info(1, 6, &old_region);
+        follower_progress.update_region(&changed_region);
+
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress);
+
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
         );
     }
 

@@ -325,9 +325,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
-        // Update leader info
         self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+            .update_region_with_source("v2_peer_set_region", self.region());
 
         self.txn_context
             .on_region_changed(self.term(), self.region());
