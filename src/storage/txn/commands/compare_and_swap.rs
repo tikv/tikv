@@ -5,7 +5,6 @@ use api_version::{ApiV2, KvFormat, RawValue, match_template_api_version};
 use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
-use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
 use crate::storage::{
@@ -83,7 +82,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
             cf,
             &key,
-            &mut Statistics::default(),
+            wctx.statistics,
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
@@ -447,6 +446,11 @@ mod tests {
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
+        assert_eq!(statistic.data.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistic.data.flow_stats.read_bytes,
+            F::encode_raw_key(raw_key, None).as_encoded().len()
+        );
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
             F::encode_raw_key(raw_key, Some(101.into())),
