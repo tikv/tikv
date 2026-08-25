@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicI64, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -18,7 +18,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
 
-use super::{Error, Result, metrics::DETECTOR_PENDING_MSGS};
+use super::{metrics::DETECTOR_PENDING_MSGS, Error, Result};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
