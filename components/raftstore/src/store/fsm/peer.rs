@@ -91,7 +91,10 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat},
+        msg::{
+            AUTO_SPLIT_SOURCE, Callback, CampaignType, ExtCallback, InspectedRaftMessage,
+            PeerClearMetaStat,
+        },
         peer::{
             ConsistencyState, Peer, PendingRemoveReason, PersistSnapshotResult, StaleState,
             TransferLeaderContext,
@@ -139,6 +142,38 @@ const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 const SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE: u64 = 100;
 const SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE: u64 = 10;
 const SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE: u64 = 1024;
+
+const LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD: &str = "split_checker_by_load";
+const LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE: &str = "split_checker_by_size";
+
+fn split_reason_for_source(source: &str) -> SplitReason {
+    match source {
+        LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE => SplitReason::Size,
+        LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD | AUTO_SPLIT_SOURCE => SplitReason::Load,
+        _ => SplitReason::Admin,
+    }
+}
+
+fn right_derive_for_source(source: &str, configured: bool) -> bool {
+    source == AUTO_SPLIT_SOURCE || configured
+}
+
+fn validate_split_region_for_source(
+    region_id: u64,
+    peer_id: u64,
+    region: &Region,
+    epoch: &RegionEpoch,
+    split_keys: &[Vec<u8>],
+    source: &str,
+) -> Result<()> {
+    util::validate_split_region(region_id, peer_id, region, epoch, split_keys)?;
+    if source == AUTO_SPLIT_SOURCE {
+        split_keys
+            .iter()
+            .try_for_each(|key| util::check_key_in_region_exclusive(key, region))?;
+    }
+    Ok(())
+}
 
 static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -6680,12 +6715,13 @@ where
             )));
             return;
         }
-        if let Err(e) = util::validate_split_region(
+        if let Err(e) = validate_split_region_for_source(
             self.fsm.region_id(),
             self.fsm.peer_id(),
             self.region(),
             &region_epoch,
             &split_keys,
+            source,
         ) {
             info!(
                 "invalid split request";
@@ -6698,31 +6734,32 @@ where
             return;
         }
         let region = self.fsm.peer.region();
-        let split_reason = match source {
-            "split_checker_by_size" => SplitReason::Size,
-            "split_checker_by_load" => SplitReason::Load,
-            _ => SplitReason::Admin,
-        };
         let task = PdTask::AskBatchSplit {
             region: region.clone(),
             split_keys,
             peer: self.fsm.peer.peer.clone(),
-            right_derive: self.ctx.cfg.right_derive_when_split,
+            right_derive: right_derive_for_source(source, self.ctx.cfg.right_derive_when_split),
             share_source_region_size,
             callback: cb,
-            split_reason,
+            split_reason: split_reason_for_source(source),
         };
-        if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            let error_kind: &'static str = match &e {
+                ScheduleError::Stopped(_) => "Stopped",
+                ScheduleError::Full(_) => "Full",
+            };
             warn!(
-                "failed to notify pd to split: Stopped";
+                "failed to notify pd to split";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "reason" => error_kind,
             );
-            match t {
+            match e.into_inner() {
                 PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!(
-                        "{} failed to split: Stopped",
-                        self.fsm.peer.tag
+                        "{} failed to split: {}",
+                        self.fsm.peer.tag,
+                        error_kind
                     )));
                 }
                 _ => unreachable!(),
@@ -6973,7 +7010,7 @@ where
         if source == "bucket" {
             return;
         }
-        let reason = if source == "auto_split" {
+        let reason = if source == AUTO_SPLIT_SOURCE {
             SplitReason::Load
         } else {
             SplitReason::Admin
@@ -7822,6 +7859,79 @@ mod tests {
         local_metrics::RaftMetrics,
         msg::{Callback, ExtCallback, RaftCommand},
     };
+
+    #[test]
+    fn test_auto_split_source_semantics() {
+        assert_eq!(
+            split_reason_for_source(AUTO_SPLIT_SOURCE),
+            SplitReason::Load
+        );
+        assert!(right_derive_for_source(AUTO_SPLIT_SOURCE, false));
+
+        assert_eq!(
+            split_reason_for_source(LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD),
+            SplitReason::Load
+        );
+        assert!(!right_derive_for_source(
+            LOAD_SPLIT_CHECKER_SOURCE_BY_LOAD,
+            false
+        ));
+        assert_eq!(
+            split_reason_for_source(LOAD_SPLIT_CHECKER_SOURCE_BY_SIZE),
+            SplitReason::Size
+        );
+        assert_eq!(split_reason_for_source("test"), SplitReason::Admin);
+    }
+
+    #[test]
+    fn test_auto_split_key_must_be_inside_region_exclusively() {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"z".to_vec());
+        region.mut_region_epoch().set_version(2);
+        let epoch = region.get_region_epoch().clone();
+
+        validate_split_region_for_source(
+            region.get_id(),
+            10,
+            &region,
+            &epoch,
+            &[b"a".to_vec()],
+            "test",
+        )
+        .unwrap();
+        validate_split_region_for_source(
+            region.get_id(),
+            10,
+            &region,
+            &epoch,
+            &[b"a".to_vec()],
+            AUTO_SPLIT_SOURCE,
+        )
+        .unwrap_err();
+        validate_split_region_for_source(
+            region.get_id(),
+            10,
+            &region,
+            &epoch,
+            &[b"m".to_vec()],
+            AUTO_SPLIT_SOURCE,
+        )
+        .unwrap();
+
+        let mut stale_epoch = epoch;
+        stale_epoch.set_version(1);
+        validate_split_region_for_source(
+            region.get_id(),
+            10,
+            &region,
+            &stale_epoch,
+            &[b"m".to_vec()],
+            AUTO_SPLIT_SOURCE,
+        )
+        .unwrap_err();
+    }
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {
