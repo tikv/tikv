@@ -63,6 +63,10 @@ Concrete startup anchors:
 High-risk contracts:
 
 - `RaftCmdRequest` header validation against region epoch and peer identity
+- classic load-based split candidates may outlive the peer identity observed
+  with their read statistics; execution must re-enter the current peer FSM and
+  build the split request from its current Region and peer; a local follower
+  rejects the candidate rather than forwarding it to the current leader
 - persisted apply/raft state alignment in `peer_storage.rs`
 - callback/result semantics in `store/msg.rs` and `store/fsm/apply.rs`
 
@@ -143,6 +147,8 @@ High-risk contracts:
 
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
+- Normal load-based split keys must be validated against the current Region's
+  exclusive range before requesting split IDs from PD.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
 - `EntryStorage` caches are performance hints, not an authority for unknown
@@ -177,6 +183,11 @@ High-risk contracts:
 ## Observability And Operational Signals
 
 - metrics under `store/metrics.rs`, `store/local_metrics.rs`, and worker metrics
+- `split_success` and `split_failed` cover load-split attempts after they reach
+  PD split-ID allocation or admin-request handling; candidates rejected earlier
+  by routing, leadership, epoch/key validation, or scheduler delivery are
+  logged where applicable and are not included; CPU half-split candidates use
+  the split-check outcome metrics
 - PD heartbeat and region/store statistics
 - `store/worker/pd.rs` merges `ReadStats` from both read pools and the
   transaction scheduler, so region heartbeat read-byte deltas include storage
