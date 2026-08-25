@@ -714,7 +714,7 @@ impl AutoSplitController {
         let entries = self
             .cpu_top_fallback_suppressions
             .entry(region_id)
-            .or_default(Vec::new);
+            .or_default();
         if let Some(entry) = entries.iter_mut().find(|entry| {
             entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
                 && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
