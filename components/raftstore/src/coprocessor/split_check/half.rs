@@ -1217,15 +1217,13 @@ mod tests {
         );
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
 
-        let boundary_key =
-            keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
+        let boundary_key = keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
         engine
             .put_cf(CF_DEFAULT, &boundary_key, &boundary_key)
             .unwrap();
         engine.flush_cf(CF_DEFAULT, true).unwrap();
 
-        let interior_key =
-            keys::data_key(Key::from_raw(b"b").append_ts(42.into()).as_encoded());
+        let interior_key = keys::data_key(Key::from_raw(b"b").append_ts(42.into()).as_encoded());
         engine
             .put_cf(CF_DEFAULT, &interior_key, &interior_key)
             .unwrap();
@@ -1306,8 +1304,7 @@ mod tests {
         // Add a second version a@42 and the only valid interior key b@1.  The
         // merged iterator sees a@43, a@42, b@1, so the middle physical entry is
         // a@42 which also collapses onto the range start.
-        let second_boundary =
-            keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
+        let second_boundary = keys::data_key(Key::from_raw(b"a").append_ts(42.into()).as_encoded());
         engine
             .put_cf(CF_DEFAULT, &second_boundary, &second_boundary)
             .unwrap();
