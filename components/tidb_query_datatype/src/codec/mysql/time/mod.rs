@@ -2094,8 +2094,16 @@ impl Time {
                 .single()
                 .and_then(|t| t.checked_add_signed(dur))
         } else {
-            Utc::now()
-                .date_naive()
+            // Use today's date in the session time zone, not the UTC date,
+            // so that a TIME value cast to DATETIME lands on the same
+            // calendar day a client in that time zone would expect --
+            // otherwise, near a local midnight boundary where the local
+            // and UTC dates differ, the date could be off by one.
+            ctx.cfg
+                .tz
+                .from_utc_datetime(&Utc::now().naive_utc())
+                .naive_local()
+                .date()
                 .and_hms_opt(0, 0, 0)
                 .and_then(|t| t.and_local_timezone(Utc).single())
                 .and_then(|t| t.checked_add_signed(dur))
@@ -3993,6 +4001,30 @@ mod tests {
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             assert_eq!(actual.to_string(), expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_duration_uses_session_timezone_date() -> Result<()> {
+        let mut cfg = EvalConfig::default();
+        cfg.set_time_zone_by_name("Asia/Shanghai")?;
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+
+        let duration = Duration::parse(&mut ctx, "01:00:00", MAX_FSP)?;
+        let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
+
+        // The date component must match "today" as seen in the session time
+        // zone (Asia/Shanghai), not the UTC date -- these can differ near a
+        // local midnight boundary.
+        let expected_date = ctx
+            .cfg
+            .tz
+            .from_utc_datetime(&Utc::now().naive_utc())
+            .naive_local()
+            .date();
+        let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
+        assert_eq!(c_datetime.date_naive(), expected_date);
+
         Ok(())
     }
 
