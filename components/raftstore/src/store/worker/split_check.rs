@@ -888,6 +888,14 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     /// and deduplicated *before* the midpoint is chosen, so the fallback never
     /// selects an invalid boundary version and gives up while a valid interior
     /// user key still exists.
+    ///
+    /// The scan is bounded by the number of *distinct logical user keys*
+    /// examined (`MAX_SCAN_KEYS`), not by the number of physical entries.
+    /// Counting physical entries would let a boundary key with many MVCC
+    /// versions exhaust the budget before a valid interior key is reached,
+    /// leaving the range unsplit.  A separate, much larger physical ceiling
+    /// (`MAX_SCAN_PHYSICAL_KEYS`) guards against pathological single keys with
+    /// an enormous version count so total work stays bounded either way.
     fn scan_middle_in_range(
         &self,
         tablet: &EK,
@@ -895,7 +903,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<Vec<u8>> {
+        // Budget of distinct logical user keys to consider as split candidates.
         const MAX_SCAN_KEYS: usize = 1024;
+        // Hard ceiling on physical entries so a single key with an extreme
+        // number of MVCC versions cannot cause an unbounded scan.
+        const MAX_SCAN_PHYSICAL_KEYS: usize = 1024 * 1024;
         let mut iter = match MergedIterator::<<EK as Iterable>::Iterator>::new(
             tablet, LARGE_CFS, start_key, end_key, false,
         ) {
@@ -915,29 +927,45 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let range_end = keys::origin_end_key(end_key);
 
         let mut candidates: Vec<Vec<u8>> = Vec::new();
-        let mut scanned = 0;
+        // Tracks the most recent distinct logical user key seen, so different
+        // MVCC versions of one key are collapsed and counted once.
+        let mut last_seen_key: Option<Vec<u8>> = None;
+        let mut logical_keys = 0;
+        let mut physical_keys = 0;
         while let Some(e) = iter.next() {
-            scanned += 1;
+            physical_keys += 1;
             // Normalize each entry the same way SplitObserver does, so a
             // candidate cannot become an invalid boundary after timestamp
             // stripping.
             let split_key = strip_timestamp_if_exists(keys::origin_key(e.key()).to_vec());
 
-            // Keep only candidates that stay strictly inside the range and are
-            // valid region split points.  Skipping invalid boundary versions
-            // here (rather than only inspecting the middle physical entry)
-            // ensures a valid interior key is still selectable.
-            let boundary_ok = split_key.as_slice() > range_start
-                && (range_end.is_empty() || split_key.as_slice() < range_end);
-            if boundary_ok && is_valid_split_key(&split_key, 0, region) {
-                // Deduplicate consecutive logical user keys; different MVCC
-                // versions of one key normalize to the same value.
-                if candidates.last().map(Vec::as_slice) != Some(split_key.as_slice()) {
+            // Only advance the logical-key budget when the normalized key
+            // changes; the merged iterator returns versions of one key
+            // consecutively, so this collapses all its MVCC versions into a
+            // single logical key.  Applying the bound here (rather than per
+            // physical entry) ensures a boundary key with many versions cannot
+            // exhaust the budget before a valid interior key is reached.
+            let is_new_logical_key = last_seen_key.as_deref() != Some(split_key.as_slice());
+            if is_new_logical_key {
+                if logical_keys >= MAX_SCAN_KEYS {
+                    break;
+                }
+                logical_keys += 1;
+                last_seen_key = Some(split_key.clone());
+
+                // Keep only candidates that stay strictly inside the range and
+                // are valid region split points.  Skipping invalid boundary
+                // versions here (rather than only inspecting the middle
+                // physical entry) ensures a valid interior key is still
+                // selectable.
+                let boundary_ok = split_key.as_slice() > range_start
+                    && (range_end.is_empty() || split_key.as_slice() < range_end);
+                if boundary_ok && is_valid_split_key(&split_key, 0, region) {
                     candidates.push(split_key);
                 }
             }
 
-            if scanned >= MAX_SCAN_KEYS {
+            if physical_keys >= MAX_SCAN_PHYSICAL_KEYS {
                 break;
             }
         }

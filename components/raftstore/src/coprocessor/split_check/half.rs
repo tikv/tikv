@@ -1338,4 +1338,95 @@ mod tests {
         ));
         must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
     }
+
+    /// Regression test: the bounded fallback scan must count distinct logical
+    /// user keys, not physical MVCC versions.  Here the range-start key `a` has
+    /// 1024 physical versions followed by a valid interior key `b`.  A cap that
+    /// counted physical entries would stop after the 1024 `a` versions and
+    /// never reach `b`, emitting no AskSplit.  Counting logical keys instead
+    /// lets the scan skip past all versions of `a` and still select `b`.
+    #[test]
+    fn test_iterator_fallback_cap_does_not_skip_late_interior_key() {
+        let path = Builder::new()
+            .prefix("test-iterator-fallback-cap")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        region.set_start_key(Key::from_raw(b"a").into_encoded());
+        region.set_end_key(Key::from_raw(b"c").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        // Flush a@5000 alone so it becomes the property candidate; it normalizes
+        // to the range start `a` and is therefore unusable.
+        let property_boundary =
+            keys::data_key(Key::from_raw(b"a").append_ts(5000.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &property_boundary, &property_boundary)
+            .unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // 1023 more versions of `a` (1024 total including a@5000), then the only
+        // valid interior key `b`.  A physical-entry cap of 1024 would break
+        // before reaching `b`.
+        for ts in 0..1023u64 {
+            let key = keys::data_key(Key::from_raw(b"a").append_ts(ts.into()).as_encoded());
+            engine.put_cf(CF_DEFAULT, &key, &key).unwrap();
+        }
+        let interior_key = keys::data_key(Key::from_raw(b"b").append_ts(1.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &interior_key, &interior_key)
+            .unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        let data_start = keys::data_key(Key::from_raw(b"a").as_encoded());
+        let data_end = keys::data_end_key(Key::from_raw(b"c").as_encoded());
+        let property_candidate = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&data_start),
+            Some(&data_end),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            crate::coprocessor::split_observer::strip_timestamp_if_exists(
+                keys::origin_key(&property_candidate).to_vec()
+            ),
+            Key::from_raw(b"a").as_encoded().as_slice(),
+            "the property candidate must normalize to the range boundary"
+        );
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"a".to_vec()),
+            Some(b"c".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
+    }
 }
