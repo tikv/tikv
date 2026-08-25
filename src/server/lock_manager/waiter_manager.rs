@@ -583,15 +583,6 @@ impl WaiterManager {
                 continue;
             }
 
-<<<<<<< HEAD
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info
-                && previous_wait_info.allow_lock_with_conflict
-            {
-                self.detector_scheduler
-                    .clean_up_wait_for(event.start_ts, previous_wait_info);
-                self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, diag_ctx);
-=======
             if let Some((previous_wait_info, _diag_ctx)) = previous_wait_info {
                 if previous_wait_info.allow_lock_with_conflict {
                     // First owner change: clean up the registered edge and do
@@ -604,7 +595,6 @@ impl WaiterManager {
                         TASK_COUNTER_METRICS.drop_registered_edge.inc();
                     }
                 }
->>>>>>> 1ef0a1961c (lock_manager: skip detect on fair waiter owner change (#20002))
             }
         }
     }
@@ -626,17 +616,6 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
-<<<<<<< HEAD
-=======
-            if waiter.wait_info.lock_info.is_shared_lock() {
-                // When deadlock detected on a shared lock, some wait-for entries might have
-                // been registered to the detect table. So do clean up here to avoid those
-                // entries causing false-positive deadlock errors.
-                if let Some(edge) = waiter.registered_edge.clone() {
-                    self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
-                }
-            }
->>>>>>> 1ef0a1961c (lock_manager: skip detect on fair waiter owner change (#20002))
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
     }
@@ -717,7 +696,7 @@ impl FutureRunnable<Task> for WaiterManager {
 #[cfg(test)]
 pub mod tests {
     use std::{
-        sync::{Mutex, mpsc},
+        sync::{mpsc, Mutex},
         thread::sleep,
         time::Duration,
     };
