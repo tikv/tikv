@@ -2316,7 +2316,7 @@ mod tests {
         // no clip to zero
         let cs = vec![
             // (origin, expect, overflow)
-            (10.5, 11u64, false),
+            (10.5, 10u64, false), // round-to-even: 10 is even
             (10.4, 10u64, false),
             (
                 ((1u64 << 63) + (1u64 << 62)) as f64,
