@@ -20,6 +20,7 @@ use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
+use txn_types::TimeStamp;
 
 use self::hooking::AbortedCtx;
 use super::{
@@ -72,7 +73,8 @@ impl slog::KV for ExecutionConfig {
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         let date = |pts| {
-            chrono::DateTime::<Utc>::from_timestamp_millis(pts as i64)
+            let ts = TimeStamp::new(pts).physical();
+            chrono::DateTime::<Utc>::from_timestamp_millis(ts as i64)
                 .map(|dt| dt.to_string())
                 .unwrap_or_else(|| format!("invalid_ts({pts})"))
         };
