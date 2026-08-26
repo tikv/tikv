@@ -2089,25 +2089,26 @@ impl Time {
     ) -> Result<Self> {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
-        let time = if unlikely(ctx.cfg.is_test) {
-            Utc.with_ymd_and_hms(2020, 2, 2, 0, 0, 0)
-                .single()
-                .and_then(|t| t.checked_add_signed(dur))
+        // Both branches convert a "now" instant into the session time zone
+        // before taking its date, so that is_test mode exercises the same
+        // time zone handling as production, differing only in using a
+        // fixed instant instead of a live clock read. Otherwise, near a
+        // local midnight boundary where the local and UTC dates differ,
+        // the date could be off by one.
+        let now = if unlikely(ctx.cfg.is_test) {
+            Utc.with_ymd_and_hms(2020, 2, 2, 0, 0, 0).unwrap()
         } else {
-            // Use today's date in the session time zone, not the UTC date,
-            // so that a TIME value cast to DATETIME lands on the same
-            // calendar day a client in that time zone would expect --
-            // otherwise, near a local midnight boundary where the local
-            // and UTC dates differ, the date could be off by one.
-            ctx.cfg
-                .tz
-                .from_utc_datetime(&Utc::now().naive_utc())
-                .naive_local()
-                .date()
-                .and_hms_opt(0, 0, 0)
-                .and_then(|t| t.and_local_timezone(Utc).single())
-                .and_then(|t| t.checked_add_signed(dur))
+            Utc::now()
         };
+        let time = ctx
+            .cfg
+            .tz
+            .from_utc_datetime(&now.naive_utc())
+            .naive_local()
+            .date()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|t| t.and_local_timezone(Utc).single())
+            .and_then(|t| t.checked_add_signed(dur));
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
@@ -4003,27 +4004,24 @@ mod tests {
         }
         Ok(())
     }
+
     #[test]
     fn test_from_duration_uses_session_timezone_date() -> Result<()> {
-        // 2020-02-01 16:00:00 UTC is 2020-02-02 00:00:00 in Asia/Shanghai
-        // (UTC+8) -- the UTC and session-local dates differ, which is the
-        // exact condition that exposes the bug this test guards against.
+        // is_test uses a fixed instant of 2020-02-02 00:00:00 UTC. In a
+        // negative-offset zone such as America/Los_Angeles (UTC-8 in
+        // February, before DST), that instant falls on the previous local
+        // day -- exercising the exact condition this fix addresses: the
+        // session-local date differing from the UTC date. This calls the
+        // real Time::from_duration, not a standalone re-derivation of the
+        // conversion logic.
         let mut cfg = EvalConfig::default();
-        cfg.set_time_zone_by_name("Asia/Shanghai")?;
-        let tz = cfg.tz;
+        cfg.set_time_zone_by_name("America/Los_Angeles")?;
+        cfg.is_test = true;
+        let mut ctx = EvalContext::new(Arc::new(cfg));
 
-        let fixed_utc_now = Utc.with_ymd_and_hms(2020, 2, 1, 16, 0, 0).unwrap();
-        let local_date = tz
-            .from_utc_datetime(&fixed_utc_now.naive_utc())
-            .naive_local()
-            .date();
-        assert_eq!(
-            local_date,
-            chrono::NaiveDate::from_ymd_opt(2020, 2, 2).unwrap()
-        );
-
-        let expected = local_date.and_hms_opt(1, 0, 0).unwrap();
-        assert_eq!(expected.to_string(), "2020-02-02 01:00:00");
+        let duration = Duration::parse(&mut ctx, "01:00:00", MAX_FSP)?;
+        let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
+        assert_eq!(actual.to_string(), "2020-02-01 01:00:00.000000");
 
         Ok(())
     }
