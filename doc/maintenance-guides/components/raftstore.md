@@ -189,6 +189,9 @@ High-risk contracts:
   logged where applicable and are not included; CPU half-split candidates use
   the split-check outcome metrics
 - PD heartbeat and region/store statistics
+- `store/worker/pd.rs` merges `ReadStats` from both read pools and the
+  transaction scheduler, so region heartbeat read-byte deltas include storage
+  reads caused by foreground write commands.
 - logs around snapshot, split/merge, peer lifecycle, disk-full, and unsafe
   recovery paths
 - memory accounting for raft entries/messages/apply state

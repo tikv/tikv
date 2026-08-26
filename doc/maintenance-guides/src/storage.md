@@ -101,6 +101,10 @@ High-risk contracts:
 - `txn/sched_pool.rs` selects the priority queue only for customized resource
   groups. Background-only control stays on the vanilla queue and throttles
   matching long-running tasks inside the pool.
+- `txn/sched_pool.rs` accumulates MVCC read flow from non-readonly scheduler
+  commands, including reads performed by foreground writes, and reports
+  region-level `ReadStats` to the raftstore reporter during ticker and worker
+  shutdown flushes. Key ranges and bucket deltas are unavailable on this path.
 
 ### MVCC
 
@@ -150,6 +154,9 @@ High-risk contracts:
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
+- PD read-flow reports include reads performed by foreground write commands;
+  inspect `txn/sched_pool.rs` when PD read bytes do not match the read-pool
+  workload.
 
 Start triage with:
 

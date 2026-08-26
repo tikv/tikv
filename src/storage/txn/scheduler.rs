@@ -87,7 +87,9 @@ use crate::{
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
+            sched_pool::{
+                SchedPool, tls_collect_query, tls_collect_read_flow, tls_collect_scan_details,
+            },
             tracker::TlsFutureTracker,
             txn_status_cache::TxnStatusCache,
         },
@@ -1380,6 +1382,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             } else {
                 record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
+                tls_collect_read_flow(region_id, &sched_details.stat);
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
             let elapsed = sched_details.start_instant.saturating_elapsed();
