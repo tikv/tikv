@@ -48,8 +48,8 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes,
+    FutureExt, ResourceTagFactory, io_collection_config, record_logical_read_bytes,
+    record_logical_write_bytes, record_network_in_bytes,
 };
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
@@ -1347,11 +1347,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
 
-        let is_resumed_pessimistic_lock =
-            matches!(task.cmd(), Command::AcquirePessimisticLockResumed(_));
-        let resource_tag = (!is_resumed_pessimistic_lock)
-            .then(|| self.inner.resource_tag_factory.new_tag(task.cmd().ctx()));
-        let process = async {
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd().ctx());
+        async {
             let tag = task.cmd().tag();
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
@@ -1383,9 +1380,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.process_read(snapshot, task, &mut sched_details);
                 record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
-                if !is_resumed_pessimistic_lock {
-                    record_logical_write_bytes(task.cmd().write_bytes() as u64);
-                }
+                record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
                 tls_collect_read_flow(region_id, &sched_details.stat);
             };
@@ -1399,12 +1394,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 ts,
                 sched_details,
             );
-        };
-        if let Some(resource_tag) = resource_tag {
-            process.in_resource_metering_tag(resource_tag).await;
-        } else {
-            process.await;
         }
+        .in_resource_metering_tag(resource_tag)
+        .await;
     }
 
     /// Processes a read command within a worker thread, then posts
@@ -1476,12 +1468,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
             let begin_instant = Instant::now();
-            let res = task.process_write::<E, _, _>(
-                snapshot,
-                context,
-                &txn_scheduler.inner.resource_tag_factory,
-                tag,
-            );
+            // A resumed-lock command can merge requests with different tags. TopSQL
+            // intentionally attributes the batch to the command's first context as
+            // its representative, avoiding O(batch size) PerfContext work here.
+            let observe_perf_context = tag != CommandKind::acquire_pessimistic_lock_resumed
+                || io_collection_config().detailed_io_collection_enabled();
+            let res = if observe_perf_context {
+                unsafe {
+                    with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
+                }
+            } else {
+                task.process_write(snapshot, context)
+            };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
             sched_details.block_read_nanos = GLOBAL_TRACKERS

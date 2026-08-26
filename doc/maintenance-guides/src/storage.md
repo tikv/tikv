@@ -168,9 +168,11 @@ High-risk contracts:
   write commands. In particular, transactional writes and
   `raw_compare_and_swap` must retain the `Storage` PerfContext because CAS reads
   the prior value before deciding whether to write. Resumed pessimistic-lock
-  batches can contain work from multiple requests, so their read and logical
-  write accounting must use each item's original request context instead of the
-  synthetic command's first context. Do not attribute Raftstore
+  batches can contain work from multiple requests. TopSQL intentionally uses
+  the synthetic command's first context as the representative for the whole
+  batch, including logical writes and the single detailed-I/O PerfContext
+  observation. Mixed-tag batches therefore have approximate attribution,
+  avoiding per-item work on the lock-wakeup path. Do not attribute Raftstore
   apply/store write-worker activity to the request: those paths use write-only
   PerfContext metrics and may batch work from multiple requests.
 

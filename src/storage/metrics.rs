@@ -2,24 +2,17 @@
 
 //! Prometheus metrics for storage functionality.
 
-use std::{cell::RefCell, marker::PhantomData, mem, sync::Arc};
+use std::{cell::RefCell, mem, sync::Arc};
 
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
-use kvproto::{
-    kvrpcpb::{Context, KeyRange},
-    metapb,
-    pdpb::QueryKind,
-};
+use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
 use lazy_static::lazy_static;
 use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
-use resource_metering::{
-    Guard as ResourceMeteringGuard, ResourceTagFactory, io_collection_config,
-    record_rocksdb_block_read_count,
-};
+use resource_metering::record_rocksdb_block_read_count;
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
@@ -395,14 +388,10 @@ fn start_perf_context<E: Engine>(cmd: CommandKind) -> bool {
     with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.start_observe()).is_some()
 }
 
-fn finish_perf_context<E: Engine>(cmd: CommandKind, report_to_tracker: bool) {
-    let delta = if report_to_tracker {
-        with_perf_context_mut::<E, _>(cmd, |perf_context| {
-            perf_context.report_metrics(&[get_tls_tracker_token()])
-        })
-    } else {
-        with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.report_metrics(&[]))
-    };
+fn finish_perf_context<E: Engine>(cmd: CommandKind) {
+    let delta = with_perf_context_mut::<E, _>(cmd, |perf_context| {
+        perf_context.report_metrics(&[get_tls_tracker_token()])
+    });
     if let Some(delta) = delta {
         record_rocksdb_block_read_count(delta.block_read_count);
     }
@@ -417,90 +406,8 @@ where
         return f();
     }
     let res = f();
-    finish_perf_context::<E>(cmd, true);
+    finish_perf_context::<E>(cmd);
     res
-}
-
-pub(crate) struct RequestResourceContext<'a, E: Engine> {
-    resource_tag_factory: &'a ResourceTagFactory,
-    cmd: CommandKind,
-    observe_perf_context: bool,
-    _phantom: PhantomData<fn() -> E>,
-}
-
-impl<'a, E: Engine> RequestResourceContext<'a, E> {
-    pub(crate) fn new(resource_tag_factory: &'a ResourceTagFactory, cmd: CommandKind) -> Self {
-        let observe_perf_context = io_collection_config().detailed_io_collection_enabled();
-        Self::new_with_perf_context_observation(resource_tag_factory, cmd, observe_perf_context)
-    }
-
-    fn new_with_perf_context_observation(
-        resource_tag_factory: &'a ResourceTagFactory,
-        cmd: CommandKind,
-        observe_perf_context: bool,
-    ) -> Self {
-        Self {
-            resource_tag_factory,
-            cmd,
-            observe_perf_context,
-            _phantom: PhantomData,
-        }
-    }
-
-    pub(crate) fn attach(&self, context: &Context) -> RequestResourceContextGuard<E> {
-        let tag_guard = self.resource_tag_factory.new_tag(context).attach();
-        let observed = if self.observe_perf_context {
-            let observed = start_perf_context::<E>(self.cmd);
-            debug_assert!(observed);
-            observed
-        } else {
-            false
-        };
-        RequestResourceContextGuard {
-            _tag_guard: tag_guard,
-            cmd: self.cmd,
-            observed,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub(crate) struct RequestResourceContextGuard<E: Engine> {
-    _tag_guard: ResourceMeteringGuard,
-    cmd: CommandKind,
-    observed: bool,
-    _phantom: PhantomData<fn() -> E>,
-}
-
-impl<E: Engine> Drop for RequestResourceContextGuard<E> {
-    fn drop(&mut self) {
-        if self.observed {
-            finish_perf_context::<E>(self.cmd, false);
-        }
-    }
-}
-
-#[cfg(test)]
-mod request_resource_context_tests {
-    use tikv_kv::BTreeEngine;
-
-    use super::*;
-
-    #[test]
-    fn test_disabled_detailed_io_skips_perf_context() {
-        let resource_tag_factory = ResourceTagFactory::new_for_test();
-        let request_context =
-            RequestResourceContext::<BTreeEngine>::new_with_perf_context_observation(
-                &resource_tag_factory,
-                CommandKind::acquire_pessimistic_lock_resumed,
-                false,
-            );
-
-        // BTreeEngine uses PanicEngine as its local engine, so this test would
-        // panic if attaching the request context touched PerfContext.
-        let guard = request_context.attach(&Context::default());
-        assert!(!guard.observed);
-    }
 }
 
 make_static_metric! {
