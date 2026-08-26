@@ -107,8 +107,8 @@ impl Task {
         let cmd = self.cmd.take().unwrap();
         match cmd {
             Command::AcquirePessimisticLockResumed(cmd) => {
-                let perf_context = RequestPerfContext::<E>::new(resource_tag_factory, tag);
-                cmd.process_write_with_perf_context(snapshot, context, &perf_context)
+                let resource_context = RequestResourceContext::<E>::new(resource_tag_factory, tag);
+                cmd.process_write_with_resource_context(snapshot, context, &resource_context)
             }
             cmd => unsafe {
                 with_perf_context::<E, _, _>(tag, || cmd.process_write(snapshot, context))

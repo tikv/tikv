@@ -18,7 +18,7 @@ use crate::storage::{
         LockManager, LockWaitToken, lock_wait_context::LockWaitContextSharedState,
         lock_waiting_queue::LockWaitEntry,
     },
-    metrics::RequestPerfContext,
+    metrics::RequestResourceContext,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         Error, Result, acquire_pessimistic_lock,
@@ -96,14 +96,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
 }
 
 impl AcquirePessimisticLockResumed {
-    pub(crate) fn process_write_with_perf_context<S: Snapshot, L: LockManager, E: Engine>(
+    pub(crate) fn process_write_with_resource_context<S: Snapshot, L: LockManager, E: Engine>(
         self,
         snapshot: S,
         context: WriteContext<'_, L>,
-        perf_context: &RequestPerfContext<'_, E>,
+        resource_context: &RequestResourceContext<'_, E>,
     ) -> Result<WriteResult> {
         self.process_write_impl(snapshot, context, |ctx, write_bytes| {
-            let guard = perf_context.observe(ctx);
+            let guard = resource_context.attach(ctx);
             record_logical_write_bytes(write_bytes as u64);
             guard
         })
