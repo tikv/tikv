@@ -273,6 +273,7 @@ impl LockManagerTrait for LockManager {
             timeout,
             cancel_callback,
             diag_ctx.clone(),
+            is_first_lock,
         );
 
         // If it is the first lock the transaction tries to lock, it won't cause
@@ -304,7 +305,12 @@ impl LockManagerTrait for LockManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+        thread,
+        time::Duration,
+    };
 
     use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
@@ -318,7 +324,10 @@ mod tests {
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
-    use crate::{server::resolve::MockStoreAddrResolver, storage::lock_manager::LockDigest};
+    use crate::{
+        server::resolve::MockStoreAddrResolver,
+        storage::lock_manager::{KeyLockWaitInfo, LockDigest, UpdateWaitForEvent},
+    };
 
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
@@ -562,6 +571,153 @@ mod tests {
             500,
         );
         assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
+    }
+
+    fn assert_pending<F: std::future::Future + Unpin>(f: &mut F, msg: &str) {
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(Pin::new(f).poll(&mut cx), Poll::Pending), "{msg}");
+    }
+
+    fn fair_wait_info_for_owner(
+        mut wait_info: KeyLockWaitInfo,
+        new_owner: TimeStamp,
+    ) -> KeyLockWaitInfo {
+        wait_info.allow_lock_with_conflict = true;
+        wait_info.lock_digest.ts = new_owner;
+        wait_info.lock_info.lock_version = new_owner.into_inner();
+        wait_info
+    }
+
+    /// After the owner change, W no longer has W→A. A still-live waiting for
+    /// W must not be reported as deadlock.
+    #[test]
+    fn test_dropped_edge_does_not_false_deadlock_on_old_owner() {
+        let lock_mgr = start_lock_manager();
+        let (mut w, _, mut f_w) = new_test_waiter_with_key(10.into(), 20.into(), b"hot");
+        w.wait_info.allow_lock_with_conflict = true;
+        let token_w = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token_w,
+            1,
+            RegionEpoch::default(),
+            1,
+            w.start_ts,
+            w.wait_info.clone(),
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            w.cancel_callback,
+            diag_ctx(b"hot", b"tag-w", INVALID_TRACKER_TOKEN),
+        );
+        thread::sleep(Duration::from_millis(50));
+        lock_mgr.update_wait_for(vec![UpdateWaitForEvent {
+            token: token_w,
+            start_ts: 10.into(),
+            is_first_lock: false,
+            wait_info: fair_wait_info_for_owner(w.wait_info, 30.into()),
+        }]);
+        thread::sleep(Duration::from_millis(50));
+
+        let (a, _, mut f_a) = new_test_waiter_with_key(20.into(), 10.into(), b"wkey");
+        lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
+            1,
+            RegionEpoch::default(),
+            1,
+            a.start_ts,
+            a.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            a.cancel_callback,
+            diag_ctx(b"wkey", b"tag-a", INVALID_TRACKER_TOKEN),
+        );
+        thread::sleep(Duration::from_millis(150));
+        assert_pending(&mut f_a, "stale W→A would false-deadlock A waiting for W");
+        assert_pending(&mut f_w, "W should still be waiting");
+
+        lock_mgr.remove_lock_wait(token_w);
+        block_on(f_w).unwrap_err();
+    }
+
+    /// Handoff then cycle: this wait must not report deadlock; a new Detect of
+    /// the current owner (retry) must.
+    #[test]
+    fn test_owner_change_misses_cycle_until_retry_detect() {
+        let lock_mgr = start_lock_manager();
+        let (mut w, _, f_w1) = new_test_waiter_with_key(10.into(), 20.into(), b"hot");
+        w.wait_info.allow_lock_with_conflict = true;
+        let token_w = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token_w,
+            1,
+            RegionEpoch::default(),
+            1,
+            w.start_ts,
+            w.wait_info.clone(),
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            w.cancel_callback,
+            diag_ctx(b"hot", b"tag-w", INVALID_TRACKER_TOKEN),
+        );
+        thread::sleep(Duration::from_millis(50));
+        lock_mgr.update_wait_for(vec![UpdateWaitForEvent {
+            token: token_w,
+            start_ts: 10.into(),
+            is_first_lock: false,
+            wait_info: fair_wait_info_for_owner(w.wait_info, 30.into()),
+        }]);
+        thread::sleep(Duration::from_millis(50));
+
+        let (c, _lock_info_c, mut f_c) = new_test_waiter_with_key(30.into(), 10.into(), b"wkey");
+        lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
+            1,
+            RegionEpoch::default(),
+            1,
+            c.start_ts,
+            c.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            c.cancel_callback,
+            diag_ctx(b"wkey", b"tag-c", INVALID_TRACKER_TOKEN),
+        );
+        thread::sleep(Duration::from_millis(150));
+        assert_pending(
+            &mut f_c,
+            "W→C was never registered; cycle must not be visible yet",
+        );
+
+        // End this wait (timeout / retry) and Detect the current owner.
+        lock_mgr.remove_lock_wait(token_w);
+        block_on(f_w1).unwrap_err();
+
+        let (w2, lock_info_w, f_w2) = new_test_waiter_with_key(10.into(), 30.into(), b"hot");
+        lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
+            1,
+            RegionEpoch::default(),
+            1,
+            w2.start_ts,
+            w2.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            w2.cancel_callback,
+            diag_ctx(b"hot", b"tag-w2", INVALID_TRACKER_TOKEN),
+        );
+        assert_elapsed(
+            || {
+                expect_deadlock(
+                    block_on(f_w2).unwrap(),
+                    10.into(),
+                    lock_info_w,
+                    Key::from_raw(b"wkey").gen_hash(),
+                    &[(30, 10, b"wkey", b"tag-c"), (10, 30, b"hot", b"tag-w2")],
+                )
+            },
+            0,
+            500,
+        );
+        let _ = f_c;
     }
 
     #[bench]

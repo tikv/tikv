@@ -180,8 +180,15 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
 /// Creates a cluster with only one region and store(1) is the leader of the
 /// region.
 fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
+    new_cluster_for_deadlock_test_with_lock_wait_timeout(count, 500)
+}
+
+fn new_cluster_for_deadlock_test_with_lock_wait_timeout(
+    count: usize,
+    wait_timeout_ms: u64,
+) -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, count);
-    cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
+    cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(wait_timeout_ms);
     cluster.cfg.pessimistic_txn.pipelined = false;
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -295,7 +302,11 @@ fn test_detect_deadlock_when_merge_region() {
 #[test]
 fn test_detect_deadlock_when_updating_wait_info() {
     use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
-    let mut cluster = new_cluster_for_deadlock_test(3);
+    // An owner change no longer Detects the new owner in this wait. The
+    // cycle is visible only after this wait ends and the client retries.
+    // Keep 11→12 alive longer than 12's first wait so the retry is not a race
+    // against 11's key2 timeout.
+    let mut cluster = new_cluster_for_deadlock_test_with_lock_wait_timeout(3, 2000);
 
     let key1 = b"key1";
     let key2 = b"key2";
@@ -307,12 +318,21 @@ fn test_detect_deadlock_when_updating_wait_info() {
         ctx: Context,
         key: &[u8],
         ts: u64,
+        wait_timeout_ms: i64,
     ) -> mpsc::Receiver<PessimisticLockResponse> {
         let (tx, rx) = mpsc::channel();
         let key = vec![key.to_vec()];
         thread::spawn(move || {
-            let resp =
-                kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
+            let resp = kv_pessimistic_lock_resumable(
+                &client,
+                ctx,
+                key,
+                ts,
+                ts,
+                Some(wait_timeout_ms),
+                false,
+                false,
+            );
             tx.send(resp).unwrap();
         });
         rx
@@ -326,7 +346,7 @@ fn test_detect_deadlock_when_updating_wait_info() {
         vec![key1.to_vec()],
         10,
         10,
-        Some(1000),
+        Some(2000),
         false,
         false,
     );
@@ -339,16 +359,16 @@ fn test_detect_deadlock_when_updating_wait_info() {
         vec![key2.to_vec()],
         12,
         12,
-        Some(1000),
+        Some(2000),
         false,
         false,
     );
     assert!(resp.region_error.is_none());
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
-    let rx_txn11_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 11);
-    let rx_txn12_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 12);
-    let rx_txn11_k2 = async_pessimistic_lock(client.clone(), ctx.clone(), key2, 11);
+    let rx_txn11_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 11, 2000);
+    let rx_txn12_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 12, 400);
+    let rx_txn11_k2 = async_pessimistic_lock(client.clone(), ctx.clone(), key2, 11, 2000);
     // All blocked.
     assert_eq!(
         rx_txn11_k1
@@ -367,12 +387,33 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert!(resp.region_error.is_none());
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
-    // And then 12 waits for k1 on key1, which forms a deadlock.
-    let resp = rx_txn12_k1
-        .recv_timeout(Duration::from_millis(1000))
-        .unwrap();
+    // 12 now waits for 11 on key1, which would form a cycle with 11→12, but
+    // this wait does not register 12→11 on the owner change.
+    let resp = rx_txn12_k1.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(resp.region_error.is_none());
-    assert!(resp.errors[0].has_deadlock());
+    assert!(
+        resp.errors[0].has_locked(),
+        "first wait must time out, not deadlock: {:?}",
+        resp.errors[0]
+    );
+    assert!(
+        !resp.errors[0].has_deadlock(),
+        "owner change must not report deadlock on this wait: {:?}",
+        resp.errors[0]
+    );
+    // Retry Detects the current owner and finds 12→11→12.
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key1.to_vec()],
+        12,
+        12,
+        Some(2000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors[0].has_deadlock(), "{:?}", resp.errors[0]);
     assert_eq!(resp.results[0].get_type(), LockResultFailed);
     // Check correctness of the wait chain.
     let wait_chain = resp.errors[0].get_deadlock().get_wait_chain();
