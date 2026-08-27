@@ -12,7 +12,7 @@ use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
-use resource_metering::record_rocksdb_block_read_count;
+use resource_metering::{io_collection_config, record_rocksdb_block_read_count};
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
@@ -402,6 +402,15 @@ pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
 where
     Fn: FnOnce() -> T,
 {
+    // These commands were added to PerfContext only for detailed TopSQL I/O.
+    // Preserve their previous path while detailed collection is disabled.
+    if matches!(
+        cmd,
+        CommandKind::pessimistic_rollback_read_phase | CommandKind::raw_compare_and_swap
+    ) && !io_collection_config().detailed_io_collection_enabled()
+    {
+        return f();
+    }
     if !start_perf_context::<E>(cmd) {
         return f();
     }
