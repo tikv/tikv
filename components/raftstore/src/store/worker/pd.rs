@@ -3579,6 +3579,7 @@ mod tests {
                             network_out_bytes: 0,
                             logical_read_bytes: 0,
                             logical_write_bytes: 0,
+                            rocksdb_block_read_count: 0,
                         },
                     );
                     records
@@ -3741,6 +3742,7 @@ mod tests {
                             network_out_bytes: 0,
                             logical_read_bytes: 0,
                             logical_write_bytes: 0,
+                            rocksdb_block_read_count: 0,
                         },
                     );
                     records
