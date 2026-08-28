@@ -1416,6 +1416,9 @@
 ## Minimum estimated redundant bytes for admitting a region to automatic
 ## compaction, even when its redundant-version count and ratio are below their
 ## thresholds. The estimate includes reclaimable stale values in default CF.
-## Candidates admitted by this threshold force bottommost-level compaction. Set
-## to "0" to disable this byte-based admission path.
-# redundant-bytes-threshold = "1GiB"
+## The default aligns with classic raftstore's default
+## `coprocessor.region-max-size`; tune it separately when using a custom Region
+## size. Candidates admitted by this
+## threshold force bottommost-level compaction. Set to "0" to disable this
+## byte-based admission path.
+# redundant-bytes-threshold = "384MiB"

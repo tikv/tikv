@@ -133,7 +133,10 @@ High-risk service contracts:
   or estimated reclaimable bytes, and ranks admitted candidates by estimated
   reclaimable bytes from write/default-CF range properties. This keeps
   large-value regions visible even when they contain relatively few versions.
-  Candidates admitted through `redundant-bytes-threshold` force bottommost-level
+  The default byte threshold is 384 MiB, aligned with the default
+  `coprocessor.region-max-size`; it remains an independent GC setting and
+  should be tuned separately for custom Region sizes. Candidates admitted through
+  `redundant-bytes-threshold` force bottommost-level
   compaction so old values already at the last level can actually be reclaimed.
   Candidate execution remains single-threaded and bounded by the check interval;
   this policy improves selection but does not increase compaction throughput.

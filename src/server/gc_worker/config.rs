@@ -21,7 +21,10 @@ const DEFAULT_TOMBSTONES_NUM_THRESHOLD: u64 = 10000; // same as region_compact_m
 const DEFAULT_TOMBSTONES_PERCENT_THRESHOLD: u64 = 30; // same as region_compact_tombstones_percent
 const DEFAULT_REDUNDANT_ROWS_THRESHOLD: u64 = 50000; // same as region_compact_min_redundant_rows
 const DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD: u64 = 20; // same as region_compact_redundant_rows_percent
-const DEFAULT_REDUNDANT_BYTES_THRESHOLD: ReadableSize = ReadableSize::gb(1);
+// Keep the byte-based admission threshold aligned with the classic raftstore
+// default coprocessor.region-max-size. This is still an independent GC setting
+// so custom Region sizes do not create an implicit cross-module dependency.
+const DEFAULT_REDUNDANT_BYTES_THRESHOLD: ReadableSize = ReadableSize::mb(384);
 
 // MVCC-read-aware compaction defaults
 const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
@@ -190,5 +193,18 @@ impl std::ops::Deref for GcWorkerConfigManager {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_redundant_bytes_threshold_matches_region_max_size() {
+        assert_eq!(
+            AutoCompactionConfig::default().redundant_bytes_threshold,
+            raftstore::coprocessor::config::Config::default().region_max_size()
+        );
     }
 }
