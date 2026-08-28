@@ -5,24 +5,24 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 
+#[cfg(test)]
+use std::sync::atomic::Ordering::Relaxed;
 use std::{
     intrinsics::unlikely,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::Ordering::{Relaxed, SeqCst},
-    },
+    sync::{Arc, atomic::Ordering::SeqCst},
     task::{Context, Poll},
 };
 
 pub use collector::Collector;
-pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
+pub use config::{Config, ConfigManager, IoCollectionConfigSnapshot, io_collection_config};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,
     ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder, Recorder, RecorderBuilder,
     SummaryRecorder, init_recorder, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+    record_network_in_bytes, record_network_out_bytes, record_read_keys,
+    record_rocksdb_block_read_count, record_write_keys,
 };
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{
@@ -121,6 +121,35 @@ pub struct Guard;
 // will never be cleaned up, so here we need to make some restrictions.
 const MAX_SUMMARY_RECORDS_LEN: usize = 1000;
 
+#[cfg(test)]
+pub(crate) static IO_COLLECTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) struct IoCollectionConfigGuard {
+    config: IoCollectionConfigSnapshot,
+}
+
+#[cfg(test)]
+impl IoCollectionConfigGuard {
+    pub(crate) fn set(network: bool, detailed: bool) -> Self {
+        let guard = Self {
+            config: io_collection_config(),
+        };
+        config::set_io_collection_config(network, detailed);
+        guard
+    }
+}
+
+#[cfg(test)]
+impl Drop for IoCollectionConfigGuard {
+    fn drop(&mut self) {
+        config::set_io_collection_config(
+            self.config.network_io_collection_enabled(),
+            self.config.detailed_io_collection_enabled(),
+        );
+    }
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
@@ -147,10 +176,7 @@ impl Drop for Guard {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
-            if cur_record.read_keys.load(Relaxed) == 0
-                && cur_record.logical_read_bytes.load(Relaxed) == 0
-                && cur_record.logical_write_bytes.load(Relaxed) == 0
-            {
+            if cur_record.is_empty() {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
@@ -372,6 +398,52 @@ mod tests {
                 let ls = s.borrow_mut();
                 let local_tag = ls.attached_tag.swap(None);
                 assert!(local_tag.is_none());
+            });
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_guard_keeps_block_read_only_record() {
+        let _test_guard = IO_COLLECTION_TEST_LOCK.lock().unwrap();
+        let _config_guard = IoCollectionConfigGuard::set(true, true);
+        std::thread::spawn(|| {
+            let resource_tag_factory = ResourceTagFactory::new_for_test();
+            let tag = ResourceMeteringTag {
+                infos: Arc::new(TagInfos {
+                    store_id: 1,
+                    region_id: 2,
+                    peer_id: 3,
+                    key_ranges: vec![],
+                    extra_attachment: Arc::new(b"block-read-only".to_vec()),
+                }),
+                resource_tag_factory,
+            };
+            STORAGE.with(|s| {
+                let ls = s.borrow_mut();
+                ls.summary_enable.store(true, SeqCst);
+                ls.summary_records.lock().unwrap().clear();
+                ls.summary_cur_record.reset();
+            });
+
+            {
+                let _guard = tag.attach();
+                record_rocksdb_block_read_count(9);
+            }
+
+            STORAGE.with(|s| {
+                let ls = s.borrow();
+                let records = ls.summary_records.lock().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(
+                    records
+                        .get(&tag.infos)
+                        .unwrap()
+                        .rocksdb_block_read_count
+                        .load(Relaxed),
+                    9
+                );
             });
         })
         .join()

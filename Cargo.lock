@@ -4404,7 +4404,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#07aa8c6a46fab0a4cd577119c249c9c8e718c553"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#af1ad1bef5b9dd611af5282711f47dbc31a42530"
+>>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
 dependencies = [
  "bytes",
  "futures 0.3.15",
