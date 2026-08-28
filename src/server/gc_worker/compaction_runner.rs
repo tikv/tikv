@@ -279,6 +279,36 @@ fn proportional_bytes(total_bytes: u64, part_entries: u64, total_entries: u64) -
     bytes.min(u64::MAX as u128) as u64
 }
 
+/// Estimates discardable MVCC entries from their timestamp range and GC safe
+/// point.
+fn estimate_discardable_entries(
+    num_entries: u64,
+    oldest_ts: TimeStamp,
+    newest_ts: TimeStamp,
+    gc_safe_point: u64,
+) -> u64 {
+    if num_entries == 0 || oldest_ts > newest_ts {
+        return 0;
+    }
+    let oldest_ts = oldest_ts.into_inner();
+    let newest_ts = newest_ts.into_inner();
+
+    // A zero-width timestamp range is valid when multiple entries share the
+    // same timestamp. All of them are discardable once that timestamp reaches
+    // the GC safe point.
+    if gc_safe_point >= newest_ts {
+        return num_entries;
+    }
+    if gc_safe_point < oldest_ts {
+        return 0;
+    }
+
+    let total_range = newest_ts - oldest_ts;
+    let discardable_range = gc_safe_point - oldest_ts;
+    let portion = (discardable_range as f64) / (total_range as f64);
+    (num_entries as f64 * portion).round() as u64
+}
+
 fn estimate_reclaimable_bytes(
     write_cf_bytes: u64,
     default_cf_bytes: u64,
@@ -932,14 +962,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 num_tombstones += num_entries.saturating_sub(mvcc_properties.num_versions);
                 if config.enable_compaction_filter {
                     // Estimate discardable TiKV MVCC delete versions
-                    num_discardable += self.get_estimated_discardable_entries(
+                    num_discardable += estimate_discardable_entries(
                         mvcc_properties.num_deletes,
                         mvcc_properties.oldest_delete_ts,
                         mvcc_properties.newest_delete_ts,
                         gc_safe_point,
                     );
                     // Estimate all discardable stale MVCC versions for write CF.
-                    let discardable_versions = self.get_estimated_discardable_entries(
+                    let discardable_versions = estimate_discardable_entries(
                         mvcc_properties
                             .num_versions
                             .saturating_sub(mvcc_properties.num_rows),
@@ -952,7 +982,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                     // Only Put versions can own default-CF values. num_puts -
                     // num_rows is a conservative lower bound because the live
                     // version of each row may itself be a Delete.
-                    num_discardable_value_versions += self.get_estimated_discardable_entries(
+                    num_discardable_value_versions += estimate_discardable_entries(
                         mvcc_properties
                             .num_puts
                             .saturating_sub(mvcc_properties.num_rows),
@@ -1046,33 +1076,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         }
     }
 
-    /// Estimates the number of discardable MVCC entries based on GC safe point
-    fn get_estimated_discardable_entries(
-        &self,
-        num_entries: u64,
-        oldest_ts: TimeStamp,
-        newest_ts: TimeStamp,
-        gc_safe_point: u64,
-    ) -> u64 {
-        if num_entries == 0 || oldest_ts >= newest_ts {
-            return 0;
-        }
-        let oldest_ts = oldest_ts.into_inner();
-        let newest_ts = newest_ts.into_inner();
-
-        if gc_safe_point >= newest_ts {
-            return num_entries;
-        }
-        if gc_safe_point < oldest_ts {
-            return 0;
-        }
-
-        let total_range = newest_ts - oldest_ts;
-        let discardable_range = gc_safe_point - oldest_ts;
-        let portion = (discardable_range as f64) / (total_range as f64);
-        (num_entries as f64 * portion).round() as u64
-    }
-
     fn sleep_or_stop(&mut self, timeout: Duration) -> bool {
         self.control.wait(timeout)
     }
@@ -1158,6 +1161,22 @@ mod tests {
         assert!(large_region_score > small_region_score);
         assert_eq!(large_region_score, 1024.0);
         assert_eq!(small_region_score, 100.0);
+    }
+
+    #[test]
+    fn test_equal_timestamp_versions_are_discardable() {
+        let ts = TimeStamp::new(10);
+
+        assert_eq!(estimate_discardable_entries(2, ts, ts, 9), 0);
+        let discardable = estimate_discardable_entries(2, ts, ts, 10);
+        assert_eq!(discardable, 2);
+
+        // Equal-timestamp stale Put versions must enable proportional default-CF
+        // sizing instead of making the large-value estimate disappear.
+        assert_eq!(
+            estimate_reclaimable_bytes(0, 1024, 0, discardable, 4, discardable, 4, true),
+            512
+        );
     }
 
     #[test]

@@ -531,7 +531,7 @@ fn test_large_value_region_is_prioritized_by_reclaimable_bytes() {
         timeout -= 1;
     }
     assert_eq!(
-        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::Relaxed),
+        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst),
         large_value_region.get_id(),
         "the region with more reclaimable bytes should be compacted first"
     );
@@ -700,7 +700,7 @@ fn test_mvcc_aware_compaction_prioritization() {
 
     // Verify that Region 2 was selected as the first candidate
     // This is the actual verification that proves MVCC-aware prioritization works
-    let first_region_id = FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::Relaxed);
+    let first_region_id = FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst);
 
     let tracker = MVCC_READ_TRACKER.get().unwrap();
     assert_eq!(
