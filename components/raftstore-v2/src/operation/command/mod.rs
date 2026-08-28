@@ -850,6 +850,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
+<<<<<<< HEAD
         if let Some(wb) = &self.write_batch
             && !wb.is_empty()
         {
@@ -861,6 +862,32 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 flush_state.set_applied_index(index);
             }) {
                 slog_panic!(self.logger, "failed to write data"; "error" => ?e);
+=======
+        if let Some(wb) = &self.write_batch {
+            if !wb.is_empty() {
+                self.perf_context().start_observe();
+                let mut write_opt = WriteOptions::default();
+                write_opt.set_disable_wal(true);
+                let wb = self.write_batch.as_mut().unwrap();
+                if let Err(e) = wb.write_callback_opt(&write_opt, |_| {
+                    flush_state.set_applied_index(index);
+                }) {
+                    slog_panic!(self.logger, "failed to write data"; "error" => ?e);
+                }
+                self.metrics.written_bytes += wb.data_size() as u64;
+                self.metrics.written_keys += wb.count() as u64;
+                if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
+                    wb.clear();
+                } else {
+                    self.write_batch.take();
+                }
+                let tokens: Vec<_> = self
+                    .callbacks_mut()
+                    .iter()
+                    .flat_map(|(v, _)| v.write_trackers().flat_map(|t| t.as_tracker_token()))
+                    .collect();
+                let _ = self.perf_context().report_metrics(&tokens);
+>>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
             }
             self.metrics.written_bytes += wb.data_size() as u64;
             self.metrics.written_keys += wb.count() as u64;
