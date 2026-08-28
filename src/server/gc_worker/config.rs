@@ -21,6 +21,7 @@ const DEFAULT_TOMBSTONES_NUM_THRESHOLD: u64 = 10000; // same as region_compact_m
 const DEFAULT_TOMBSTONES_PERCENT_THRESHOLD: u64 = 30; // same as region_compact_tombstones_percent
 const DEFAULT_REDUNDANT_ROWS_THRESHOLD: u64 = 50000; // same as region_compact_min_redundant_rows
 const DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD: u64 = 20; // same as region_compact_redundant_rows_percent
+const DEFAULT_REDUNDANT_BYTES_THRESHOLD: ReadableSize = ReadableSize::gb(1);
 
 // MVCC-read-aware compaction defaults
 const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
@@ -41,6 +42,12 @@ pub struct AutoCompactionConfig {
     pub redundant_rows_threshold: u64,
     /// Minimum percentage of redundant rows to trigger compaction
     pub redundant_rows_percent_threshold: u64,
+    /// Minimum estimated redundant bytes to admit a region to auto-compaction
+    /// even when the entry-count and ratio thresholds are not met. The estimate
+    /// covers stale MVCC data that compaction may reclaim. Candidates admitted
+    /// by this threshold force bottommost-level compaction. Zero disables this
+    /// byte-based admission path.
+    pub redundant_bytes_threshold: ReadableSize,
     /// Force compaction of bottommost level
     pub bottommost_level_force: bool,
 
@@ -69,6 +76,7 @@ impl Default for AutoCompactionConfig {
             tombstones_percent_threshold: DEFAULT_TOMBSTONES_PERCENT_THRESHOLD,
             redundant_rows_threshold: DEFAULT_REDUNDANT_ROWS_THRESHOLD,
             redundant_rows_percent_threshold: DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD,
+            redundant_bytes_threshold: DEFAULT_REDUNDANT_BYTES_THRESHOLD,
             bottommost_level_force: false,
             mvcc_read_aware_enabled: DEFAULT_MVCC_READ_AWARE_ENABLED,
             mvcc_scan_threshold: DEFAULT_MVCC_SCAN_THRESHOLD,

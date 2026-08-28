@@ -142,6 +142,11 @@ High-risk contracts:
 - `coprocessor/dispatcher.rs` hosts raftstore observers.
 - `coprocessor/region_info_accessor.rs` exposes region metadata for other
   subsystems.
+- `coprocessor/split_observer.rs` emits a best-effort notification when all
+  proposed split keys collapse to invalid Region boundaries. The notification
+  must remain non-blocking and must not enqueue per-failure compaction work on
+  raftstore cleanup workers; the server-side auto-compaction runner coalesces
+  it into a bounded scan wake-up.
 
 ## Critical Invariants
 
@@ -149,6 +154,9 @@ High-risk contracts:
   safety depends on this.
 - Normal load-based split keys must be validated against the current Region's
   exclusive range before requesting split IDs from PD.
+- A no-valid-split-key notification is only a scheduling hint. It must not
+  bypass GC-safe-point checks, candidate admission, execution-time rechecks, or
+  auto-compaction I/O bounds.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
 - `EntryStorage` caches are performance hints, not an authority for unknown

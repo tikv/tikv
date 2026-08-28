@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,
-    sync::mpsc,
-    thread::{self, Builder as ThreadBuilder, JoinHandle},
+    sync::{Arc, Condvar, Mutex, mpsc},
+    thread::{Builder as ThreadBuilder, JoinHandle},
     time::{Duration, Instant},
     vec::Vec,
 };
@@ -19,7 +19,7 @@ use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{RegionInfoProvider, split_observer::NoValidSplitKeyNotifier};
 use tikv_util::{
     box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
     thread_name_prefix::COMPACTION_RUNNER_THREAD, warn,
@@ -95,6 +95,32 @@ lazy_static::lazy_static! {
         exponential_buckets(0.1, 2.0, 20).unwrap()
     ).unwrap();
 
+    pub static ref AUTO_COMPACTION_RECLAIMABLE_BYTES_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_auto_compaction_reclaimable_bytes",
+        "Histogram of estimated reclaimable bytes in compaction candidates",
+        exponential_buckets(1024.0 * 1024.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_SPLIT_FAILURE_HINTS_TOTAL: IntCounter = register_int_counter!(
+        "tikv_auto_compaction_split_failure_hints_total",
+        "Number of no-valid-split-key hints received by auto compaction"
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_SPLIT_FAILURE_HINTS_COALESCED_TOTAL: IntCounter = register_int_counter!(
+        "tikv_auto_compaction_split_failure_hints_coalesced_total",
+        "Number of no-valid-split-key hints coalesced with an existing hint"
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_SPLIT_FAILURE_HINTS_DROPPED_TOTAL: IntCounter = register_int_counter!(
+        "tikv_auto_compaction_split_failure_hints_dropped_total",
+        "Number of no-valid-split-key hints dropped by bounded auto-compaction admission"
+    ).unwrap();
+
+    pub static ref AUTO_COMPACTION_SPLIT_FAILURE_TRIGGERED_ROUNDS_TOTAL: IntCounter = register_int_counter!(
+        "tikv_auto_compaction_split_failure_triggered_rounds_total",
+        "Number of auto-compaction scan rounds woken by no-valid-split-key hints"
+    ).unwrap();
+
 }
 
 /// A candidate for compaction with its priority score
@@ -105,9 +131,182 @@ pub struct CompactionCandidate {
     pub num_discardable: u64, // Estimated discardable TiKV MVCC versions
     pub num_total_entries: u64,
     pub num_rows: u64, // TiKV rows
+    pub estimated_reclaimable_bytes: u64,
     pub mvcc_versions_scanned: u64, /* Average MVCC versions scanned per request from online
-                        * traffic (indicates read overhead) */
+                                     * traffic (indicates read overhead) */
     pub region: Region,
+}
+
+/// Converts estimated reclaimable bytes to MiB-sized score units. Keeping the
+/// score near the scale of the existing row-based score allows the optional
+/// MVCC read-activity score to remain meaningful when the two are combined.
+const RECLAIMABLE_BYTES_PER_SCORE: f64 = 1024.0 * 1024.0;
+
+/// Minimum interval between split-failure-triggered full-store scans. Hints are
+/// coalesced, but this cooldown still bounds the metadata work caused by a
+/// burst of `NO_VALID_SPLIT_KEY` results.
+const MIN_GAP_BETWEEN_SPLIT_FAILURE_ROUNDS: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct CompactionControlState {
+    stopped: bool,
+    split_failure_pending: bool,
+    gc_safe_point: u64,
+    last_triggered_safe_point: Option<u64>,
+}
+
+#[derive(Default)]
+pub(super) struct CompactionControl {
+    state: Mutex<CompactionControlState>,
+    /// Wakes the runner when a coalesced split-failure hint or stop request is
+    /// available. The associated state mutex is always checked in a loop to
+    /// handle spurious wake-ups.
+    wake_up: Condvar,
+}
+
+impl CompactionControl {
+    /// Initializes metrics before this control is exposed to the raftstore
+    /// request path. Counter increments after initialization are lock-free.
+    pub(super) fn initialize_metrics() {
+        lazy_static::initialize(&AUTO_COMPACTION_SPLIT_FAILURE_HINTS_TOTAL);
+        lazy_static::initialize(&AUTO_COMPACTION_SPLIT_FAILURE_HINTS_COALESCED_TOTAL);
+        lazy_static::initialize(&AUTO_COMPACTION_SPLIT_FAILURE_HINTS_DROPPED_TOTAL);
+        lazy_static::initialize(&AUTO_COMPACTION_SPLIT_FAILURE_TRIGGERED_ROUNDS_TOTAL);
+    }
+
+    /// Waits until the periodic interval expires, a split-failure hint arrives,
+    /// or the runner is stopped. Returns `true` only for stop.
+    fn wait(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.stopped {
+                return true;
+            }
+            if state.split_failure_pending {
+                return false;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            state = self.wake_up.wait_timeout(state, deadline - now).unwrap().0;
+        }
+    }
+
+    /// Waits for a cooldown while ignoring additional coalesced hints. Stop
+    /// still wakes the runner immediately.
+    fn wait_for_stop(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.stopped {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            state = self.wake_up.wait_timeout(state, deadline - now).unwrap().0;
+        }
+    }
+
+    fn consume_split_failure_hint(&self, gc_safe_point: u64) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if std::mem::take(&mut state.split_failure_pending) {
+            state.last_triggered_safe_point = Some(gc_safe_point);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn update_gc_safe_point(&self, gc_safe_point: u64) {
+        self.state.lock().unwrap().gc_safe_point = gc_safe_point;
+    }
+
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.stopped = true;
+        self.wake_up.notify_one();
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.state.lock().unwrap().stopped
+    }
+}
+
+impl NoValidSplitKeyNotifier for CompactionControl {
+    fn notify(&self, _region_id: u64) {
+        AUTO_COMPACTION_SPLIT_FAILURE_HINTS_TOTAL.inc();
+
+        // Never wait on the raftstore request path. A dropped hint is safe
+        // because periodic scanning remains the source of truth.
+        let Ok(mut state) = self.state.try_lock() else {
+            AUTO_COMPACTION_SPLIT_FAILURE_HINTS_DROPPED_TOTAL.inc();
+            return;
+        };
+        if state.stopped {
+            AUTO_COMPACTION_SPLIT_FAILURE_HINTS_DROPPED_TOTAL.inc();
+            return;
+        }
+
+        // One triggered round scans the entire store, so all failures observed
+        // at the same GC safe point are covered by that round. A periodic scan
+        // still runs if the cached safe point lags behind PD.
+        if state.gc_safe_point > 0 && state.last_triggered_safe_point == Some(state.gc_safe_point) {
+            AUTO_COMPACTION_SPLIT_FAILURE_HINTS_COALESCED_TOTAL.inc();
+            return;
+        }
+        if std::mem::replace(&mut state.split_failure_pending, true) {
+            AUTO_COMPACTION_SPLIT_FAILURE_HINTS_COALESCED_TOTAL.inc();
+            return;
+        }
+        self.wake_up.notify_one();
+    }
+}
+
+fn meets_redundant_bytes_threshold(estimated_bytes: u64, threshold_bytes: u64) -> bool {
+    threshold_bytes > 0 && estimated_bytes >= threshold_bytes
+}
+
+fn proportional_bytes(total_bytes: u64, part_entries: u64, total_entries: u64) -> u64 {
+    if total_bytes == 0 || part_entries == 0 || total_entries == 0 {
+        return 0;
+    }
+    let bytes = (total_bytes as u128).saturating_mul(part_entries.min(total_entries) as u128)
+        / total_entries as u128;
+    bytes.min(u64::MAX as u128) as u64
+}
+
+fn estimate_reclaimable_bytes(
+    write_cf_bytes: u64,
+    default_cf_bytes: u64,
+    num_tombstones: u64,
+    num_discardable: u64,
+    num_total_entries: u64,
+    num_discardable_value_versions: u64,
+    num_total_puts: u64,
+    compaction_filter_enabled: bool,
+) -> u64 {
+    let write_discardable = if compaction_filter_enabled {
+        num_tombstones.saturating_add(num_discardable)
+    } else {
+        num_tombstones
+    };
+    let write_bytes = proportional_bytes(write_cf_bytes, write_discardable, num_total_entries);
+    let default_bytes = if compaction_filter_enabled {
+        // RocksDB tombstones and MVCC Delete records do not have corresponding
+        // default-CF values. Only use stale MVCC versions for this estimate.
+        proportional_bytes(
+            default_cf_bytes,
+            num_discardable_value_versions,
+            num_total_puts,
+        )
+    } else {
+        0
+    };
+    write_bytes.saturating_add(default_bytes)
 }
 
 impl PartialEq for CompactionCandidate {
@@ -133,18 +332,12 @@ impl Ord for CompactionCandidate {
 /// Handle for managing compaction runner
 pub struct CompactionRunnerHandle {
     join_handle: JoinHandle<()>,
-    stop_signal_sender: mpsc::Sender<()>,
+    control: Arc<CompactionControl>,
 }
 
 impl CompactionRunnerHandle {
     pub fn stop(self) -> Result<()> {
-        let res: Result<()> = self.stop_signal_sender.send(()).map_err(|e| {
-            box_err!(
-                "failed to send stop signal to compaction runner thread: {:?}",
-                e
-            )
-        });
-        res?;
+        self.control.stop();
         self.join_handle
             .join()
             .map_err(|e| box_err!("failed to join compaction runner thread: {:?}", e))
@@ -157,9 +350,77 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     safe_point_provider: S,
     region_info_provider: R,
     engine: E,
-    stop_signal_receiver: Option<mpsc::Receiver<()>>,
-    is_stopped: bool,
+    control: Arc<CompactionControl>,
     cfg_tracker: GcWorkerConfigManager,
+}
+
+/// Calculates compaction score based on tombstones, estimated reclaimable
+/// bytes, and MVCC read intensity.
+fn calculate_compaction_score(
+    num_tombstones: u64,
+    num_discardable: u64,
+    num_total_entries: u64,
+    estimated_reclaimable_bytes: u64,
+    mvcc_versions_scanned: u64,
+    config: &GcConfig,
+) -> f64 {
+    if num_total_entries == 0 || num_total_entries < num_discardable {
+        return 0.0;
+    }
+
+    let meets_bytes_threshold = meets_redundant_bytes_threshold(
+        estimated_reclaimable_bytes,
+        config.auto_compaction.redundant_bytes_threshold.0,
+    );
+    let base_score = if !config.enable_compaction_filter {
+        // Only consider deletes (tombstones).
+        let ratio = num_tombstones as f64 / num_total_entries as f64;
+        if num_tombstones < config.auto_compaction.tombstones_num_threshold
+            && ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
+            && !meets_bytes_threshold
+        {
+            0.0
+        } else if estimated_reclaimable_bytes > 0 {
+            estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else {
+            // Keep candidates visible when old SSTs do not have range properties.
+            num_tombstones as f64 * ratio
+        }
+    } else {
+        // When compaction filter is enabled, ignore tombstone threshold,
+        // just add deletes to redundant keys for admission.
+        let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
+        if num_discardable < config.auto_compaction.redundant_rows_threshold
+            && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
+            && !meets_bytes_threshold
+        {
+            0.0
+        } else if estimated_reclaimable_bytes > 0 {
+            // Rank admitted candidates by physical impact instead of version count.
+            // Use MiB-sized units so the additive MVCC-read score remains useful.
+            estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else {
+            // Keep candidates visible when old SSTs do not have range properties.
+            num_discardable as f64 * ratio
+        }
+    };
+
+    // If MVCC-read-aware compaction is disabled, return base score.
+    if !config.auto_compaction.mvcc_read_aware_enabled
+        || (num_discardable == 0 && num_tombstones == 0)
+    {
+        return base_score;
+    }
+
+    // Calculate MVCC read score based on throughput. Regions with high
+    // mvcc_versions_scanned benefit from compaction even if their base score is
+    // low, because compaction improves read performance.
+    let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
+    let mvcc_score = (mvcc_versions_scanned as f64) * mvcc_read_weight;
+
+    // Use an additive formula so regions with high MVCC overhead get compacted
+    // even when base_score is zero.
+    base_score + mvcc_score
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
@@ -171,12 +432,27 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         engine: E,
         cfg_tracker: GcWorkerConfigManager,
     ) -> Self {
+        Self::new_with_control(
+            safe_point_provider,
+            region_info_provider,
+            engine,
+            cfg_tracker,
+            Arc::new(CompactionControl::default()),
+        )
+    }
+
+    pub(super) fn new_with_control(
+        safe_point_provider: S,
+        region_info_provider: R,
+        engine: E,
+        cfg_tracker: GcWorkerConfigManager,
+        control: Arc<CompactionControl>,
+    ) -> Self {
         Self {
             safe_point_provider,
             region_info_provider,
             engine,
-            stop_signal_receiver: None,
-            is_stopped: false,
+            control,
             cfg_tracker,
         }
     }
@@ -190,8 +466,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     /// Starts the compaction runner in a separate thread
     pub fn start(mut self) -> Result<CompactionRunnerHandle> {
         fail_point!("gc_worker_auto_compaction_thread_start");
-        let (tx, rx) = mpsc::channel();
-        self.stop_signal_receiver = Some(rx);
+        let control = self.control.clone();
 
         let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
@@ -204,7 +479,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
         res.map(|join_handle| CompactionRunnerHandle {
             join_handle,
-            stop_signal_sender: tx,
+            control,
         })
     }
 
@@ -212,6 +487,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
     fn run(&mut self) {
         info!("compaction-runner started");
         fail_point!("gc_worker_auto_compaction_start");
+        let mut last_split_failure_round = None;
         loop {
             if self.check_stopped() {
                 break;
@@ -221,16 +497,41 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             let config = self.cfg_tracker.value().clone();
             let check_interval = config.auto_compaction.check_interval.0;
 
-            // Get current safe point
+            // Get current safe point and publish it for best-effort hint
+            // deduplication. The runner remains the source of truth.
             let gc_safe_point = self.curr_safe_point().into_inner();
+            self.control.update_gc_safe_point(gc_safe_point);
 
-            // Skip compaction if safe point is zero (GC not initialized)
+            // Keep a pending split-failure hint until GC has a usable safe
+            // point. Compaction cannot reclaim MVCC versions before then, and
+            // consuming it here would turn a useful hint into a no-op.
             if gc_safe_point == 0 {
                 info!("skipping compaction: GC safe point is zero");
-                if self.sleep_or_stop(check_interval) {
+                if self.control.wait_for_stop(check_interval) {
                     break;
                 }
                 continue;
+            }
+
+            if self.control.consume_split_failure_hint(gc_safe_point) {
+                if let Some(last_round) = last_split_failure_round {
+                    let elapsed = Instant::now().saturating_duration_since(last_round);
+                    if elapsed < MIN_GAP_BETWEEN_SPLIT_FAILURE_ROUNDS {
+                        // Never let the anti-storm cooldown delay a normal
+                        // periodic round beyond its configured interval.
+                        let cooldown =
+                            (MIN_GAP_BETWEEN_SPLIT_FAILURE_ROUNDS - elapsed).min(check_interval);
+                        if self.control.wait_for_stop(cooldown) {
+                            break;
+                        }
+                    }
+                }
+                // Hints accumulated during the cooldown or the scan are
+                // covered by this full-store round. A later GC safe point can
+                // request another bounded round.
+                self.control.consume_split_failure_hint(gc_safe_point);
+                last_split_failure_round = Some(Instant::now());
+                AUTO_COMPACTION_SPLIT_FAILURE_TRIGGERED_ROUNDS_TOTAL.inc();
             }
 
             // Collect and rank compaction candidates
@@ -402,6 +703,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 "tikv_estimated_discardable" => candidate.num_discardable,
                 "rocksdb_tombstones" => candidate.num_tombstones,
                 "tikv_rows" => candidate.num_rows,
+                "estimated_reclaimable_bytes" => candidate.estimated_reclaimable_bytes,
                 "mvcc_versions_scanned" => candidate.mvcc_versions_scanned
             );
         }
@@ -498,9 +800,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 .observe(compact_duration.as_secs_f64());
 
             processed_count += 1;
-            info!("compacted candidate"; 
+            info!("compacted candidate";
                   "region_id" => current_candidate.region.get_id(),
                   "score" => current_candidate.score,
+                  "estimated_reclaimable_bytes" => current_candidate.estimated_reclaimable_bytes,
                   "processed_count" => processed_count,
                   "duration_ms" => compact_duration.as_millis());
         }
@@ -510,7 +813,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
 
     /// Compacts a single candidate
     fn compact_candidate(&self, candidate: &CompactionCandidate, config: &GcConfig) -> Result<()> {
-        let bottommost_level_force = config.auto_compaction.bottommost_level_force;
+        // Large stale values can already reside at the bottommost level. Force
+        // that level for candidates admitted by the byte threshold; otherwise
+        // the compaction can finish without reclaiming the bytes that made the
+        // region oversized (see #16493).
+        let bottommost_level_force = config.auto_compaction.bottommost_level_force
+            || meets_redundant_bytes_threshold(
+                candidate.estimated_reclaimable_bytes,
+                config.auto_compaction.redundant_bytes_threshold.0,
+            );
         let start_key = enc_start_key(&candidate.region);
         let end_key = enc_end_key(&candidate.region);
 
@@ -590,7 +901,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut num_tombstones = 0;
         let mut num_discardable = 0;
         let mut num_total_entries = 0;
+        let mut num_total_puts = 0;
         let mut num_rows = 0;
+        let mut num_discardable_value_versions = 0;
+        let mut write_cf_bytes: u64 = 0;
 
         let collection = self
             .engine
@@ -602,16 +916,20 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         collection.iter_table_properties(|table_prop| {
             let num_entries = table_prop.get_num_entries();
             num_total_entries += num_entries;
+            let user_properties = table_prop.get_user_collected_properties();
 
-            if let Some(mvcc_properties) = table_prop
-                .get_user_collected_properties()
-                .get_mvcc_properties()
+            if let Some((size, _)) = user_properties.approximate_size_and_keys(&start_key, &end_key)
             {
+                write_cf_bytes = write_cf_bytes.saturating_add(size as u64);
+            }
+
+            if let Some(mvcc_properties) = user_properties.get_mvcc_properties() {
                 // Collect MVCC stats
                 num_rows += mvcc_properties.num_rows;
+                num_total_puts += mvcc_properties.num_puts;
 
                 // RocksDB tombstones are guaranteed to be discardable
-                num_tombstones += num_entries - mvcc_properties.num_versions;
+                num_tombstones += num_entries.saturating_sub(mvcc_properties.num_versions);
                 if config.enable_compaction_filter {
                     // Estimate discardable TiKV MVCC delete versions
                     num_discardable += self.get_estimated_discardable_entries(
@@ -620,9 +938,24 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                         mvcc_properties.newest_delete_ts,
                         gc_safe_point,
                     );
-                    // Estimate discardable stale MVCC versions
-                    num_discardable += self.get_estimated_discardable_entries(
-                        mvcc_properties.num_versions - mvcc_properties.num_rows,
+                    // Estimate all discardable stale MVCC versions for write CF.
+                    let discardable_versions = self.get_estimated_discardable_entries(
+                        mvcc_properties
+                            .num_versions
+                            .saturating_sub(mvcc_properties.num_rows),
+                        mvcc_properties.oldest_stale_version_ts,
+                        mvcc_properties.newest_stale_version_ts,
+                        gc_safe_point,
+                    );
+                    num_discardable += discardable_versions;
+
+                    // Only Put versions can own default-CF values. num_puts -
+                    // num_rows is a conservative lower bound because the live
+                    // version of each row may itself be a Delete.
+                    num_discardable_value_versions += self.get_estimated_discardable_entries(
+                        mvcc_properties
+                            .num_puts
+                            .saturating_sub(mvcc_properties.num_rows),
                         mvcc_properties.oldest_stale_version_ts,
                         mvcc_properties.newest_stale_version_ts,
                         gc_safe_point,
@@ -631,6 +964,32 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             }
             true
         });
+
+        // Large values are stored in default CF, while the MVCC properties used above
+        // come from write CF. Include default CF bytes so large-value regions are not
+        // starved by small-value regions with many more write-CF entries.
+        let mut default_cf_bytes: u64 = 0;
+        if config.enable_compaction_filter && num_discardable_value_versions > 0 {
+            match self
+                .engine
+                .table_properties_collection(CF_DEFAULT, &[Range::new(&start_key, &end_key)])
+            {
+                Ok(collection) => collection.iter_table_properties(|table_prop| {
+                    if let Some((size, _)) = table_prop
+                        .get_user_collected_properties()
+                        .approximate_size_and_keys(&start_key, &end_key)
+                    {
+                        default_cf_bytes = default_cf_bytes.saturating_add(size as u64);
+                    }
+                    true
+                }),
+                Err(e) => warn!(
+                    "failed to get default CF table properties, scoring with write CF only";
+                    "region_id" => region.get_id(),
+                    "err" => ?e,
+                ),
+            }
+        }
 
         // Get average mvcc_versions_scanned per request from actual online read traffic
         let mvcc_versions_scanned = if config.auto_compaction.mvcc_read_aware_enabled {
@@ -643,10 +1002,21 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             0
         };
 
-        let score = self.get_compact_score(
+        let estimated_reclaimable_bytes = estimate_reclaimable_bytes(
+            write_cf_bytes,
+            default_cf_bytes,
             num_tombstones,
             num_discardable,
             num_total_entries,
+            num_discardable_value_versions,
+            num_total_puts,
+            config.enable_compaction_filter,
+        );
+        let score = calculate_compaction_score(
+            num_tombstones,
+            num_discardable,
+            num_total_entries,
+            estimated_reclaimable_bytes,
             mvcc_versions_scanned,
             config,
         );
@@ -657,6 +1027,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             // Record metrics for this compaction candidate
             AUTO_COMPACTION_NUM_TOMBSTONES_HISTOGRAM.observe(num_tombstones as f64);
             AUTO_COMPACTION_NUM_DISCARDABLE_HISTOGRAM.observe(num_discardable as f64);
+            AUTO_COMPACTION_RECLAIMABLE_BYTES_HISTOGRAM.observe(estimated_reclaimable_bytes as f64);
             AUTO_COMPACTION_MVCC_VERSIONS_SCANNED_HISTOGRAM.observe(mvcc_versions_scanned as f64);
             AUTO_COMPACTION_SCORE_HISTOGRAM.observe(score);
 
@@ -666,6 +1037,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 num_discardable,
                 num_total_entries,
                 num_rows,
+                estimated_reclaimable_bytes,
                 mvcc_versions_scanned,
                 region: region.clone(),
             }))
@@ -701,108 +1073,134 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         (num_entries as f64 * portion).round() as u64
     }
 
-    /// Calculates compaction score based on tombstones, discardable entries,
-    /// and MVCC read intensity
-    fn get_compact_score(
-        &self,
-        num_tombstones: u64,
-        num_discardable: u64,
-        num_total_entries: u64,
-        mvcc_versions_scanned: u64,
-        config: &GcConfig,
-    ) -> f64 {
-        if num_total_entries == 0 || num_total_entries < num_discardable {
-            return 0.0;
-        }
-
-        let base_score = if !config.enable_compaction_filter {
-            // Only consider deletes (tombstones)
-            let ratio = num_tombstones as f64 / num_total_entries as f64;
-            if num_tombstones < config.auto_compaction.tombstones_num_threshold
-                && ratio < config.auto_compaction.tombstones_percent_threshold as f64 / 100.0
-            {
-                0.0
-            } else {
-                num_tombstones as f64 * ratio
-            }
-        } else {
-            // When compaction filter is enabled, ignore tombstone threshold,
-            // just add deletes to redundant keys for scoring.
-            let ratio = (num_tombstones + num_discardable) as f64 / num_total_entries as f64;
-            if num_discardable < config.auto_compaction.redundant_rows_threshold
-                && ratio < config.auto_compaction.redundant_rows_percent_threshold as f64 / 100.0
-            {
-                0.0
-            } else {
-                num_discardable as f64 * ratio
-            }
-        };
-
-        // If MVCC-read-aware compaction is disabled, return base score
-        if !config.auto_compaction.mvcc_read_aware_enabled
-            || (num_discardable == 0 && num_tombstones == 0)
-        {
-            return base_score;
-        }
-
-        // Calculate MVCC read score based on throughput
-        // Regions with high mvcc_versions_scanned (versions/sec) benefit from
-        // compaction even if they have no redundant data, because compaction
-        // improves read performance
-        // Note: mvcc_versions_scanned is only non-zero for regions that exceeded
-        // mvcc_scan_threshold during record_read()
-        let mvcc_read_weight = config.auto_compaction.mvcc_read_weight;
-        let mvcc_score = (mvcc_versions_scanned as f64) * mvcc_read_weight;
-
-        // Use additive formula so regions with high MVCC overhead get compacted
-        // even when base_score = 0 (no redundant data)
-        // This allows compaction to improve read performance by reorganizing data
-        base_score + mvcc_score
-    }
-
     fn sleep_or_stop(&mut self, timeout: Duration) -> bool {
-        if self.is_stopped {
-            return true; // Already stopped
-        }
-        match self.stop_signal_receiver.as_ref() {
-            Some(rx) => match rx.recv_timeout(timeout) {
-                Ok(_) => {
-                    self.is_stopped = true;
-                    true // Stop requested
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => false, // Continue
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    error!("stop_signal_receiver unexpectedly disconnected");
-                    self.is_stopped = true;
-                    true // Stop
-                }
-            },
-            None => {
-                thread::sleep(timeout);
-                false // Continue
-            }
-        }
+        self.control.wait(timeout)
     }
 
     fn check_stopped(&mut self) -> bool {
-        if self.is_stopped {
-            return true; // Already stopped
-        }
-        match self.stop_signal_receiver.as_ref() {
-            Some(rx) => match rx.try_recv() {
-                Ok(_) => {
-                    self.is_stopped = true;
-                    true // Stop requested
-                }
-                Err(mpsc::TryRecvError::Empty) => false, // Continue
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    error!(
-                        "stop_signal_receiver unexpectedly disconnected, compaction_runner will stop"
-                    );
-                    true // Stop
-                }
-            },
-            None => false, // Continue
-        }
+        self.control.is_stopped()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_failure_hints_are_coalesced() {
+        let control = CompactionControl::default();
+        control.update_gc_safe_point(10);
+
+        control.notify(1);
+        control.notify(1);
+        control.notify(2);
+        assert!(control.consume_split_failure_hint(10));
+        assert!(!control.consume_split_failure_hint(10));
+
+        // One full-store round covers all Regions at the same safe point.
+        control.notify(3);
+        assert!(!control.consume_split_failure_hint(10));
+
+        // A later safe point may make additional versions reclaimable.
+        control.update_gc_safe_point(11);
+        control.notify(3);
+        assert!(control.consume_split_failure_hint(11));
+    }
+
+    #[test]
+    fn test_split_failure_wait_wakes_on_hint_and_stop() {
+        let control = Arc::new(CompactionControl::default());
+        let waiter = control.clone();
+        let thread = std::thread::spawn(move || waiter.wait(Duration::from_secs(10)));
+        std::thread::sleep(Duration::from_millis(10));
+        control.notify(1);
+        assert!(!thread.join().unwrap());
+
+        assert!(control.consume_split_failure_hint(0));
+        let waiter = control.clone();
+        let thread = std::thread::spawn(move || waiter.wait_for_stop(Duration::from_secs(10)));
+        std::thread::sleep(Duration::from_millis(10));
+        control.stop();
+        assert!(thread.join().unwrap());
+    }
+
+    #[test]
+    fn test_redundant_bytes_threshold() {
+        assert!(!meets_redundant_bytes_threshold(1, 0));
+        assert!(!meets_redundant_bytes_threshold(127, 128));
+        assert!(meets_redundant_bytes_threshold(128, 128));
+    }
+
+    #[test]
+    fn test_large_region_has_higher_compaction_score() {
+        let config = GcConfig::default();
+
+        // The large region has fewer redundant versions, but those versions
+        // carry much larger values. Its physical reclaim opportunity should
+        // therefore give it a higher score than the small-value region.
+        let large_region_score = calculate_compaction_score(
+            0,                  // tombstones
+            1,                  // discardable versions
+            10,                 // total entries
+            1024 * 1024 * 1024, // estimated reclaimable bytes: 1 GiB
+            0,                  // MVCC versions scanned per request
+            &config,
+        );
+        let small_region_score = calculate_compaction_score(
+            0,                 // tombstones
+            30,                // discardable versions
+            100,               // total entries
+            100 * 1024 * 1024, // estimated reclaimable bytes: 100 MiB
+            0,                 // MVCC versions scanned per request
+            &config,
+        );
+
+        assert!(large_region_score > small_region_score);
+        assert_eq!(large_region_score, 1024.0);
+        assert_eq!(small_region_score, 100.0);
+    }
+
+    #[test]
+    fn test_estimate_reclaimable_bytes_includes_large_values() {
+        // Ten of one hundred stale versions are below the safe point. The
+        // write-CF part is small, but default CF contains 1 GiB of values.
+        let bytes = estimate_reclaimable_bytes(
+            10 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            0,
+            10,
+            100,
+            10,
+            100,
+            true,
+        );
+        assert_eq!(bytes, 1034 * 1024 * 1024 / 10);
+    }
+
+    #[test]
+    fn test_estimate_reclaimable_bytes_excludes_deletes_from_default_cf() {
+        // MVCC Delete records have no default-CF values. Counting all
+        // discardable records against default-CF bytes would overestimate the
+        // reclaimable bytes of delete-heavy index regions.
+        let bytes = estimate_reclaimable_bytes(1000, 10_000, 10, 40, 100, 0, 90, true);
+        assert_eq!(bytes, 500);
+    }
+
+    #[test]
+    fn test_estimate_reclaimable_bytes_saturates() {
+        assert_eq!(proportional_bytes(u64::MAX, u64::MAX, u64::MAX), u64::MAX);
+        assert_eq!(
+            estimate_reclaimable_bytes(
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                true,
+            ),
+            u64::MAX
+        );
     }
 }

@@ -2,20 +2,32 @@
 
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{CF_WRITE, MiscExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE, MiscExt};
 use kvproto::kvrpcpb::*;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
+use tikv_util::config::{ReadableDuration, ReadableSize};
+
+// Failpoints and FIRST_COMPACTION_CANDIDATE_REGION are process-global. Keep the
+// tests in this file from changing them concurrently.
+static AUTO_COMPACTION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_auto_compaction_test() -> MutexGuard<'static, ()> {
+    AUTO_COMPACTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 #[test]
 fn test_gc_worker_auto_compaction_with_failpoints() {
+    let _guard = lock_auto_compaction_test();
     // Test that auto compaction can be started and stopped gracefully
     // This test verifies that the auto compaction infrastructure works,
     // even though it may not actually compact in test environments
@@ -365,7 +377,176 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
 }
 
 #[test]
+fn test_no_valid_split_key_wakes_auto_compaction_scan() {
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    let fp_candidates_collected = "gc_worker_auto_compaction_candidates_collected";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+
+    let scan_rounds = Arc::new(AtomicUsize::new(0));
+    let scan_rounds_clone = scan_rounds.clone();
+    fail::cfg_callback(fp_candidates_collected, move || {
+        scan_rounds_clone.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let (mut cluster, _client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        // A split-failure hint must wake the runner well before this interval.
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+    let region = cluster.get_region(b"k50");
+    cluster.must_split(&region, b"k50");
+    let region = cluster.get_region(b"k50");
+    assert_eq!(region.get_start_key(), b"k50");
+
+    fail::remove(fp_compaction_start);
+    for _ in 0..100 {
+        if scan_rounds.load(Ordering::SeqCst) >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(scan_rounds.load(Ordering::SeqCst), 1);
+
+    // The split key equals the Region start key, so SplitObserver reports
+    // NO_VALID_SPLIT_KEY. The request itself is expected to fail; its purpose
+    // is to deliver a best-effort wake-up hint to CompactionRunner.
+    cluster.split_region(&region, region.get_start_key(), Callback::None);
+
+    for _ in 0..100 {
+        if scan_rounds.load(Ordering::SeqCst) >= 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        scan_rounds.load(Ordering::SeqCst),
+        2,
+        "NO_VALID_SPLIT_KEY should wake a new scan before the 30-second interval"
+    );
+
+    fail::remove(fp_candidates_collected);
+}
+
+#[test]
+fn test_large_value_region_is_prioritized_by_reclaimable_bytes() {
+    use tikv::server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION;
+
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+        // Neither region meets the entry-count or percentage admission gates.
+        // Both are admitted through the byte gate, then ranked by reclaimable bytes.
+        cluster.cfg.gc.auto_compaction.redundant_rows_threshold = u64::MAX;
+        cluster
+            .cfg
+            .gc
+            .auto_compaction
+            .redundant_rows_percent_threshold = 100;
+        cluster.cfg.gc.auto_compaction.redundant_bytes_threshold = ReadableSize(1);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+
+    let region = cluster.get_region(b"k50");
+    cluster.must_split(&region, b"k50");
+    let large_value_region = cluster.get_region(b"k10");
+    let small_value_region = cluster.get_region(b"k60");
+
+    let make_ctx = |region: &kvproto::metapb::Region| {
+        let mut ctx = Context::new();
+        ctx.set_region_id(region.get_id());
+        ctx.set_region_epoch(region.get_region_epoch().clone());
+        ctx.set_peer(region.get_peers()[0].clone());
+        ctx
+    };
+    let large_ctx = make_ctx(&large_value_region);
+    let small_ctx = make_ctx(&small_value_region);
+
+    // The first region has only two stale versions, but they carry large values.
+    for (i, key) in [b"k10".as_slice(), b"k20".as_slice()].iter().enumerate() {
+        for commit_ts in [10 + i as u64, 30 + i as u64] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(Op::Put, key, &vec![b'x'; 256 * 1024])];
+            must_kv_prewrite(
+                &client,
+                large_ctx.clone(),
+                mutations,
+                key.to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                large_ctx.clone(),
+                vec![key.to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+
+    // The second region has more stale versions, but their values are tiny.
+    for i in 0..20 {
+        let key = format!("k{:02}", 60 + i);
+        for commit_ts in [10 + i, 40 + i] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(Op::Put, key.as_bytes(), b"small")];
+            must_kv_prewrite(
+                &client,
+                small_ctx.clone(),
+                mutations,
+                key.as_bytes().to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                small_ctx.clone(),
+                vec![key.as_bytes().to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+    fail::remove(fp_compaction_start);
+
+    let mut timeout = 100;
+    while FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) == 0 && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+    assert_eq!(
+        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::Relaxed),
+        large_value_region.get_id(),
+        "the region with more reclaimable bytes should be compacted first"
+    );
+}
+
+#[test]
 fn test_mvcc_aware_compaction_prioritization() {
+    use tikv::{
+        server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION,
+        storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER,
+    };
+
+    let _guard = lock_auto_compaction_test();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
     // Test that MVCC-aware compaction correctly prioritizes regions
     // with high MVCC read activity over regions with just high redundancy
     // First check if the auto compaction thread was started
@@ -504,11 +685,6 @@ fn test_mvcc_aware_compaction_prioritization() {
     thread::sleep(Duration::from_millis(5000));
     // start execution of auto compaction thread
     fail::remove(fp_compaction_start);
-
-    use tikv::{
-        server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION,
-        storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER,
-    };
 
     // Store the expected region IDs for verification
     let region1_id = region1.get_id();
