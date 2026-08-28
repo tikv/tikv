@@ -1784,9 +1784,7 @@ where
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
 
-        // Update leader info
-        self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+        self.read_progress.update_region(self.region());
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();

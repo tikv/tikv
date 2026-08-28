@@ -160,6 +160,9 @@ High-risk contracts:
   generation, transport, application, and cleanup are all coupled.
 - Local reads must only bypass raft when lease and read-progress guarantees are
   valid.
+- Resolved-ts `RegionReadProgress` has split ownership: region metadata paths
+  may refresh epoch/peers, but leader ID and term must be published by Raft
+  Ready leader/term transitions.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
 - Store-to-peer broadcasts can fan out one peer message per region. Keep this
@@ -197,6 +200,9 @@ High-risk contracts:
 - Startup and online updates share the
   `consistency_check_interval_seconds` label; online updates must not create a
   separate `consistency_check_interval` series.
+- Resolved-ts CheckLeader anomalies should expose both sides of the decision:
+  leader-side local skip/request/response state and follower-side registry miss
+  or cached leader tuple mismatch details.
 
 Open these first when triaging:
 
