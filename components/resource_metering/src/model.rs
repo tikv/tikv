@@ -22,10 +22,13 @@ thread_local! {
     static STATIC_CPU_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
     static STATIC_NETWORK_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
     static STATIC_LOGICAL_IO_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+    static STATIC_LOGICAL_READ_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+    static STATIC_LOGICAL_WRITE_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+    static STATIC_ROCKSDB_BLOCK_READ_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
 }
 
 /// Find the kth values in the iterator, returns (kth_cpu_time,
-/// kth_network_traffic, kth_logical_io)
+/// kth_network_traffic, kth_logical_io).
 pub fn find_kth_values<'a, T: 'a>(
     iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
     k: usize,
@@ -54,6 +57,58 @@ pub fn find_kth_values<'a, T: 'a>(
     STATIC_LOGICAL_IO_BUF.with(move |b| b.set(logical_io_buf));
 
     (kth_cpu, kth_network, kth_logical_io)
+}
+
+/// Find the kth values for detailed IO selection, returning CPU, network,
+/// logical read, logical write, and RocksDB block read thresholds.
+pub fn find_kth_detailed_io_values<'a, T: 'a>(
+    iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    k: usize,
+) -> (u32, u64, u64, u64, u64) {
+    let mut cpu_buf = STATIC_CPU_BUF.with(|b| b.take());
+    let mut network_buf = STATIC_NETWORK_BUF.with(|b| b.take());
+    let mut logical_read_buf = STATIC_LOGICAL_READ_BUF.with(|b| b.take());
+    let mut logical_write_buf = STATIC_LOGICAL_WRITE_BUF.with(|b| b.take());
+    let mut rocksdb_block_read_buf = STATIC_ROCKSDB_BLOCK_READ_BUF.with(|b| b.take());
+    cpu_buf.clear();
+    network_buf.clear();
+    logical_read_buf.clear();
+    logical_write_buf.clear();
+    rocksdb_block_read_buf.clear();
+    for (_, record) in iter {
+        cpu_buf.push(record.cpu_time);
+        network_buf.push(record.network_in_bytes + record.network_out_bytes);
+        logical_read_buf.push(record.logical_read_bytes);
+        logical_write_buf.push(record.logical_write_bytes);
+        rocksdb_block_read_buf.push(record.rocksdb_block_read_count);
+    }
+    pdqselect::select_by(&mut cpu_buf, k, |a, b| b.cmp(a));
+    let kth_cpu = cpu_buf[k];
+    STATIC_CPU_BUF.with(move |b| b.set(cpu_buf));
+
+    pdqselect::select_by(&mut network_buf, k, |a, b| b.cmp(a));
+    let kth_network = network_buf[k];
+    STATIC_NETWORK_BUF.with(move |b| b.set(network_buf));
+
+    pdqselect::select_by(&mut logical_read_buf, k, |a, b| b.cmp(a));
+    let kth_logical_read = logical_read_buf[k];
+    STATIC_LOGICAL_READ_BUF.with(move |b| b.set(logical_read_buf));
+
+    pdqselect::select_by(&mut logical_write_buf, k, |a, b| b.cmp(a));
+    let kth_logical_write = logical_write_buf[k];
+    STATIC_LOGICAL_WRITE_BUF.with(move |b| b.set(logical_write_buf));
+
+    pdqselect::select_by(&mut rocksdb_block_read_buf, k, |a, b| b.cmp(a));
+    let kth_rocksdb_block_read = rocksdb_block_read_buf[k];
+    STATIC_ROCKSDB_BLOCK_READ_BUF.with(move |b| b.set(rocksdb_block_read_buf));
+
+    (
+        kth_cpu,
+        kth_network,
+        kth_logical_read,
+        kth_logical_write,
+        kth_rocksdb_block_read,
+    )
 }
 
 /// Find the kth cpu time in the iterator.
@@ -113,6 +168,36 @@ pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
     )
 }
 
+/// Get picked and unpicked iterators for detailed IO TopN selection.
+pub fn get_iter_for_detailed_io<'a, T: 'a>(
+    records: &'a HashMap<T, RawRecord>,
+    kth_cpu: u32,
+    kth_network: u64,
+    kth_logical_read: u64,
+    kth_logical_write: u64,
+    kth_rocksdb_block_read: u64,
+) -> (
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+) {
+    (
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time > kth_cpu
+                || v.network_in_bytes + v.network_out_bytes > kth_network
+                || v.logical_read_bytes > kth_logical_read
+                || v.logical_write_bytes > kth_logical_write
+                || v.rocksdb_block_read_count > kth_rocksdb_block_read
+        }),
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time <= kth_cpu
+                && v.network_in_bytes + v.network_out_bytes <= kth_network
+                && v.logical_read_bytes <= kth_logical_read
+                && v.logical_write_bytes <= kth_logical_write
+                && v.rocksdb_block_read_count <= kth_rocksdb_block_read
+        }),
+    )
+}
+
 /// Append raw_record to records[key] at timestamp ts.
 fn append_impl<T>(records: &mut HashMap<T, Record>, ts: u64, key: &T, raw_record: &RawRecord)
 where
@@ -132,6 +217,7 @@ where
                 logical_write_bytes_list: vec![raw_record.logical_write_bytes],
                 network_in_bytes_list: vec![raw_record.network_in_bytes],
                 network_out_bytes_list: vec![raw_record.network_out_bytes],
+                rocksdb_block_read_count_list: vec![raw_record.rocksdb_block_read_count],
             },
         );
         return;
@@ -146,6 +232,8 @@ where
         *record.logical_write_bytes_list.last_mut().unwrap() += raw_record.logical_write_bytes;
         *record.network_in_bytes_list.last_mut().unwrap() += raw_record.network_in_bytes;
         *record.network_out_bytes_list.last_mut().unwrap() += raw_record.network_out_bytes;
+        *record.rocksdb_block_read_count_list.last_mut().unwrap() +=
+            raw_record.rocksdb_block_read_count;
     } else {
         record.timestamps.push(ts);
         record.cpu_time_list.push(raw_record.cpu_time);
@@ -163,16 +251,18 @@ where
         record
             .network_out_bytes_list
             .push(raw_record.network_out_bytes);
+        record
+            .rocksdb_block_read_count_list
+            .push(raw_record.rocksdb_block_read_count);
     }
 }
 
-/// Pick top n agged raw records, then append picked topN records and merge
-/// unpicked ones to others. If enable_network_io_collection is true, pick top n
-/// records by cpu_time, network_io and logical_io, otherwise, pick top n
-/// records by cpu_time only.
+/// Pick top n candidate raw records per effective resource dimension, append
+/// their union, and merge unpicked records into others.
 pub fn handle_records_impl<'a, K, T>(
     records: &'a mut T,
     enable_network_io_collection: bool,
+    enable_detailed_io_collection: bool,
     agg_map: &'a HashMap<K, crate::RawRecord>,
     ts: u64,
     n: usize,
@@ -184,7 +274,20 @@ pub fn handle_records_impl<'a, K, T>(
         records.append(ts, agg_map.iter());
         return;
     }
-    if enable_network_io_collection {
+    if enable_network_io_collection && enable_detailed_io_collection {
+        let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
+            find_kth_detailed_io_values(agg_map.iter(), n);
+        let (picked_iter, unpicked_iter) = get_iter_for_detailed_io(
+            agg_map,
+            kth_cpu,
+            kth_network,
+            kth_logical_read,
+            kth_logical_write,
+            kth_rocksdb_block_read,
+        );
+        records.append(ts, picked_iter);
+        records.merge_other(ts, unpicked_iter);
+    } else if enable_network_io_collection {
         let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
         let (picked_iter, unpicked_iter) =
             get_iter_for_cpu_network_io(agg_map, kth_cpu, kth_network, kth_logical_io);
@@ -249,6 +352,9 @@ pub struct RawRecord {
     pub logical_write_bytes: u64,
     pub network_in_bytes: u64,
     pub network_out_bytes: u64,
+    /// RocksDB block reads used for the downstream `read_iops` dimension. This
+    /// is a relative attribution signal, not device-level IOPS.
+    pub rocksdb_block_read_count: u64,
 }
 
 impl RawRecord {
@@ -276,6 +382,7 @@ impl RawRecord {
         self.logical_write_bytes += other.logical_write_bytes;
         self.network_in_bytes += other.network_in_bytes;
         self.network_out_bytes += other.network_out_bytes;
+        self.rocksdb_block_read_count += other.rocksdb_block_read_count;
     }
 
     pub fn merge_summary(&mut self, r: &SummaryRecord) {
@@ -285,6 +392,7 @@ impl RawRecord {
         self.logical_write_bytes += r.logical_write_bytes.load(Relaxed);
         self.network_in_bytes += r.network_in_bytes.load(Relaxed);
         self.network_out_bytes += r.network_out_bytes.load(Relaxed);
+        self.rocksdb_block_read_count += r.rocksdb_block_read_count.load(Relaxed);
     }
 }
 
@@ -382,6 +490,7 @@ pub struct Record {
     pub logical_write_bytes_list: Vec<u64>,
     pub network_in_bytes_list: Vec<u64>,
     pub network_out_bytes_list: Vec<u64>,
+    pub rocksdb_block_read_count_list: Vec<u64>,
     pub total_cpu_time: u32,
 }
 
@@ -398,6 +507,7 @@ impl From<Record> for Vec<GroupTagRecordItem> {
             item.set_logical_write_bytes(record.logical_write_bytes_list[n]);
             item.set_network_in_bytes(record.network_in_bytes_list[n]);
             item.set_network_out_bytes(record.network_out_bytes_list[n]);
+            item.set_rocksdb_block_read_count(record.rocksdb_block_read_count_list[n]);
             items.push(item);
         }
         items
@@ -413,6 +523,7 @@ impl Record {
             && self.timestamps.len() == self.logical_write_bytes_list.len()
             && self.timestamps.len() == self.network_in_bytes_list.len()
             && self.timestamps.len() == self.network_out_bytes_list.len()
+            && self.timestamps.len() == self.rocksdb_block_read_count_list.len()
     }
 }
 
@@ -468,6 +579,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
+                    rocksdb_block_read_count,
                     ..
                 },
             ) in records.others
@@ -481,6 +593,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                 item.set_logical_write_bytes(logical_write_bytes);
                 item.set_network_in_bytes(network_in_bytes);
                 item.set_network_out_bytes(network_out_bytes);
+                item.set_rocksdb_block_read_count(rocksdb_block_read_count);
                 items.push(item);
             }
             let mut tag_record = GroupTagRecord::new();
@@ -636,6 +749,7 @@ impl From<RegionRecords> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
+                    rocksdb_block_read_count,
                     ..
                 },
             ) in records.others
@@ -649,6 +763,7 @@ impl From<RegionRecords> for Vec<ResourceUsageRecord> {
                 item.set_logical_write_bytes(logical_write_bytes);
                 item.set_network_in_bytes(network_in_bytes);
                 item.set_network_out_bytes(network_out_bytes);
+                item.set_rocksdb_block_read_count(rocksdb_block_read_count);
                 items.push(item);
             }
             let mut region_record = RegionRecord::new();
@@ -736,6 +851,10 @@ pub struct SummaryRecord {
 
     /// Network output bytes.
     pub network_out_bytes: AtomicU64,
+
+    /// RocksDB block reads used for the downstream `read_iops` dimension. This
+    /// is a relative attribution signal, not device-level IOPS.
+    pub rocksdb_block_read_count: AtomicU64,
 }
 
 impl Clone for SummaryRecord {
@@ -747,6 +866,7 @@ impl Clone for SummaryRecord {
             logical_write_bytes: AtomicU64::new(self.logical_write_bytes.load(Relaxed)),
             network_in_bytes: AtomicU64::new(self.network_in_bytes.load(Relaxed)),
             network_out_bytes: AtomicU64::new(self.network_out_bytes.load(Relaxed)),
+            rocksdb_block_read_count: AtomicU64::new(self.rocksdb_block_read_count.load(Relaxed)),
         }
     }
 }
@@ -760,6 +880,7 @@ impl SummaryRecord {
         self.logical_write_bytes.store(0, Relaxed);
         self.network_in_bytes.store(0, Relaxed);
         self.network_out_bytes.store(0, Relaxed);
+        self.rocksdb_block_read_count.store(0, Relaxed);
     }
 
     /// Add two items.
@@ -776,6 +897,8 @@ impl SummaryRecord {
             .fetch_add(other.network_in_bytes.load(Relaxed), Relaxed);
         self.network_out_bytes
             .fetch_add(other.network_out_bytes.load(Relaxed), Relaxed);
+        self.rocksdb_block_read_count
+            .fetch_add(other.rocksdb_block_read_count.load(Relaxed), Relaxed);
     }
 
     /// Gets the value and writes it to zero.
@@ -788,7 +911,21 @@ impl SummaryRecord {
             logical_write_bytes: AtomicU64::new(self.logical_write_bytes.swap(0, Relaxed)),
             network_in_bytes: AtomicU64::new(self.network_in_bytes.swap(0, Relaxed)),
             network_out_bytes: AtomicU64::new(self.network_out_bytes.swap(0, Relaxed)),
+            rocksdb_block_read_count: AtomicU64::new(
+                self.rocksdb_block_read_count.swap(0, Relaxed),
+            ),
         }
+    }
+
+    /// Returns true if all fields are zero.
+    pub fn is_empty(&self) -> bool {
+        self.read_keys.load(Relaxed) == 0
+            && self.write_keys.load(Relaxed) == 0
+            && self.logical_read_bytes.load(Relaxed) == 0
+            && self.logical_write_bytes.load(Relaxed) == 0
+            && self.network_in_bytes.load(Relaxed) == 0
+            && self.network_out_bytes.load(Relaxed) == 0
+            && self.rocksdb_block_read_count.load(Relaxed) == 0
     }
 }
 
@@ -796,8 +933,25 @@ impl SummaryRecord {
 mod tests {
     use std::sync::atomic::Ordering::Relaxed;
 
+    use collections::HashSet;
+
     use super::*;
     use crate::TagInfos;
+
+    fn record_with_block_read_count(block_read_count: u64) -> Record {
+        Record {
+            timestamps: vec![1],
+            cpu_time_list: vec![2],
+            read_keys_list: vec![3],
+            write_keys_list: vec![4],
+            logical_read_bytes_list: vec![5],
+            logical_write_bytes_list: vec![6],
+            network_in_bytes_list: vec![7],
+            network_out_bytes_list: vec![8],
+            rocksdb_block_read_count_list: vec![block_read_count],
+            total_cpu_time: 2,
+        }
+    }
 
     #[test]
     fn test_summary_record() {
@@ -808,6 +962,7 @@ mod tests {
             network_out_bytes: AtomicU64::new(20),
             logical_read_bytes: AtomicU64::new(100),
             logical_write_bytes: AtomicU64::new(200),
+            rocksdb_block_read_count: AtomicU64::new(300),
         };
         assert_eq!(record.read_keys.load(Relaxed), 1);
         assert_eq!(record.write_keys.load(Relaxed), 2);
@@ -815,6 +970,7 @@ mod tests {
         assert_eq!(record.network_out_bytes.load(Relaxed), 20);
         assert_eq!(record.logical_read_bytes.load(Relaxed), 100);
         assert_eq!(record.logical_write_bytes.load(Relaxed), 200);
+        assert_eq!(record.rocksdb_block_read_count.load(Relaxed), 300);
         let record2 = record.clone();
         assert_eq!(record2.read_keys.load(Relaxed), 1);
         assert_eq!(record2.write_keys.load(Relaxed), 2);
@@ -822,6 +978,7 @@ mod tests {
         assert_eq!(record2.network_out_bytes.load(Relaxed), 20);
         assert_eq!(record2.logical_read_bytes.load(Relaxed), 100);
         assert_eq!(record2.logical_write_bytes.load(Relaxed), 200);
+        assert_eq!(record2.rocksdb_block_read_count.load(Relaxed), 300);
         record.merge(&SummaryRecord {
             read_keys: AtomicU32::new(3),
             write_keys: AtomicU32::new(4),
@@ -829,6 +986,7 @@ mod tests {
             network_out_bytes: AtomicU64::new(40),
             logical_read_bytes: AtomicU64::new(300),
             logical_write_bytes: AtomicU64::new(400),
+            rocksdb_block_read_count: AtomicU64::new(500),
         });
         assert_eq!(record.read_keys.load(Relaxed), 4);
         assert_eq!(record.write_keys.load(Relaxed), 6);
@@ -836,6 +994,7 @@ mod tests {
         assert_eq!(record.network_out_bytes.load(Relaxed), 60);
         assert_eq!(record.logical_read_bytes.load(Relaxed), 400);
         assert_eq!(record.logical_write_bytes.load(Relaxed), 600);
+        assert_eq!(record.rocksdb_block_read_count.load(Relaxed), 800);
         let record2 = record.take_and_reset();
         assert_eq!(record.read_keys.load(Relaxed), 0);
         assert_eq!(record.write_keys.load(Relaxed), 0);
@@ -843,12 +1002,14 @@ mod tests {
         assert_eq!(record.network_out_bytes.load(Relaxed), 0);
         assert_eq!(record.logical_read_bytes.load(Relaxed), 0);
         assert_eq!(record.logical_write_bytes.load(Relaxed), 0);
+        assert_eq!(record.rocksdb_block_read_count.load(Relaxed), 0);
         assert_eq!(record2.read_keys.load(Relaxed), 4);
         assert_eq!(record2.write_keys.load(Relaxed), 6);
         assert_eq!(record2.network_in_bytes.load(Relaxed), 40);
         assert_eq!(record2.network_out_bytes.load(Relaxed), 60);
         assert_eq!(record2.logical_read_bytes.load(Relaxed), 400);
         assert_eq!(record2.logical_write_bytes.load(Relaxed), 600);
+        assert_eq!(record2.rocksdb_block_read_count.load(Relaxed), 800);
         record2.reset();
         assert_eq!(record2.read_keys.load(Relaxed), 0);
         assert_eq!(record2.write_keys.load(Relaxed), 0);
@@ -856,6 +1017,75 @@ mod tests {
         assert_eq!(record2.network_out_bytes.load(Relaxed), 0);
         assert_eq!(record2.logical_read_bytes.load(Relaxed), 0);
         assert_eq!(record2.logical_write_bytes.load(Relaxed), 0);
+        assert_eq!(record2.rocksdb_block_read_count.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn test_summary_record_is_empty_checks_every_field() {
+        let record = SummaryRecord::default();
+        assert!(record.is_empty());
+
+        record.read_keys.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.write_keys.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.logical_read_bytes.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.logical_write_bytes.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.network_in_bytes.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.network_out_bytes.store(1, Relaxed);
+        assert!(!record.is_empty());
+        record.reset();
+        record.rocksdb_block_read_count.store(1, Relaxed);
+        assert!(!record.is_empty());
+    }
+
+    #[test]
+    fn test_block_read_count_proto_for_others_and_regions() {
+        let mut records = Records::default();
+        records.others.insert(
+            1,
+            RawRecord {
+                rocksdb_block_read_count: 11,
+                ..Default::default()
+            },
+        );
+        let records: Vec<ResourceUsageRecord> = records.into();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].get_record().get_items()[0].get_rocksdb_block_read_count(),
+            11
+        );
+
+        let mut regions = RegionRecords::default();
+        regions.records.insert(42, record_with_block_read_count(22));
+        regions.others.insert(
+            1,
+            RawRecord {
+                rocksdb_block_read_count: 33,
+                ..Default::default()
+            },
+        );
+        let mut regions: Vec<ResourceUsageRecord> = regions.into();
+        regions.sort_by_key(|record| record.get_region_record().get_region_id());
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].get_region_record().get_region_id(), 0);
+        assert_eq!(
+            regions[0].get_region_record().get_items()[0].get_rocksdb_block_read_count(),
+            33
+        );
+        assert_eq!(regions[1].get_region_record().get_region_id(), 42);
+        assert_eq!(
+            regions[1].get_region_record().get_items()[0].get_rocksdb_block_read_count(),
+            22
+        );
     }
 
     #[test]
@@ -893,6 +1123,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                rocksdb_block_read_count: 55,
                 ..Default::default()
             },
         );
@@ -906,6 +1137,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                rocksdb_block_read_count: 66,
                 ..Default::default()
             },
         );
@@ -919,6 +1151,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                rocksdb_block_read_count: 77,
                 ..Default::default()
             },
         );
@@ -931,6 +1164,150 @@ mod tests {
         assert_eq!(records.records.len(), 0);
         records.append(raw.begin_unix_time_secs, agg_map.iter());
         assert_eq!(records.records.len(), 3);
+
+        let mut report: Vec<ResourceUsageRecord> = records.into();
+        report.sort_by_key(|record| record.get_record().get_resource_group_tag().to_vec());
+        assert_eq!(report.len(), 3);
+        assert_eq!(
+            report[0].get_record().get_items()[0].get_rocksdb_block_read_count(),
+            55
+        );
+        assert_eq!(
+            report[1].get_record().get_items()[0].get_rocksdb_block_read_count(),
+            66
+        );
+        assert_eq!(
+            report[2].get_record().get_items()[0].get_rocksdb_block_read_count(),
+            77
+        );
+    }
+
+    #[test]
+    fn test_pick_top_k_rocksdb_block_read() {
+        let mut records = HashMap::default();
+        for (tag, block_read_count) in [(b"a", 100), (b"b", 80), (b"c", 5), (b"d", 5), (b"e", 5)] {
+            records.insert(
+                Arc::new(tag.to_vec()),
+                RawRecord {
+                    rocksdb_block_read_count: block_read_count,
+                    ..Default::default()
+                },
+            );
+        }
+
+        let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
+            find_kth_detailed_io_values(records.iter(), 2);
+        assert_eq!(kth_rocksdb_block_read, 5);
+        let (picked, evicted) = get_iter_for_detailed_io(
+            &records,
+            kth_cpu,
+            kth_network,
+            kth_logical_read,
+            kth_logical_write,
+            kth_rocksdb_block_read,
+        );
+        let picked: HashMap<_, _> = picked.collect();
+        assert_eq!(picked.len(), 2);
+        assert!(picked.contains_key(&Arc::new(b"a".to_vec())));
+        assert!(picked.contains_key(&Arc::new(b"b".to_vec())));
+        assert_eq!(evicted.count(), 3);
+    }
+
+    #[test]
+    fn test_pick_top_k_separates_logical_read_and_write() {
+        let mut records = HashMap::default();
+        records.insert(
+            Arc::new(b"read".to_vec()),
+            RawRecord {
+                logical_read_bytes: 100,
+                ..Default::default()
+            },
+        );
+        records.insert(
+            Arc::new(b"write".to_vec()),
+            RawRecord {
+                logical_read_bytes: 1,
+                logical_write_bytes: 10,
+                ..Default::default()
+            },
+        );
+        records.insert(
+            Arc::new(b"middle".to_vec()),
+            RawRecord {
+                logical_read_bytes: 50,
+                ..Default::default()
+            },
+        );
+
+        let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
+            find_kth_detailed_io_values(records.iter(), 1);
+        let (picked, _) = get_iter_for_detailed_io(
+            &records,
+            kth_cpu,
+            kth_network,
+            kth_logical_read,
+            kth_logical_write,
+            kth_rocksdb_block_read,
+        );
+        let picked: HashMap<_, _> = picked.collect();
+        assert_eq!(picked.len(), 2);
+        assert!(picked.contains_key(&Arc::new(b"read".to_vec())));
+        assert!(picked.contains_key(&Arc::new(b"write".to_vec())));
+    }
+
+    #[test]
+    fn test_handle_records_respects_detailed_io_scope() {
+        let mut raw = HashMap::default();
+        raw.insert(
+            Arc::new(b"read".to_vec()),
+            RawRecord {
+                logical_read_bytes: 100,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"write".to_vec()),
+            RawRecord {
+                logical_write_bytes: 90,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"combined".to_vec()),
+            RawRecord {
+                logical_read_bytes: 60,
+                logical_write_bytes: 60,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"block".to_vec()),
+            RawRecord {
+                rocksdb_block_read_count: 1_000,
+                ..Default::default()
+            },
+        );
+
+        let picked = |network, detailed| {
+            let mut records = Records::default();
+            handle_records_impl(&mut records, network, detailed, &raw, 1, 1);
+            records.records.keys().cloned().collect::<HashSet<_>>()
+        };
+
+        assert!(picked(false, false).is_empty());
+        assert!(picked(false, true).is_empty());
+        let legacy = [Arc::new(b"combined".to_vec())]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        assert_eq!(picked(true, false), legacy);
+        let detailed = [
+            Arc::new(b"read".to_vec()),
+            Arc::new(b"write".to_vec()),
+            Arc::new(b"block".to_vec()),
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>();
+        assert_eq!(picked(true, true), detailed);
     }
 
     #[test]
