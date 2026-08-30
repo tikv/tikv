@@ -21,6 +21,10 @@ use super::{
 };
 use crate::ShortCircuitFnMeta;
 
+// Each active short-circuit call retains batch results and may retain row maps.
+// Bound nesting to keep both the evaluator stack and retained batch state small.
+const MAX_SHORT_CIRCUIT_NESTING_DEPTH: usize = 32;
+
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
@@ -281,7 +285,7 @@ fn append_rpn_nodes_recursively<F, SCF>(
     // TODO: Passing `max_columns` is only a workaround solution that works when we only check
     // column offset. To totally check whether or not the expression is valid, we need to pass in
     // the full schema instead.
-) -> Result<()>
+) -> Result<usize>
 where
     F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
     SCF: Fn(&Expr) -> Option<ShortCircuitFnMeta> + Copy,
@@ -295,8 +299,14 @@ where
             sc_fn_mapper,
             max_columns,
         ),
-        ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
-        _ => handle_node_constant(tree_node, rpn_nodes, ctx),
+        ExprType::ColumnRef => {
+            handle_node_column_ref(tree_node, rpn_nodes, max_columns)?;
+            Ok(0)
+        }
+        _ => {
+            handle_node_constant(tree_node, rpn_nodes, ctx)?;
+            Ok(0)
+        }
     }
 }
 
@@ -330,7 +340,7 @@ fn handle_node_fn_call<F, SCF>(
     fn_mapper: F,
     sc_fn_mapper: SCF,
     max_columns: usize,
-) -> Result<()>
+) -> Result<usize>
 where
     F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
     SCF: Fn(&Expr) -> Option<ShortCircuitFnMeta> + Copy,
@@ -353,14 +363,18 @@ where
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
+    let mut max_argument_depth = 0;
+
     match short_circuit_func_meta {
         Some(short_circuit_func_meta)
             if ctx.cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION) =>
         {
             let mut parsed_args = Vec::with_capacity(args_len);
+            let mut is_short_circuit_worthwhile = false;
+            let mut max_sc_depth = 0;
             for arg in args {
                 let mut arg_nodes = Vec::new();
-                append_rpn_nodes_recursively(
+                let short_circuit_depth = append_rpn_nodes_recursively(
                     arg,
                     &mut arg_nodes,
                     ctx,
@@ -368,10 +382,22 @@ where
                     sc_fn_mapper,
                     max_columns,
                 )?;
+
+                let should_flatten = should_flatten(short_circuit_func_meta, &arg_nodes);
+                max_argument_depth = max_argument_depth.max(short_circuit_depth);
+                max_sc_depth = max_sc_depth.max(if should_flatten {
+                    short_circuit_depth.saturating_sub(1)
+                } else {
+                    short_circuit_depth
+                });
+                is_short_circuit_worthwhile |= should_flatten || !is_simple_expr(&arg_nodes);
+                is_short_circuit_worthwhile &=
+                    max_sc_depth.saturating_add(1) <= MAX_SHORT_CIRCUIT_NESTING_DEPTH;
+
                 parsed_args.push(arg_nodes);
             }
 
-            if is_short_circuit_worthwhile(short_circuit_func_meta, &parsed_args) {
+            if is_short_circuit_worthwhile {
                 let mut short_circuit_args = Vec::with_capacity(args_len);
                 for arg_nodes in parsed_args {
                     append_short_circuit_arg(
@@ -386,7 +412,7 @@ where
                     args: short_circuit_args.into_boxed_slice(),
                     field_type: tree_node.take_field_type(),
                 });
-                return Ok(());
+                return Ok(max_sc_depth + 1);
             }
 
             // The children have already been converted to RPN while deciding whether
@@ -400,17 +426,17 @@ where
             // Visit children first, then push current node, so that it is a post-order
             // traversal.
             for arg in args {
-                append_rpn_nodes_recursively(
+                max_argument_depth = max_argument_depth.max(append_rpn_nodes_recursively(
                     arg,
                     rpn_nodes,
                     ctx,
                     fn_mapper,
                     sc_fn_mapper,
                     max_columns,
-                )?;
+                )?)
             }
         }
-    }
+    };
 
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func_meta,
@@ -418,9 +444,10 @@ where
         field_type: tree_node.take_field_type(),
         metadata,
     });
-    Ok(())
+    Ok(max_argument_depth)
 }
 
+#[inline]
 fn should_flatten(father_func: ShortCircuitFnMeta, arg: &[RpnExpressionNode]) -> bool {
     assert!(!arg.is_empty());
     if arg.len() > 1 {
@@ -438,24 +465,12 @@ fn should_flatten(father_func: ShortCircuitFnMeta, arg: &[RpnExpressionNode]) ->
     )
 }
 
-/// Returns whether a binary AND/OR call benefits from short-circuit evaluation.
-///
-/// A long logical chain is represented by nested binary calls. Short-circuit
-/// evaluation is worthwhile when a nested call can be flattened, or when an
-/// argument requires more than reading a constant or column. A simple binary
-/// call with only cheap arguments stays on the regular RPN path to avoid
-/// short-circuit bookkeeping overhead.
-fn is_short_circuit_worthwhile(
-    func: ShortCircuitFnMeta,
-    parsed_args: &[Vec<RpnExpressionNode>],
-) -> bool {
-    parsed_args.iter().any(|arg| {
-        should_flatten(func, arg)
-            || !matches!(
-                arg.as_slice(),
-                [RpnExpressionNode::Constant { .. } | RpnExpressionNode::ColumnRef { .. }]
-            )
-    })
+#[inline]
+fn is_simple_expr(arg: &[RpnExpressionNode]) -> bool {
+    matches!(
+        arg,
+        [RpnExpressionNode::Constant { .. } | RpnExpressionNode::ColumnRef { .. }]
+    )
 }
 
 fn append_short_circuit_arg(
@@ -671,6 +686,22 @@ mod tests {
         EvalContext::new(Arc::new(EvalConfig::from_flag(
             Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION,
         )))
+    }
+
+    fn short_circuit_depth(expr: &RpnExpression) -> usize {
+        expr.iter()
+            .map(|node| match node {
+                RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                    1 + args.iter().map(short_circuit_depth).max().unwrap_or(0)
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn max_short_circuit_depth() -> usize {
+        MAX_SHORT_CIRCUIT_NESTING_DEPTH
     }
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
@@ -1108,6 +1139,38 @@ mod tests {
         assert_eq!(exp.node_count(), 6);
         assert_eq!(exp.column_ref_count(), 4);
         assert_eq!(exp.referenced_column_offsets(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_deep_mixed_short_circuit_calls_fall_back_to_rpn() {
+        let mut node = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
+        for i in 0..=max_short_circuit_depth() + 1 {
+            let sig = if i % 2 == 0 {
+                ScalarFuncSig::LogicalOr
+            } else {
+                ScalarFuncSig::LogicalAnd
+            };
+            node = ExprDefBuilder::scalar_func(sig, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(node)
+                .build();
+        }
+
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
+            node,
+            &mut ctx,
+            crate::map_expr_node_to_rpn_func,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(short_circuit_depth(&exp), max_short_circuit_depth());
+        assert!(matches!(
+            exp.last(),
+            Some(RpnExpressionNode::FnCall { func_meta, .. })
+                if func_meta.name == "logical_or" || func_meta.name == "logical_and"
+        ));
     }
 
     #[test]
