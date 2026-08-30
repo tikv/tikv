@@ -22,7 +22,8 @@ use super::{
 use crate::ShortCircuitFnMeta;
 
 // Each active short-circuit call retains batch results and may retain row maps.
-// Bound nesting to keep both the evaluator stack and retained batch state small.
+// Bound nesting to keep both the evaluator stack and retained batch state
+// small.
 const MAX_SHORT_CIRCUIT_NESTING_DEPTH: usize = 32;
 
 /// Helper to build an `RpnExpression`.

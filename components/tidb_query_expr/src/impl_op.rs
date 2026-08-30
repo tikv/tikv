@@ -122,6 +122,131 @@ impl ScLogicalOp for ScLogicalOr {
     const IDENTITY: Int = 0;
 }
 
+fn merge_short_circuit_arg_result<Op: ScLogicalOp>(
+    arg_result: RpnStackNode,
+    pending_positions: Option<&[usize]>,
+    pending_len: usize,
+    output_rows: usize,
+    result: &mut ChunkedVecSized<Int>,
+) -> Result<usize> {
+    let mut resolved_count = 0;
+    let is_first = result.is_empty();
+    match arg_result {
+        RpnStackNode::Scalar { value, .. } => {
+            let value = match value {
+                ScalarValue::Int(_) | ScalarValue::Enum(_) => value.as_int().copied(),
+                _ => {
+                    return Err(other_err!(
+                        "logical expression must produce Int, got {}",
+                        value.eval_type()
+                    ));
+                }
+            };
+            let value = Op::normalize_value(value);
+            resolved_count = if Op::is_short_circuit(value) {
+                pending_len
+            } else {
+                0
+            };
+            if is_first {
+                *result = ChunkedVecSized::with_capacity(output_rows);
+                for _ in 0..pending_len {
+                    result.push(value);
+                }
+            } else if resolved_count == pending_len || value.is_none() {
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                    result.set(output_index, value);
+                }
+            }
+        }
+        RpnStackNode::Vector {
+            value: RpnStackNodeVectorValue::Generated { physical_value },
+            ..
+        } => {
+            let vec_result = match physical_value {
+                VectorValue::Int(vec_result) => vec_result,
+                VectorValue::Enum(vec_result) => vec_result.as_vec_int().clone(),
+                _ => {
+                    return Err(other_err!(
+                        "logical expression must produce Int, got {}",
+                        physical_value.eval_type()
+                    ));
+                }
+            };
+            if is_first {
+                *result = vec_result;
+
+                for i in 0..pending_len {
+                    let value = result.get_option_ref(i).copied();
+                    let normalized = Op::normalize_value(value);
+
+                    if normalized != value {
+                        result.set(i, normalized);
+                    }
+
+                    if Op::is_short_circuit(normalized) {
+                        resolved_count += 1;
+                    }
+                }
+            } else {
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+
+                    Op::handle_res_value(
+                        result,
+                        output_index,
+                        vec_result.get_option_ref(i).copied(),
+                        &mut resolved_count,
+                    );
+                }
+            }
+        }
+        RpnStackNode::Vector {
+            value:
+                RpnStackNodeVectorValue::Ref {
+                    physical_value,
+                    logical_rows,
+                },
+            ..
+        } => {
+            let vec_result = match physical_value {
+                VectorValue::Int(vec_result) => vec_result,
+                VectorValue::Enum(vec_result) => vec_result.as_vec_int(),
+                _ => {
+                    return Err(other_err!(
+                        "logical expression must produce Int, got {}",
+                        physical_value.eval_type()
+                    ));
+                }
+            };
+            if is_first {
+                *result = ChunkedVecSized::<Int>::with_capacity(output_rows);
+                for i in 0..pending_len {
+                    let value =
+                        Op::normalize_value(vec_result.get_option_ref(logical_rows[i]).copied());
+                    if Op::is_short_circuit(value) {
+                        resolved_count += 1;
+                    }
+                    result.push(value);
+                }
+            } else {
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                    Op::handle_res_value(
+                        result,
+                        output_index,
+                        vec_result.get_option_ref(logical_rows[i]).copied(),
+                        &mut resolved_count,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(resolved_count)
+}
+
 fn eval_logical_short_circuit<Op: ScLogicalOp>(
     ctx: &mut EvalContext,
     schema: &[FieldType],
@@ -160,121 +285,13 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
             pending_len,
         )?;
 
-        let mut resolved_count = 0;
-        let is_first = result.is_empty();
-        match arg_result {
-            RpnStackNode::Scalar { value, .. } => {
-                let value = match value {
-                    ScalarValue::Int(_) | ScalarValue::Enum(_) => value.as_int().copied(),
-                    _ => {
-                        return Err(other_err!(
-                            "logical expression must produce Int, got {}",
-                            value.eval_type()
-                        ));
-                    }
-                };
-                let value = Op::normalize_value(value);
-                resolved_count = if Op::is_short_circuit(value) {
-                    pending_len
-                } else {
-                    0
-                };
-                if is_first {
-                    result = ChunkedVecSized::with_capacity(output_rows);
-                    for _ in 0..pending_len {
-                        result.push(value);
-                    }
-                } else if resolved_count == pending_len || value.is_none() {
-                    for i in 0..pending_len {
-                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
-                        result.set(output_index, value);
-                    }
-                }
-            }
-            RpnStackNode::Vector {
-                value: RpnStackNodeVectorValue::Generated { physical_value },
-                ..
-            } => {
-                let vec_result = match physical_value {
-                    VectorValue::Int(vec_result) => vec_result,
-                    VectorValue::Enum(vec_result) => vec_result.as_vec_int().clone(),
-                    _ => {
-                        return Err(other_err!(
-                            "logical expression must produce Int, got {}",
-                            physical_value.eval_type()
-                        ));
-                    }
-                };
-                if is_first {
-                    result = vec_result;
-
-                    for i in 0..pending_len {
-                        let value = result.get_option_ref(i).copied();
-                        let normalized = Op::normalize_value(value);
-
-                        if normalized != value {
-                            result.set(i, normalized);
-                        }
-
-                        if Op::is_short_circuit(normalized) {
-                            resolved_count += 1;
-                        }
-                    }
-                } else {
-                    for i in 0..pending_len {
-                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
-
-                        Op::handle_res_value(
-                            &mut result,
-                            output_index,
-                            vec_result.get_option_ref(i).copied(),
-                            &mut resolved_count,
-                        );
-                    }
-                }
-            }
-            RpnStackNode::Vector {
-                value:
-                    RpnStackNodeVectorValue::Ref {
-                        physical_value,
-                        logical_rows,
-                    },
-                ..
-            } => {
-                let vec_result = match physical_value {
-                    VectorValue::Int(vec_result) => vec_result,
-                    VectorValue::Enum(vec_result) => vec_result.as_vec_int(),
-                    _ => {
-                        return Err(other_err!(
-                            "logical expression must produce Int, got {}",
-                            physical_value.eval_type()
-                        ));
-                    }
-                };
-                if is_first {
-                    result = ChunkedVecSized::<Int>::with_capacity(output_rows);
-                    for i in 0..pending_len {
-                        let value = Op::normalize_value(
-                            vec_result.get_option_ref(logical_rows[i]).copied(),
-                        );
-                        if Op::is_short_circuit(value) {
-                            resolved_count += 1;
-                        }
-                        result.push(value);
-                    }
-                } else {
-                    for i in 0..pending_len {
-                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
-                        Op::handle_res_value(
-                            &mut result,
-                            output_index,
-                            vec_result.get_option_ref(logical_rows[i]).copied(),
-                            &mut resolved_count,
-                        );
-                    }
-                }
-            }
-        }
+        let resolved_count = merge_short_circuit_arg_result::<Op>(
+            arg_result,
+            pending_positions,
+            pending_len,
+            output_rows,
+            &mut result,
+        )?;
 
         if resolved_count == 0 {
             continue;
