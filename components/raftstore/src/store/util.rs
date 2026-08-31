@@ -35,6 +35,7 @@ use tikv_util::{
     debug, info,
     store::{find_peer_by_id, region},
     time::{Instant, Timespec, monotonic_raw_now},
+    warn,
 };
 use time::Duration;
 use tokio::sync::Notify;
@@ -48,6 +49,7 @@ use crate::{
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
+const CHECK_LEADER_REJECT_LOG_LIMIT: usize = 3;
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
@@ -1313,7 +1315,11 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
+        let mut rejected_count = 0;
+        let mut logged_rejection_count = 0;
+        let mut rejection_log_truncated = false;
         let registry = self.registry.lock().unwrap();
         let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
@@ -1321,8 +1327,56 @@ impl RegionReadProgressRegistry {
             if let Some(rp) = registry.get(&region_id) {
                 if rp.consume_leader_info(leader_info, coprocessor, now) {
                     regions.push(region_id);
+                } else {
+                    rejected_count += 1;
+                    if logged_rejection_count < CHECK_LEADER_REJECT_LOG_LIMIT {
+                        logged_rejection_count += 1;
+                        let (local_leader_info, local_leader_store_id) = rp.dump_leader_info();
+                        warn!(
+                            "[resolved-ts-stuck] check leader task rejected region";
+                            "reason" => "leader_info_mismatch",
+                            "region_id" => region_id,
+                            "request_peer_id" => leader_info.peer_id,
+                            "request_term" => leader_info.term,
+                            "request_epoch_conf_ver" => leader_info.get_region_epoch().get_conf_ver(),
+                            "request_epoch_version" => leader_info.get_region_epoch().get_version(),
+                            "cached_leader_peer_id" => local_leader_info.peer_id,
+                            "cached_leader_term" => local_leader_info.term,
+                            "cached_epoch_conf_ver" => local_leader_info.get_region_epoch().get_conf_ver(),
+                            "cached_epoch_version" => local_leader_info.get_region_epoch().get_version(),
+                            "cached_leader_store_id" => ?local_leader_store_id,
+                        );
+                    } else {
+                        rejection_log_truncated = true;
+                    }
+                }
+            } else {
+                rejected_count += 1;
+                if logged_rejection_count < CHECK_LEADER_REJECT_LOG_LIMIT {
+                    logged_rejection_count += 1;
+                    warn!(
+                        "[resolved-ts-stuck] check leader task rejected region";
+                        "reason" => "registry_miss",
+                        "region_id" => region_id,
+                        "request_peer_id" => leader_info.peer_id,
+                        "request_term" => leader_info.term,
+                        "request_epoch_conf_ver" => leader_info.get_region_epoch().get_conf_ver(),
+                        "request_epoch_version" => leader_info.get_region_epoch().get_version(),
+                    );
+                } else {
+                    rejection_log_truncated = true;
                 }
             }
+        }
+        if regions.len() < request_count {
+            warn!(
+                "[resolved-ts-stuck] check leader task returned partial regions";
+                "request_count" => request_count,
+                "response_count" => regions.len(),
+                "rejected_count" => rejected_count,
+                "logged_rejection_count" => logged_rejection_count,
+                "rejection_log_truncated" => rejection_log_truncated,
+            );
         }
         regions
     }
@@ -1518,16 +1572,11 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
-        if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
-            core.leader_info.epoch = region.get_region_epoch().clone();
-        }
-        if core.leader_info.peers != region.get_peers() {
-            // In v2, we check peers and region epoch independently, because
-            // peers are incomplete but epoch is set correctly during split.
-            core.leader_info.peers = region.get_peers().to_vec();
-        }
-        core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+        core.update_region(region);
+    }
+
+    pub fn update_region(&self, region: &Region) {
+        self.core.lock().unwrap().update_region(region);
     }
 
     /// Reset `safe_ts` and `read_index_safe_ts` to 0 and stop updating them
@@ -1703,6 +1752,19 @@ impl RegionReadProgressCore {
             last_instant_of_update_safe_ts: None,
             last_instant_of_consume_leader: None,
         }
+    }
+
+    fn update_region(&mut self, region: &Region) {
+        if !is_region_epoch_equal(region.get_region_epoch(), &self.leader_info.epoch) {
+            self.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if self.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
+            self.leader_info.peers = region.get_peers().to_vec();
+        }
+        self.leader_info.leader_store_id =
+            find_store_id(&self.leader_info.peers, self.leader_info.leader_id);
     }
 
     // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
@@ -2521,6 +2583,31 @@ mod tests {
             rrp.core.lock().unwrap().get_local_leader_info().peers,
             *region.get_peers(),
         );
+    }
+
+    #[test]
+    fn test_update_region_keeps_leader_info() {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
+        region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let rrp = RegionReadProgress::new(&region, 10, 10, 2);
+        rrp.update_leader_info(1, 5, &region);
+
+        let mut updated_region = region.clone();
+        updated_region.mut_region_epoch().set_conf_ver(2);
+        updated_region.mut_peers().push(new_peer(3, 3));
+        rrp.update_region(&updated_region);
+
+        let core = rrp.core.lock().unwrap();
+        let leader_info = core.get_local_leader_info();
+        assert_eq!(leader_info.leader_id, 1);
+        assert_eq!(leader_info.leader_term, 5);
+        assert_eq!(leader_info.epoch, *updated_region.get_region_epoch());
+        assert_eq!(leader_info.peers, *updated_region.get_peers());
+        assert_eq!(leader_info.leader_store_id, Some(1));
     }
 
     #[test]
