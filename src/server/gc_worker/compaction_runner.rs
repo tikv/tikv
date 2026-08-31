@@ -287,7 +287,7 @@ fn estimate_discardable_entries(
     newest_ts: TimeStamp,
     gc_safe_point: u64,
 ) -> u64 {
-    if num_entries == 0 || oldest_ts > newest_ts {
+    if num_entries == 0 || oldest_ts >= newest_ts {
         return 0;
     }
     let oldest_ts = oldest_ts.into_inner();
