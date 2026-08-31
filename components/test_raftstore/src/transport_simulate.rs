@@ -20,7 +20,7 @@ use raftstore::{
     DiscardReason, Error, Result as RaftStoreResult, Result,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
-        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
+        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, RaftCmdExtraOpts,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
     },
 };
@@ -257,8 +257,9 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
         ctx: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftStoreResult<()> {
-        self.ch.read(ctx, req, cb)
+        self.ch.read(ctx, req, cb, extra_opts)
     }
 
     fn release_snapshot_cache(&mut self) {
