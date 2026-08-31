@@ -354,22 +354,14 @@ impl LeadershipResolver {
             .map_or(0, |req| req.regions[0].compute_size());
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         let timeout = get_min_timeout(timeout, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION);
-        let mut requested_regions_by_store = HashMap::default();
 
-        for (store_id, req) in store_req_map {
+        for (store_id, req) in store_req_map.iter_mut() {
             if req.regions.is_empty() {
                 continue;
             }
             let env = env.clone();
             let to_store = *store_id;
             let region_num = req.regions.len() as u32;
-            requested_regions_by_store.insert(
-                to_store,
-                req.regions
-                    .iter()
-                    .map(|leader_info| leader_info.get_region_id())
-                    .collect::<Vec<_>>(),
-            );
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
@@ -435,7 +427,7 @@ impl LeadershipResolver {
         });
 
         let rpc_count = check_leader_rpcs.len();
-        let mut returned_regions_by_store = HashMap::default();
+        let mut returned_region_count_by_store = HashMap::default();
         let mut check_leader_errors = HashMap::default();
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
@@ -444,7 +436,7 @@ impl LeadershipResolver {
             check_leader_rpcs = remains;
             match res {
                 Ok((to_store, resp)) => {
-                    returned_regions_by_store.insert(to_store, resp.get_regions().to_vec());
+                    returned_region_count_by_store.insert(to_store, resp.regions.len());
                     for region_id in resp.regions {
                         if let Some(prog) = progresses.get_mut(&region_id) {
                             if prog.resolved {
@@ -470,6 +462,7 @@ impl LeadershipResolver {
                 break;
             }
         }
+        drop(check_leader_rpcs);
         let res: Vec<u64> = self.valid_regions.drain().collect();
         if res.len() != checking_regions.len() {
             let valid_region_set = res.iter().copied().collect::<HashSet<_>>();
@@ -493,7 +486,7 @@ impl LeadershipResolver {
                 "local_store_id" => self.store_id,
                 "valid_region_count" => res.len(),
                 "checking_region_count" => checking_regions.len(),
-                "target_store_count" => requested_regions_by_store.len(),
+                "target_store_count" => rpc_count,
                 "unresolved_regions" => ?unresolved_regions,
                 "unresolved_regions_truncated" => unresolved_regions_truncated,
                 "local_registry_miss_regions" => ?local_registry_miss_regions,
@@ -502,24 +495,28 @@ impl LeadershipResolver {
                 "local_not_leader_regions" => ?local_not_leader_regions,
                 "local_not_leader_regions_truncated" => local_not_leader_regions_truncated,
             );
-            for (to_store, requested_regions) in &requested_regions_by_store {
-                let returned_regions = returned_regions_by_store.get(to_store);
+            for (to_store, req) in store_req_map.iter() {
+                if req.regions.is_empty() {
+                    continue;
+                }
                 let (unreturned_regions, unreturned_regions_truncated) = limited_region_list(
-                    requested_regions
+                    req.regions
                         .iter()
-                        .filter(|region_id| !valid_region_set.contains(*region_id))
+                        .map(|leader_info| leader_info.get_region_id())
+                        .filter(|region_id| !valid_region_set.contains(region_id))
                         .filter(|region_id| {
-                            !returned_regions.is_some_and(|regions| regions.contains(*region_id))
-                        })
-                        .copied(),
+                            progresses
+                                .get(region_id)
+                                .is_none_or(|prog| !prog.resps.contains(to_store))
+                        }),
                 );
                 if !unreturned_regions.is_empty() || check_leader_errors.contains_key(to_store) {
                     warn!(
                         "[resolved-ts-stuck] check leader target store did not confirm regions";
                         "local_store_id" => self.store_id,
                         "to_store" => *to_store,
-                        "requested_count" => requested_regions.len(),
-                        "returned_count" => returned_regions.map_or(0, Vec::len),
+                        "requested_count" => req.regions.len(),
+                        "returned_count" => returned_region_count_by_store.get(to_store).copied().unwrap_or(0),
                         "unreturned_regions" => ?unreturned_regions,
                         "unreturned_regions_truncated" => unreturned_regions_truncated,
                         "rpc_error" => ?check_leader_errors.get(to_store),
