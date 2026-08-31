@@ -1429,4 +1429,67 @@ mod tests {
         ));
         must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
     }
+
+    /// Regression test: an asynchronously-sampled CPU-top range can outlive a
+    /// Region split and describe sibling-Region keyspace.  Since classic
+    /// raftstore shares one engine, those sibling keys remain visible to the
+    /// iterator.  The fallback must intersect the requested range with the
+    /// current Region bounds before applying the scan budget; otherwise 1024
+    /// distinct out-of-Region keys exhaust `MAX_SCAN_KEYS` before a valid
+    /// in-Region key is reached and no AskSplit is emitted.
+    #[test]
+    fn test_iterator_fallback_clamps_stale_range_before_logical_key_budget() {
+        let path = Builder::new()
+            .prefix("test-iterator-fallback-clamp")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        region.set_start_key(Key::from_raw(b"m").into_encoded());
+        region.set_end_key(Key::from_raw(b"z").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        // Simulate a range sampled before a split. These keys remain in the
+        // shared engine but are left of the current Region and must not consume
+        // the fallback logical-key budget.
+        for i in 0..1024 {
+            let raw_key = format!("a{i:04}").into_bytes();
+            let key = keys::data_key(Key::from_raw(&raw_key).as_encoded());
+            engine.put_cf(CF_DEFAULT, &key, b"v").unwrap();
+        }
+        let interior_key = keys::data_key(Key::from_raw(b"n").as_encoded());
+        engine.put_cf(CF_DEFAULT, &interior_key, b"v").unwrap();
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"a".to_vec()),
+            Some(b"y".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"n").into_encoded()]);
+    }
 }

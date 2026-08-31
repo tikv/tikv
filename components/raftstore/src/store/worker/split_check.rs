@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::Ordering,
+    cmp::{Ordering, max, min},
     collections::{BTreeMap, BinaryHeap},
     fmt::{self, Display, Formatter},
     mem,
@@ -651,10 +651,32 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     keys::data_end_key(Key::from_raw(end_key).as_encoded())
                 };
 
+                // Clamp the requested range to the current Region bounds. A
+                // CPU-top range is sampled asynchronously and can outlive a
+                // Region split, so it may describe sibling-Region keyspace.
+                // Classic raftstore shares one engine, so those sibling keys
+                // remain visible; scanning them would let out-of-Region keys
+                // produce invalid split points or exhaust the fallback scan
+                // budget before an in-Region key is reached.
+                let start_key = max(start_key, region_start_key);
+                let end_key = min(end_key, region_end_key);
+
                 (start_key, end_key)
             }
             None => (region_start_key, region_end_key),
         };
+
+        // The clamped range can be empty or inverted when a stale range no
+        // longer overlaps the current Region. Nothing to split in that case.
+        if is_key_range && start_key >= end_key {
+            debug!(
+                "skip split check for range outside region";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(&start_key),
+                "end_key" => log_wrappers::Value::key(&end_key),
+            );
+            return;
+        }
         debug!(
             "executing task";
             "region_id" => region_id,
