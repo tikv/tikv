@@ -3,16 +3,26 @@
 use std::{
     borrow::ToOwned,
     io,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
+    thread,
+    time::Duration,
 };
 
 use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 use fail;
-use tikv::config::{MetricConfig, TikvConfig};
-use tikv_util::{self, config, logger};
+use health_controller::slow_score::NETWORK_TIMEOUT_THRESHOLD;
+use tikv::{
+    config::{MetricConfig, TikvConfig},
+    server::ADVERTISE_ADDR_PROBE_FAILURE_COUNTER,
+};
+use tikv_util::{self, config, logger, sys::thread::StdThreadBuildWrapper};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -21,6 +31,10 @@ pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 // rocksdb WAL files.
 pub const DEFAULT_ROCKSDB_LOG_FILE: &str = "rocksdb.info";
 pub const DEFAULT_RAFTDB_LOG_FILE: &str = "raftdb.info";
+
+// Keep this advisory lookup aligned with TiKV's network inspection threshold.
+// The budget applies to each endpoint and does not cancel the system resolver.
+const ADVERTISE_ADDR_PROBE_TIMEOUT: Duration = NETWORK_TIMEOUT_THRESHOLD;
 
 #[macro_export]
 macro_rules! fatal {
@@ -308,11 +322,269 @@ pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum AdvertiseAddrProbe {
+    Resolved,
+    Loopback(SocketAddr),
+    Unresolved(String),
+    TimedOut,
+}
+
+fn classify_advertise_addr(addrs: io::Result<Vec<SocketAddr>>) -> AdvertiseAddrProbe {
+    match addrs {
+        Ok(addrs) => {
+            let mut resolved = false;
+            for addr in addrs {
+                resolved = true;
+                let is_loopback = match addr.ip() {
+                    IpAddr::V4(ip) => ip.is_loopback(),
+                    IpAddr::V6(ip) => ip
+                        .to_ipv4_mapped()
+                        .map_or_else(|| ip.is_loopback(), |ip| ip.is_loopback()),
+                };
+                if is_loopback {
+                    return AdvertiseAddrProbe::Loopback(addr);
+                }
+            }
+            if resolved {
+                AdvertiseAddrProbe::Resolved
+            } else {
+                AdvertiseAddrProbe::Unresolved("DNS returned no addresses".to_owned())
+            }
+        }
+        Err(err) => AdvertiseAddrProbe::Unresolved(err.to_string()),
+    }
+}
+
+fn probe_advertise_addr_with_resolver<R>(
+    addr: &str,
+    timeout: Duration,
+    resolver: R,
+) -> AdvertiseAddrProbe
+where
+    R: FnOnce(String) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+{
+    // Numeric addresses do not need system name resolution.
+    if let Ok(addr) = addr.parse::<SocketAddr>() {
+        return classify_advertise_addr(Ok(vec![addr]));
+    }
+
+    // System name resolution cannot be cancelled. If this wait times out, the
+    // resolver thread may continue until the operating system returns.
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let addr = addr.to_owned();
+    let spawn_result = thread::Builder::new()
+        .name("addr-probe".to_owned())
+        .spawn_wrapper(move || {
+            let _ = result_tx.send(resolver(addr));
+        });
+    if let Err(err) = spawn_result {
+        return AdvertiseAddrProbe::Unresolved(format!(
+            "failed to start address resolver thread: {}",
+            err
+        ));
+    }
+
+    match result_rx.recv_timeout(timeout) {
+        Ok(addrs) => classify_advertise_addr(addrs),
+        Err(RecvTimeoutError::Timeout) => AdvertiseAddrProbe::TimedOut,
+        Err(RecvTimeoutError::Disconnected) => AdvertiseAddrProbe::Unresolved(
+            "address resolver thread exited without a result".to_owned(),
+        ),
+    }
+}
+
+fn probe_advertise_addr(addr: &str) -> AdvertiseAddrProbe {
+    probe_advertise_addr_with_resolver(addr, ADVERTISE_ADDR_PROBE_TIMEOUT, |addr| {
+        addr.to_socket_addrs()
+            .map(|resolved_addrs| resolved_addrs.collect())
+    })
+}
+
+fn report_advertise_addr_probe_result(endpoint: &str, addr: &str, result: AdvertiseAddrProbe) {
+    match result {
+        AdvertiseAddrProbe::Resolved => {}
+        AdvertiseAddrProbe::Loopback(resolved_addr) => {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&[endpoint, "loopback"])
+                .inc();
+            warn!(
+                "advertised address resolves to a loopback address; remote cluster components \
+                cannot reach this TiKV endpoint through that address";
+                "endpoint" => endpoint,
+                "advertise_addr" => addr,
+                "resolved_addr" => %resolved_addr,
+            );
+        }
+        AdvertiseAddrProbe::Unresolved(err) => {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&[endpoint, "unresolved"])
+                .inc();
+            warn!(
+                "failed to resolve advertised address; cluster components may be unable to \
+                reach this TiKV endpoint";
+                "endpoint" => endpoint,
+                "advertise_addr" => addr,
+                "err" => %err,
+            );
+        }
+        AdvertiseAddrProbe::TimedOut => {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&[endpoint, "timeout"])
+                .inc();
+            warn!(
+                "timed out resolving advertised address; cluster components may be unable to \
+                reach this TiKV endpoint";
+                "endpoint" => endpoint,
+                "advertise_addr" => addr,
+                "timeout" => ?ADVERTISE_ADDR_PROBE_TIMEOUT,
+            );
+        }
+    }
+}
+
+fn report_advertise_addr_probe(endpoint: &str, addr: &str) {
+    report_advertise_addr_probe_result(endpoint, addr, probe_advertise_addr(addr));
+}
+
+/// Probes and reports the advertised addresses of the live server config.
+pub(crate) fn report_advertise_addr_probe_failures(config: &TikvConfig) {
+    report_advertise_addr_probe("store", &config.server.advertise_addr);
+    if !config.server.advertise_status_addr.is_empty() {
+        report_advertise_addr_probe("status", &config.server.advertise_status_addr);
+    }
+}
+
 pub fn ensure_no_unrecognized_config(unrecognized_keys: &[String]) {
     if !unrecognized_keys.is_empty() {
         fatal!(
             "unknown configuration options: {}",
             unrecognized_keys.join(", ")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_probe_advertise_addr() {
+        assert!(matches!(
+            probe_advertise_addr("127.0.0.1:20160"),
+            AdvertiseAddrProbe::Loopback(_)
+        ));
+        assert!(matches!(
+            probe_advertise_addr("[::1]:20160"),
+            AdvertiseAddrProbe::Loopback(_)
+        ));
+        assert!(matches!(
+            probe_advertise_addr("[::ffff:127.0.0.1]:20160"),
+            AdvertiseAddrProbe::Loopback(_)
+        ));
+        assert_eq!(
+            probe_advertise_addr("192.0.2.1:20160"),
+            AdvertiseAddrProbe::Resolved
+        );
+
+        let numeric = probe_advertise_addr_with_resolver(
+            "192.0.2.1:20160",
+            Duration::ZERO,
+            |_| -> io::Result<Vec<SocketAddr>> {
+                panic!("numeric addresses must not invoke the resolver")
+            },
+        );
+        assert_eq!(numeric, AdvertiseAddrProbe::Resolved);
+
+        let resolved = probe_advertise_addr_with_resolver(
+            "store.example.com:20160",
+            Duration::from_secs(1),
+            |_| Ok(vec!["192.0.2.1:20160".parse().unwrap()]),
+        );
+        assert_eq!(resolved, AdvertiseAddrProbe::Resolved);
+
+        assert!(matches!(
+            probe_advertise_addr_with_resolver(
+                "unresolvable.invalid:20160",
+                Duration::from_secs(1),
+                |_| Err(io::Error::other("injected resolution failure")),
+            ),
+            AdvertiseAddrProbe::Unresolved(_)
+        ));
+    }
+
+    #[test]
+    fn test_probe_advertise_addr_timeout() {
+        let result = probe_advertise_addr_with_resolver(
+            "slow.example.com:20160",
+            Duration::from_millis(10),
+            |_| {
+                thread::sleep(Duration::from_millis(100));
+                Ok(vec!["192.0.2.1:20160".parse().unwrap()])
+            },
+        );
+        assert_eq!(result, AdvertiseAddrProbe::TimedOut);
+    }
+
+    #[test]
+    fn test_report_advertise_addr_probe_failures() {
+        let labels = [
+            ["store", "loopback"],
+            ["store", "unresolved"],
+            ["store", "timeout"],
+            ["status", "loopback"],
+            ["status", "unresolved"],
+            ["status", "timeout"],
+        ];
+        let before = labels.map(|labels| {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&labels)
+                .get()
+        });
+
+        let mut status_disabled = TikvConfig::default();
+        status_disabled.server.advertise_addr = "192.0.2.1:20160".to_owned();
+        status_disabled.server.advertise_status_addr.clear();
+        report_advertise_addr_probe_failures(&status_disabled);
+        for (labels, before) in labels.iter().zip(before) {
+            if labels[0] == "status" {
+                assert_eq!(
+                    ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                        .with_label_values(labels)
+                        .get(),
+                    before
+                );
+            }
+        }
+
+        let mut loopback = TikvConfig::default();
+        loopback.server.advertise_addr = "127.0.0.1:20160".to_owned();
+        loopback.server.advertise_status_addr = "[::ffff:127.0.0.1]:20180".to_owned();
+        report_advertise_addr_probe_failures(&loopback);
+
+        let mut unresolved = TikvConfig::default();
+        unresolved.server.advertise_addr = "invalid-store-address".to_owned();
+        unresolved.server.advertise_status_addr = "invalid-status-address".to_owned();
+        report_advertise_addr_probe_failures(&unresolved);
+
+        report_advertise_addr_probe_result(
+            "store",
+            "slow-store.example.com:20160",
+            AdvertiseAddrProbe::TimedOut,
+        );
+        report_advertise_addr_probe_result(
+            "status",
+            "slow-status.example.com:20180",
+            AdvertiseAddrProbe::TimedOut,
+        );
+
+        for (labels, before) in labels.iter().zip(before) {
+            assert!(
+                ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                    .with_label_values(labels)
+                    .get()
+                    > before
+            );
+        }
     }
 }
