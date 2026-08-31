@@ -75,6 +75,7 @@ struct ScanCmd {
 }
 
 /// The response of requesting resolve the new checkpoint of regions.
+#[derive(Clone)]
 pub struct ResolvedRegions {
     items: Vec<ResolveResult>,
     checkpoint: TimeStamp,
