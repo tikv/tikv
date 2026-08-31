@@ -480,6 +480,33 @@ pub struct Runner<EK: KvEngine, S> {
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
+/// Normalizes an origin-encoded candidate the same way `SplitObserver` does
+/// (stripping any trailing MVCC timestamp) and returns it as a split key only
+/// if it lies strictly inside `(range_start, range_end)` and is a valid Region
+/// split point.
+///
+/// `origin_key` must already be in origin-key encoding (no data-key prefix); it
+/// may still carry an MVCC timestamp. `range_start` is `keys::origin_key` of
+/// the range start and `range_end` is `keys::origin_end_key` of the range end
+/// (empty means unbounded). Applying this before the load-split emptiness check
+/// ensures a candidate that would collapse onto a boundary after timestamp
+/// stripping does not mask the need for the fallback.
+fn normalized_split_key_in_range(
+    origin_key: &[u8],
+    range_start: &[u8],
+    range_end: &[u8],
+    region: &Region,
+) -> Option<Vec<u8>> {
+    let split_key = strip_timestamp_if_exists(origin_key.to_vec());
+    let boundary_ok = split_key.as_slice() > range_start
+        && (range_end.is_empty() || split_key.as_slice() < range_end);
+    if boundary_ok && is_valid_split_key(&split_key, 0, region) {
+        Some(split_key)
+    } else {
+        None
+    }
+}
+
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     pub fn new(
         engine: EK,
@@ -775,6 +802,21 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             CheckPolicy::Usekey => vec![], // Handled by pd worker directly.
         };
 
+        if reason == SplitReason::Load && is_key_range {
+            // Normalize and validate scan candidates the same way SplitObserver
+            // will downstream, emitting the stripped form. Otherwise a physical
+            // MVCC key that collapses onto the range boundary after timestamp
+            // stripping (e.g. `a@42` -> `a`) would count as a non-empty result,
+            // skip the fallback below, and then be rejected by SplitObserver,
+            // leaving the range unsplit even though an interior key exists.
+            let range_start = keys::origin_key(&start_key);
+            let range_end = keys::origin_end_key(&end_key);
+            split_keys = mem::take(&mut split_keys)
+                .into_iter()
+                .filter_map(|k| normalized_split_key_in_range(&k, range_start, range_end, region))
+                .collect();
+        }
+
         if split_keys.is_empty() && reason == SplitReason::Load && is_key_range {
             if let Some(split_key) =
                 self.approximate_middle_for_load_key_range(tablet, region, &start_key, &end_key)
@@ -859,18 +901,18 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
 
         // Try to validate the property-based candidate if we got one.
         if let Some(ref candidate) = approximate_middle {
-            // Normalize to the same form used by SplitObserver before all
-            // checks, so the candidate won't become invalid after timestamp
-            // stripping.
-            let split_key = strip_timestamp_if_exists(keys::origin_key(candidate).to_vec());
             let range_start = keys::origin_key(start_key);
             let range_end = keys::origin_end_key(end_key);
 
-            // Guard against split points that are equal to range boundaries.
-            let boundary_ok = split_key.as_slice() > range_start
-                && (range_end.is_empty() || split_key.as_slice() < range_end);
-
-            if boundary_ok && is_valid_split_key(&split_key, 0, region) {
+            // Normalize (strip timestamp), boundary-check, and region-validate
+            // with the same rule SplitObserver applies, so the candidate won't
+            // become invalid after timestamp stripping.
+            if let Some(split_key) = normalized_split_key_in_range(
+                keys::origin_key(candidate),
+                range_start,
+                range_end,
+                region,
+            ) {
                 return Some(split_key);
             }
 
@@ -882,7 +924,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 "region_id" => region.get_id(),
                 "start_key" => log_wrappers::Value::key(range_start),
                 "end_key" => log_wrappers::Value::key(range_end),
-                "split_key" => log_wrappers::Value::key(&split_key),
+                "candidate" => log_wrappers::Value::key(candidate),
             );
         }
 
@@ -959,7 +1001,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             // Normalize each entry the same way SplitObserver does, so a
             // candidate cannot become an invalid boundary after timestamp
             // stripping.
-            let split_key = strip_timestamp_if_exists(keys::origin_key(e.key()).to_vec());
+            let normalized = strip_timestamp_if_exists(keys::origin_key(e.key()).to_vec());
 
             // Only advance the logical-key budget when the normalized key
             // changes; the merged iterator returns versions of one key
@@ -967,22 +1009,22 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             // single logical key.  Applying the bound here (rather than per
             // physical entry) ensures a boundary key with many versions cannot
             // exhaust the budget before a valid interior key is reached.
-            let is_new_logical_key = last_seen_key.as_deref() != Some(split_key.as_slice());
+            let is_new_logical_key = last_seen_key.as_deref() != Some(normalized.as_slice());
             if is_new_logical_key {
                 if logical_keys >= MAX_SCAN_KEYS {
                     break;
                 }
                 logical_keys += 1;
-                last_seen_key = Some(split_key.clone());
+                last_seen_key = Some(normalized.clone());
 
                 // Keep only candidates that stay strictly inside the range and
                 // are valid region split points.  Skipping invalid boundary
                 // versions here (rather than only inspecting the middle
                 // physical entry) ensures a valid interior key is still
                 // selectable.
-                let boundary_ok = split_key.as_slice() > range_start
-                    && (range_end.is_empty() || split_key.as_slice() < range_end);
-                if boundary_ok && is_valid_split_key(&split_key, 0, region) {
+                if let Some(split_key) =
+                    normalized_split_key_in_range(&normalized, range_start, range_end, region)
+                {
                     candidates.push(split_key);
                 }
             }

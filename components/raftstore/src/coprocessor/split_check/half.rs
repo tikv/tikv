@@ -1492,4 +1492,68 @@ mod tests {
         ));
         must_split_at(&rx, &region, vec![Key::from_raw(b"n").into_encoded()]);
     }
+
+    /// Regression test: the main scan can return a non-empty physical MVCC key
+    /// that normalizes to the range boundary (here `a@42` -> `a`).  Because the
+    /// emptiness check runs before SplitObserver's timestamp stripping and
+    /// validity checks, the fallback is skipped and SplitObserver later rejects
+    /// the only candidate, so the split makes no progress even though a valid
+    /// interior key `b` exists.  Scan results for a load key range must be
+    /// normalized and range/Region-validated before the emptiness check, with
+    /// the fallback used when no candidate survives.
+    #[test]
+    fn test_invalid_scan_candidate_continues_to_load_fallback() {
+        let path = Builder::new()
+            .prefix("test-invalid-scan-candidate")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        region.set_start_key(Key::from_raw(b"a").into_encoded());
+        region.set_end_key(Key::from_raw(b"c").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // Make every physical entry a Half checker bucket. Its middle raw
+            // candidate is a@42, which normalizes to the range boundary.
+            region_max_size: Some(ReadableSize(1024)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        for ts in [43u64, 42] {
+            let key = keys::data_key(Key::from_raw(b"a").append_ts(ts.into()).as_encoded());
+            engine.put_cf(CF_DEFAULT, &key, &key).unwrap();
+        }
+        let interior_key = keys::data_key(Key::from_raw(b"b").append_ts(1.into()).as_encoded());
+        engine
+            .put_cf(CF_DEFAULT, &interior_key, &interior_key)
+            .unwrap();
+
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(b"a".to_vec()),
+            Some(b"c".to_vec()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_at(&rx, &region, vec![Key::from_raw(b"b").into_encoded()]);
+    }
 }
