@@ -287,15 +287,22 @@ fn estimate_discardable_entries(
     newest_ts: TimeStamp,
     gc_safe_point: u64,
 ) -> u64 {
-    if num_entries == 0 || oldest_ts >= newest_ts {
+    if num_entries == 0 || oldest_ts > newest_ts {
         return 0;
     }
     let oldest_ts = oldest_ts.into_inner();
     let newest_ts = newest_ts.into_inner();
 
     // A zero-width timestamp range is valid when multiple entries share the
-    // same timestamp. All of them are discardable once that timestamp reaches
-    // the GC safe point.
+    // same timestamp. It does not require proportional estimation.
+    if oldest_ts == newest_ts {
+        return if gc_safe_point >= newest_ts {
+            num_entries
+        } else {
+            0
+        };
+    }
+
     if gc_safe_point >= newest_ts {
         return num_entries;
     }
@@ -303,6 +310,7 @@ fn estimate_discardable_entries(
         return 0;
     }
 
+    // The equality case above guarantees that the denominator is non-zero.
     let total_range = newest_ts - oldest_ts;
     let discardable_range = gc_safe_point - oldest_ts;
     let portion = (discardable_range as f64) / (total_range as f64);
