@@ -31,6 +31,20 @@ It is a read-heavy hot path and directly impacts query latency.
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
   `src/server/service/kv.rs` as the RPC entry path.
+- On the Yatp path, unary and streaming heavy tasks are admitted through
+  semaphores created in `Endpoint::new`: a shared semaphore for ordinary
+  coprocessor work and a dedicated semaphore for Analyze requests that are
+  intentionally throttled by the background quota limiter.
+- The shared semaphore is controlled by
+  `server.end-point-max-concurrency`. The dedicated background-limited
+  semaphore is enabled only when
+  `server.end-point-max-bg-concurrency` is explicitly set to a positive value;
+  its capacity is then controlled by that value.
+- When the dedicated setting is absent or `0`, Analyze and ordinary Cop
+  requests share the legacy semaphore. When it is positive, the two semaphores
+  are independent and both lanes can make progress concurrently.
+- The dedicated cap does not automatically track unified read-pool worker
+  autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
   `IoType::ForegroundRead`. Any change that moves blocking work into or out of
   this path should be reviewed against foreground IO expectations.
@@ -95,6 +109,16 @@ It is a read-heavy hot path and directly impacts query latency.
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
 - Memory quota and concurrency limiters must remain cheap and correct.
+- Request parsing and admission must stay aligned: when the dedicated setting
+  is enabled, a request class that reports quota samples to the background
+  quota limiter should use the dedicated background-limited semaphore instead
+  of bypassing heavy-task admission. With the setting disabled, it intentionally
+  shares the ordinary semaphore.
+- When enabled, the dedicated background-limited semaphore protects all
+  Analyze variants, including index, common-handle, column, mixed, and
+  full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
+  shared heavy-task budget; when disabled, these requests intentionally use the
+  shared semaphore.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 
@@ -103,6 +127,16 @@ It is a read-heavy hot path and directly impacts query latency.
 - wait-time and snapshot-time metrics
 - request-type metrics and execution summaries
 - slow-log behavior driven by endpoint thresholds
+- Resource metering / TopSQL records the per-request RocksDB PerfContext
+  `block_read_count` delta as `rocksdb_block_read_count` when both
+  `resource-metering.enable-network-io-collection` and
+  `resource-metering.enable-detailed-io-collection` are enabled. The field is
+  used for the downstream `read_iops` dimension and relative attribution; it is
+  not a device-level IOPS measurement. Unary and streaming handler futures must
+  keep this PerfContext accounting poll-scoped so TLS metrics cannot be
+  attributed to another request. Keep that poll observer separate from the
+  streaming item lifecycle: one item can span multiple polls, but its
+  `ExecDetails` process time must still cover the complete item.
 - Start with `src/coprocessor/metrics.rs`. High-value signals include:
   `tikv_coprocessor_request_duration_seconds` family,
   `tikv_coprocessor_request_wait_seconds`,
@@ -112,7 +146,12 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_scan_details`,
   `tikv_coprocessor_response_bytes`,
   `tikv_coprocessor_waiting_for_semaphore`, and
-  `tikv_coprocessor_semaphore_wait_seconds`.
+  `tikv_coprocessor_semaphore_wait_time_duration_seconds`.
+- The semaphore wait metrics use `group=shared|background_limited` to
+  distinguish ordinary Cop request pressure from Analyze background-limited
+  throttling. Dashboard queries should preserve this label when diagnosing an
+  individual lane and aggregate it only when displaying total semaphore
+  pressure.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.

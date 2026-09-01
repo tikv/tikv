@@ -26,7 +26,7 @@ use crypto::fips;
 use encryption_export::{
     DataKeyManager, DecrypterReader, Iv, create_backend, data_key_manager_from_config,
 };
-use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
+use engine_rocks::{RocksEngine, get_env};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
@@ -1253,7 +1253,7 @@ impl TemporaryRocks {
             None,
             cfg.storage.engine,
         );
-        let rocks = new_engine_opt(
+        let rocks = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
             tmp.path().to_str().ok_or_else(|| {
                 format!(
                     "temp path isn't valid utf-8 string: {}",
@@ -1262,6 +1262,7 @@ impl TemporaryRocks {
             })?,
             opt,
             cf_opts,
+            cfg.rocksdb.enable_snapshot_sequence_number_check,
         )
         .map_err(|v| format!("failed to build engine: {}", v))?;
         Ok(Self { rocks, tmp })

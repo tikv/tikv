@@ -5,6 +5,12 @@ use kvproto::errorpb;
 
 use super::time::{Duration, Instant};
 
+/// Default execution duration limit used when no explicit deadline is
+/// configured by the caller. Shared across crates so that lower-level
+/// components (e.g. `tikv_kv`) can derive a consistent deadline without
+/// depending on the higher-level `storage` crate.
+pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
 #[derive(Debug, Copy, Clone)]
 pub struct DeadlineError;
 

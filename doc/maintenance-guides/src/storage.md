@@ -98,6 +98,13 @@ High-risk contracts:
   handoff.
 - `txn/commands/*` defines concrete transactional commands.
 - `txn/task.rs`, `txn/sched_pool.rs`, and `txn/tracker.rs` support execution.
+- `txn/sched_pool.rs` selects the priority queue only for customized resource
+  groups. Background-only control stays on the vanilla queue and throttles
+  matching long-running tasks inside the pool.
+- `txn/sched_pool.rs` accumulates MVCC read flow from non-readonly scheduler
+  commands, including reads performed by foreground writes, and reports
+  region-level `ReadStats` to the raftstore reporter during ticker and worker
+  shutdown flushes. Key ranges and bucket deltas are unavailable on this path.
 
 ### MVCC
 
@@ -117,6 +124,16 @@ High-risk contracts:
   service live under `src/server/lock_manager/*`.
 - `txn/flow_controller/*` controls write pressure behavior.
 
+### Max-ts dynamic configuration
+
+- `config.rs` validates `max_ts.max_drift` against `cache_sync_interval` using
+  their effective whole-millisecond values.
+- `config_manager.rs` dispatches the exact duration to `ConcurrencyManager`.
+- `ConcurrencyManager` deliberately stores the allowance in whole milliseconds
+  because TSO physical timestamps are millisecond-based. For example, a valid
+  configured value of `15s1us` has an effective enforcement allowance of
+  `15000ms`; this is a domain boundary, not online-config truncation.
+
 ## Critical Invariants
 
 - Command callbacks must complete exactly once with the correct error/result
@@ -127,6 +144,8 @@ High-risk contracts:
   relationships.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
+- Max-ts relational validation must use the same whole-millisecond precision as
+  runtime TSO enforcement.
 - Memory quota and pending-write thresholds must remain operationally effective.
 
 ## Observability And Operational Signals
@@ -135,6 +154,27 @@ High-risk contracts:
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
+- PD read-flow reports include reads performed by foreground write commands;
+  inspect `txn/sched_pool.rs` when PD read bytes do not match the read-pool
+  workload.
+- Resource metering / TopSQL records logical IO when
+  `resource-metering.enable-network-io-collection` is enabled. With
+  `resource-metering.enable-detailed-io-collection` also enabled, logical reads
+  and writes are selected independently and the foreground SQL request's
+  RocksDB PerfContext delta is recorded as `rocksdb_block_read_count`. This
+  field feeds the downstream `read_iops` dimension for relative attribution; it
+  is not a device-level IOPS measurement. Storage command boundaries in
+  `metrics.rs` own this attribution for read-only commands and read phases of
+  write commands. In particular, transactional writes and
+  `raw_compare_and_swap` must retain the `Storage` PerfContext because CAS reads
+  the prior value before deciding whether to write. Resumed pessimistic-lock
+  batches can contain work from multiple requests. TopSQL intentionally uses
+  the synthetic command's first context as the representative for the whole
+  batch, including logical writes and the single detailed-I/O PerfContext
+  observation. Mixed-tag batches therefore have approximate attribution,
+  avoiding per-item work on the lock-wakeup path. Do not attribute Raftstore
+  apply/store write-worker activity to the request: those paths use write-only
+  PerfContext metrics and may batch work from multiple requests.
 
 Start triage with:
 
