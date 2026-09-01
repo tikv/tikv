@@ -60,6 +60,10 @@ eviction.
 - `memory_controller.rs` treats node overhead as an estimated component of total
   memory use. If write-path accounting or skiplist structure changes, revisit
   memory-pressure decisions and the eviction thresholds they drive.
+- `region_label.rs` maintains a PD meta-storage snapshot plus watch. A full
+  reload must reconcile both additions and removals, then resume watching from
+  the revision carried by that same GET response. Reusing an older revision
+  after etcd compaction can permanently stall the watcher.
 
 ## Start Here
 
@@ -155,6 +159,9 @@ eviction.
 - If config semantics change, review both bootstrap validation and online
   config dispatch. Silent threshold drift after a live config change is a real
   operational risk.
+- Treat region-label reload contents and the recorded watch revision as one
+  consistency boundary. Recovery tests should reject compacted revisions and
+  prove that events continue to arrive after the snapshot is reloaded.
 
 ## Change-Impact Matrix
 
@@ -163,6 +170,9 @@ eviction.
   `hybrid_engine`
 - Background load/GC/eviction changes:
   inspect `background.rs`, `memory_controller.rs`, metrics, and PD hint usage
+- Region-label watch or reload changes:
+  inspect `region_label.rs`, the PD meta-storage client, compaction recovery,
+  full-snapshot deletion reconciliation, and `test_pd` watch behavior
 - Memory-threshold or accounting changes:
   inspect `config.rs`, `memory_controller.rs`, write-batch paths, and operator
   metrics

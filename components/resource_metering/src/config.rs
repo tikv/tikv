@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error, sync::atomic::AtomicBool};
+use std::{
+    error::Error,
+    sync::atomic::{AtomicU8, Ordering::Relaxed},
+};
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
@@ -16,9 +19,59 @@ const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
+const DEFAULT_ENABLE_DETAILED_IO_COLLECTION: bool = false;
+const NETWORK_IO_COLLECTION_ENABLED: u8 = 1 << 0;
+const DETAILED_IO_COLLECTION_ENABLED: u8 = 1 << 1;
 
-pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
-    AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
+/// An atomically published snapshot of the runtime I/O collection switches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IoCollectionConfigSnapshot(u8);
+
+impl IoCollectionConfigSnapshot {
+    const fn new(enable_network_io_collection: bool, enable_detailed_io_collection: bool) -> Self {
+        let mut state = 0;
+        if enable_network_io_collection {
+            state |= NETWORK_IO_COLLECTION_ENABLED;
+            if enable_detailed_io_collection {
+                state |= DETAILED_IO_COLLECTION_ENABLED;
+            }
+        }
+        Self(state)
+    }
+
+    pub fn network_io_collection_enabled(self) -> bool {
+        self.0 & NETWORK_IO_COLLECTION_ENABLED != 0
+    }
+
+    pub fn detailed_io_collection_enabled(self) -> bool {
+        self.0 & DETAILED_IO_COLLECTION_ENABLED != 0
+    }
+}
+
+static IO_COLLECTION_CONFIG: AtomicU8 = AtomicU8::new(
+    IoCollectionConfigSnapshot::new(
+        DEFAULT_ENABLE_NETWORK_IO_COLLECTION,
+        DEFAULT_ENABLE_DETAILED_IO_COLLECTION,
+    )
+    .0,
+);
+
+/// Loads both runtime I/O collection switches from one atomic snapshot.
+#[inline]
+pub fn io_collection_config() -> IoCollectionConfigSnapshot {
+    IoCollectionConfigSnapshot(IO_COLLECTION_CONFIG.load(Relaxed))
+}
+
+pub(crate) fn set_io_collection_config(
+    enable_network_io_collection: bool,
+    enable_detailed_io_collection: bool,
+) {
+    let config = IoCollectionConfigSnapshot::new(
+        enable_network_io_collection,
+        enable_detailed_io_collection,
+    );
+    IO_COLLECTION_CONFIG.store(config.0, Relaxed);
+}
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -31,7 +84,14 @@ pub struct Config {
     /// Data reporting interval.
     pub report_receiver_interval: ReadableDuration,
 
-    /// The maximum number of groups by [ResourceMeteringTag].
+    /// The maximum number of candidate groups by [ResourceMeteringTag] for
+    /// each resource dimension.
+    ///
+    /// With network IO collection enabled, the reported groups are the union of
+    /// candidates selected by CPU, network IO, and logical IO. When detailed IO
+    /// collection is also enabled, logical IO is split into logical read and
+    /// logical write, and RocksDB block read count is added as a fifth
+    /// dimension. The union can exceed this value.
     ///
     /// [ResourceMeteringTag]: crate::ResourceMeteringTag
     pub max_resource_groups: usize,
@@ -39,8 +99,15 @@ pub struct Config {
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
 
-    /// Whether to collect network traffic and logical io
+    /// Whether to collect network traffic and logical IO.
     pub enable_network_io_collection: bool,
+
+    /// Whether to collect and attribute detailed IO for `read_iops` analysis.
+    ///
+    /// This controls RocksDB block read count collection and separate TopN
+    /// selection for logical reads, logical writes, and RocksDB block reads. It
+    /// is effective only when `enable_network_io_collection` is also enabled.
+    pub enable_detailed_io_collection: bool,
 }
 
 impl Default for Config {
@@ -51,11 +118,17 @@ impl Default for Config {
             max_resource_groups: 100,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: DEFAULT_ENABLE_NETWORK_IO_COLLECTION,
+            enable_detailed_io_collection: DEFAULT_ENABLE_DETAILED_IO_COLLECTION,
         }
     }
 }
 
 impl Config {
+    /// Returns whether detailed IO collection is effective for this config.
+    pub fn detailed_io_collection_enabled(&self) -> bool {
+        self.enable_network_io_collection && self.enable_detailed_io_collection
+    }
+
     /// Check whether the configuration is legal.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if !self.receiver_address.is_empty() {
@@ -148,6 +221,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap();
         let cfg = Config {
@@ -156,6 +230,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -164,6 +239,7 @@ mod tests {
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -172,7 +248,29 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_detailed_io_collection_enabled() {
+        for (network, detailed, expected) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            let cfg = Config {
+                enable_network_io_collection: network,
+                enable_detailed_io_collection: detailed,
+                ..Default::default()
+            };
+            assert_eq!(cfg.detailed_io_collection_enabled(), expected);
+
+            let snapshot = IoCollectionConfigSnapshot::new(network, detailed);
+            assert_eq!(snapshot.network_io_collection_enabled(), network);
+            assert_eq!(snapshot.detailed_io_collection_enabled(), expected);
+        }
     }
 }

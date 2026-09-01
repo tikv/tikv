@@ -151,11 +151,10 @@ impl<E: KvEngine> Initializer<E> {
         let region_epoch = self.region_epoch.clone();
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
-        let sink = self.sink.clone();
         let build_resolver = self.build_resolver.clone();
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
-        let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
+        let barrier = Some(incremental_scan_barrier_cb);
         if let Err(e) = cdc_handle.capture_change(
             self.region_id,
             region_epoch,
@@ -171,7 +170,6 @@ impl<E: KvEngine> Initializer<E> {
                     observe_id,
                     downstream_id,
                     downstream_state,
-                    sink,
                     build_resolver,
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
@@ -194,9 +192,10 @@ impl<E: KvEngine> Initializer<E> {
             return Err(Error::request(e.into()));
         }
 
-        // Wait all delta changes earlier than the incremental scan snapshot be
-        // sent to the downstream, so that they must be consumed before the
-        // incremental scan result.
+        // Wait until the connection drain reaches the observed-event boundary
+        // inserted by `Task::InitDownstream`. This prevents scan events sent through
+        // the separate bounded channel from overtaking observed events that the
+        // Endpoint emitted before downstream initialization.
         if let Err(e) = incremental_scan_barrier_fut.await {
             return Err(Error::Other(box_err!(e)));
         }

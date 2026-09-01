@@ -1053,6 +1053,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_role_changed<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            // A pending pre-transfer request belongs to the previous SoftState.
+            // In particular, a follower can learn about a new leader without
+            // changing its role. Do not let it ACK the old request to the new
+            // leader.
+            self.transfer_leader_state_mut().reset_transferee_state();
             let term = self.term();
             match ss.raft_state {
                 StateRole::Leader => {
@@ -1090,9 +1095,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         self.region(),
                         &self.logger,
                     );
-
-                    // Exit entry cache warmup state when the peer becomes leader.
-                    self.transfer_leader_state_mut().cache_warmup_state = None;
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);

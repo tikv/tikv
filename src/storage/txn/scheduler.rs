@@ -48,8 +48,8 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes,
+    FutureExt, ResourceTagFactory, io_collection_config, record_logical_read_bytes,
+    record_logical_write_bytes, record_network_in_bytes,
 };
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
@@ -87,7 +87,9 @@ use crate::{
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
+            sched_pool::{
+                SchedPool, tls_collect_query, tls_collect_read_flow, tls_collect_scan_details,
+            },
             tracker::TlsFutureTracker,
             txn_status_cache::TxnStatusCache,
         },
@@ -100,7 +102,7 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 // The default limit is set to be very large. Then, requests without
 // `max_exectuion_duration` will not be aborted unexpectedly.
-pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+pub use tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT;
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
@@ -555,7 +557,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cb = SchedulerTaskCallback::NormalRequestCallback(callback);
         let metadata = TaskMetadata::from_ctx(cmd.resource_control_ctx());
         let priority = cmd.priority();
-        let write_bytes = cmd.write_bytes() as u64;
         let request_source = cmd.ctx().request_source.clone();
         let mem_quota = self.inner.memory_quota.clone();
         let rm = self.inner.resource_manager.as_ref().unwrap().clone();
@@ -572,7 +573,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         self.inner
             .sched_worker_pool
-            .spawn(&request_source, metadata, priority, execution, write_bytes)
+            .spawn_opt(
+                &request_source,
+                metadata,
+                priority,
+                execution,
+                // Timer only waits and enqueues; actual execution accounts write bytes in
+                // `self.execute(task)`
+                0,
+                true,
+            )
             .unwrap();
     }
 
@@ -1372,6 +1382,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             } else {
                 record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
+                tls_collect_read_flow(region_id, &sched_details.stat);
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
             let elapsed = sched_details.start_instant.saturating_elapsed();
@@ -1457,8 +1468,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
             let begin_instant = Instant::now();
-            let res = unsafe {
-                with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
+            // A resumed-lock command can merge requests with different tags. TopSQL
+            // intentionally attributes the batch to the command's first context as
+            // its representative, avoiding O(batch size) PerfContext work here.
+            let observe_perf_context = tag != CommandKind::acquire_pessimistic_lock_resumed
+                || io_collection_config().detailed_io_collection_enabled();
+            let res = if observe_perf_context {
+                unsafe {
+                    with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
+                }
+            } else {
+                task.process_write(snapshot, context)
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;

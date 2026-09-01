@@ -9,9 +9,9 @@ use std::{
 use collections::HashMap;
 use file_system::{IoType, set_io_type};
 use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
-use pd_client::{Feature, FeatureGate};
+use pd_client::{Feature, FeatureGate, RegionWriteCfCopDetail};
 use prometheus::local::*;
-use raftstore::store::WriteStats;
+use raftstore::store::{ReadStats, WriteStats};
 use resource_control::{
     ControlledFuture, ResourceController, ResourceGroupManager, TaskMetadata, with_resource_limiter,
 };
@@ -34,6 +34,7 @@ use crate::storage::{
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
     command_keyread_histogram_vec: LocalHistogramVec,
+    local_read_stats: ReadStats,
     local_write_stats: WriteStats,
 }
 
@@ -42,6 +43,7 @@ thread_local! {
         SchedLocalMetrics {
             local_scan_details: HashMap::default(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
+            local_read_stats: ReadStats::default(),
             local_write_stats:WriteStats::default(),
         }
     );
@@ -118,6 +120,7 @@ impl PriorityQueue {
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
+        measure_only: bool,
     ) -> Result<(), Full> {
         let fixed_level = match priority_level {
             CommandPri::High => Some(0),
@@ -135,12 +138,17 @@ impl PriorityQueue {
             request_source,
             override_priority,
         );
+        let is_background = resource_limiter
+            .as_ref()
+            .is_some_and(|limiter| limiter.is_background());
+        let measure_only = measure_only || !is_background;
+        let skip_compaction_pressure = !is_background;
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
                 ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
-                true, // skip compaction pressure for foreground jobs
-                true, // measure-only: build debt, never sleep inside pool
+                skip_compaction_pressure,
+                measure_only,
                 Some(self.resource_mgr.clone()),
                 write_bytes,
             ),
@@ -236,6 +244,25 @@ impl SchedPool {
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
     ) -> Result<(), Full> {
+        self.spawn_opt(
+            request_source,
+            metadata,
+            priority_level,
+            f,
+            write_bytes,
+            false,
+        )
+    }
+
+    pub fn spawn_opt(
+        &self,
+        request_source: &str,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
+        measure_only: bool,
+    ) -> Result<(), Full> {
         match self.queue_type {
             QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
             QueueType::Dynamic => {
@@ -247,13 +274,53 @@ impl SchedPool {
                         priority_level,
                         f,
                         write_bytes,
+                        measure_only,
                     )
                 } else {
                     fail_point!("single_queue_pool_task");
-                    self.vanilla.spawn(priority_level, f)
+                    self.spawn_vanilla_with_background_control(
+                        request_source,
+                        metadata,
+                        priority_level,
+                        f,
+                        write_bytes,
+                        measure_only,
+                    )
                 }
             }
         }
+    }
+
+    fn spawn_vanilla_with_background_control(
+        &self,
+        request_source: &str,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
+        measure_only: bool,
+    ) -> Result<(), Full> {
+        if request_source.is_empty() {
+            return self.vanilla.spawn(priority_level, f);
+        }
+        let resource_mgr = &self.priority.as_ref().unwrap().resource_mgr;
+        let group_name = std::str::from_utf8(metadata.group_name()).unwrap_or_default();
+        let resource_limiter =
+            resource_mgr.get_background_resource_limiter(group_name, request_source);
+        if let Some(resource_limiter) = resource_limiter {
+            return self.vanilla.spawn(
+                priority_level,
+                with_resource_limiter(
+                    f,
+                    Some(resource_limiter),
+                    false, // enforce compaction-pressure limits for background writes
+                    measure_only,
+                    None,
+                    write_bytes,
+                ),
+            );
+        }
+        self.vanilla.spawn(priority_level, f)
     }
 
     pub fn scale_pool_size(&self, pool_size: usize) {
@@ -315,11 +382,55 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         m.command_keyread_histogram_vec.flush();
 
         // Report PD metrics
+        if !m.local_read_stats.is_empty() {
+            let mut read_stats = ReadStats::default();
+            mem::swap(&mut read_stats, &mut m.local_read_stats);
+            reporter.report_read_stats(read_stats);
+        }
         if !m.local_write_stats.is_empty() {
             let mut write_stats = WriteStats::default();
             mem::swap(&mut write_stats, &mut m.local_write_stats);
             reporter.report_write_stats(write_stats);
         }
+    });
+}
+
+/// Collect storage reads performed while handling a transaction command.
+///
+/// The scheduler does not have a key range or bucket snapshot, so these flow
+/// statistics are reported at region granularity. Empty statistics are
+/// ignored so write commands without storage reads do not create zero-load
+/// region entries.
+pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
+    let write_flow = &statistics.write.flow_stats;
+    let data_flow = &statistics.data.flow_stats;
+    let has_write_cf_cop_detail = statistics.write.next > 0
+        || statistics.write.prev > 0
+        || statistics.write.processed_keys > 0;
+    if write_flow.read_bytes == 0
+        && write_flow.read_keys == 0
+        && data_flow.read_bytes == 0
+        && data_flow.read_keys == 0
+        && !has_write_cf_cop_detail
+    {
+        return;
+    }
+
+    TLS_SCHED_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.local_read_stats.add_flow(
+            region_id,
+            None,
+            None,
+            None,
+            &statistics.write.flow_stats,
+            &statistics.data.flow_stats,
+            &RegionWriteCfCopDetail::new(
+                statistics.write.next,
+                statistics.write.prev,
+                statistics.write.processed_keys,
+            ),
+        );
     });
 }
 
@@ -346,4 +457,74 @@ pub fn tls_can_enable(feature: Feature) -> bool {
 #[cfg(test)]
 pub fn set_tls_feature_gate(feature_gate: FeatureGate) {
     TLS_FEATURE_GATE.with(|f| *f.borrow_mut() = feature_gate);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use raftstore::store::ReadStats;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct RecordingReporter {
+        read_stats: Arc<Mutex<Vec<ReadStats>>>,
+    }
+
+    impl FlowStatsReporter for RecordingReporter {
+        fn report_read_stats(&self, read_stats: ReadStats) {
+            self.read_stats.lock().unwrap().push(read_stats);
+        }
+
+        fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    #[test]
+    fn test_collect_read_flow_and_flush() {
+        let reporter = RecordingReporter::default();
+        tls_flush(&reporter);
+        let stats_before = reporter.read_stats.lock().unwrap().len();
+
+        let mut statistics = Statistics::default();
+        statistics.data.flow_stats.read_bytes = 11;
+        statistics.data.flow_stats.read_keys = 2;
+        statistics.write.flow_stats.read_bytes = 7;
+        statistics.write.flow_stats.read_keys = 3;
+        statistics.lock.flow_stats.read_bytes = 100;
+        statistics.lock.flow_stats.read_keys = 100;
+        statistics.write.next = 4;
+        statistics.write.prev = 5;
+        statistics.write.processed_keys = 6;
+
+        tls_collect_read_flow(42, &statistics);
+        tls_collect_read_flow(42, &statistics);
+        tls_flush(&reporter);
+
+        let read_stats = reporter.read_stats.lock().unwrap();
+        assert_eq!(read_stats.len(), stats_before + 1);
+        let region_info = read_stats.last().unwrap().region_infos.get(&42).unwrap();
+        assert_eq!(region_info.flow.read_bytes, 36);
+        assert_eq!(region_info.flow.read_keys, 10);
+        assert_eq!(region_info.cop_detail.next, 8);
+        assert_eq!(region_info.cop_detail.prev, 10);
+        assert_eq!(region_info.cop_detail.processed_keys, 12);
+        drop(read_stats);
+
+        tls_collect_read_flow(43, &Statistics::default());
+        let mut cop_only_statistics = Statistics::default();
+        cop_only_statistics.write.next = 1;
+        tls_collect_read_flow(43, &cop_only_statistics);
+        tls_flush(&reporter);
+        let read_stats = reporter.read_stats.lock().unwrap();
+        assert_eq!(read_stats.len(), stats_before + 2);
+        assert_eq!(
+            read_stats.last().unwrap().region_infos[&43].cop_detail.next,
+            1
+        );
+        drop(read_stats);
+
+        tls_flush(&reporter);
+        assert_eq!(reporter.read_stats.lock().unwrap().len(), stats_before + 2);
+    }
 }

@@ -241,6 +241,10 @@
 ## By default, it will be set to 12.5% of the available memory of TiKV.
 # end-point-memory-quota = "0B"
 
+## Maximum number of concurrently running background-limited Analyze tasks.
+## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
+# end-point-max-bg-concurrency = 0
+
 ## Max bytes that snapshot can interact with disk in one second. It should be
 ## set based on your disk performance. Only write flow is considered, if
 ## partitioned-raft-kv is used, read flow is also considered and it will be estimated
@@ -579,6 +583,11 @@
 
 ## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true
+
+## Enables TiKV's defense-in-depth check that successfully created RocksDB snapshots have
+## monotonically non-decreasing sequence numbers. It is enabled by default in debug builds and
+## disabled by default in release builds.
+# enable-snapshot-sequence-number-check = false
 
 ## RocksDB Write-Ahead Logs (WAL) recovery mode.
 ## "tolerate-corrupted-tail-records", tolerate incomplete record in trailing data on all logs;
@@ -1085,6 +1094,11 @@
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
 
+## Enables TiKV's defense-in-depth check that successfully created RocksDB snapshots have
+## monotonically non-decreasing sequence numbers. It is enabled by default in debug builds and
+## disabled by default in release builds.
+# enable-snapshot-sequence-number-check = false
+
 # stats-dump-period = "10m"
 
 ## Raft RocksDB WAL directory.
@@ -1355,7 +1369,10 @@
 
 [pessimistic-txn]
 ## The default and maximum delay before responding to TiDB when pessimistic
-## transactions encounter locks
+## transactions encounter locks.
+## After a lock owner change, a fair waiter is not re-registered in the
+## wait-for graph until this wait ends. Raising this value also raises
+## worst-case deadlock detection delay for those waits.
 # wait-for-lock-timeout = "1s"
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
