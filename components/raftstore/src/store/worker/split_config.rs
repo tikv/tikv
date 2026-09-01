@@ -383,7 +383,7 @@ mod tests {
             sample_threshold: 4,
             ..Default::default()
         };
-        let mut cfg_manager = SplitConfigManager::new(Arc::new(VersionTrack::new(config)));
+        let mut cfg_manager = SplitConfigManager(Arc::new(VersionTrack::new(config)));
         let before_rejected_update = cfg_manager.value().clone();
 
         let mut config_change = ConfigChange::new();
