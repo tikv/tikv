@@ -206,7 +206,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 .map(|v| v.to_vec())
         } else {
             self.statistics.data.get += 1;
-            self.snapshot.get(&k)?
+            let value = self.snapshot.get(&k)?;
+            self.statistics.data.record_read(
+                k.as_encoded().len(),
+                value.as_ref().map_or(0, |value| value.len()),
+            );
+            value
         };
         if val.is_some() {
             self.statistics.data.processed_keys += 1;
@@ -246,7 +251,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
         } else {
             self.statistics.lock.get += 1;
-            match self.snapshot.get_cf(CF_LOCK, key)? {
+            let value = self.snapshot.get_cf(CF_LOCK, key)?;
+            self.statistics.lock.record_read(
+                key.as_encoded().len(),
+                value.as_ref().map_or(0, |value| value.len()),
+            );
+            match value {
                 Some(v) => Some(txn_types::parse_lock(&v)?),
                 None => None,
             }
@@ -335,7 +345,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             while cursor.valid()? {
-                let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+                let key = Key::from_encoded_slice(cursor.key());
                 if let Some(end) = end_key {
                     if key >= *end {
                         storage_iteration_finished = true;
@@ -343,7 +353,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     }
                 }
                 let mut lock_or_shared_locks =
-                    txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+                    txn_types::parse_lock(cursor.value_with_stats(&mut self.statistics.lock))?;
                 match &mut lock_or_shared_locks {
                     Either::Left(l) => {
                         if filter(&key, TxnLockRef::Persisted(l)) {
@@ -490,7 +500,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         if !found {
             return Ok(None);
         }
-        let write_key = cursor.key(&mut self.statistics.write);
+        let write_key = cursor.key();
         let commit_ts = Key::decode_ts_from(write_key)?;
         // check whether the found written_key's "real key" part equals the `key` we
         // want to find
@@ -498,7 +508,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok(None);
         }
         // parse out the write record
-        let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
+        let write =
+            WriteRef::parse(cursor.value_with_stats(&mut self.statistics.write))?.to_owned();
         Ok(Some((commit_ts, write)))
     }
 
@@ -587,8 +598,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 estimated_versions_to_last_change,
                             } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
-                                let Some(value) = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?
-                                else {
+                                let value = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?;
+                                self.statistics.write.record_read(
+                                    key_with_ts.as_encoded().len(),
+                                    value.as_ref().map_or(0, |value| value.len()),
+                                );
+                                let Some(value) = value else {
                                     return Ok(None);
                                 };
                                 self.statistics.write.get += 1;
@@ -701,10 +716,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
-            if WriteRef::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
+            if WriteRef::parse(cursor.value_with_stats(&mut self.statistics.write))?.start_ts == ts
+            {
                 return Ok(Some(
-                    Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                        .truncate_ts()?,
+                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
                 ));
             }
             ok = cursor.next(&mut self.statistics.write);
@@ -741,7 +756,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut lock_count: usize = 0;
         let mut has_remain = false;
         while cursor.valid()? {
-            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            let key = Key::from_encoded_slice(cursor.key());
             if let Some(end) = end {
                 if key >= *end {
                     has_remain = false;
@@ -750,7 +765,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             let mut lock_or_shared_locks =
-                txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+                txn_types::parse_lock(cursor.value_with_stats(&mut self.statistics.lock))?;
             match &mut lock_or_shared_locks {
                 Either::Left(l) => {
                     if filter(&key, l) {
@@ -819,7 +834,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let mut keys = Vec::with_capacity(limit);
         let mut has_remain = false;
         while cursor.valid()? {
-            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+            let key = Key::from_encoded_slice(cursor.key());
             if let Some(end) = end {
                 if key >= *end {
                     has_remain = false;
@@ -830,7 +845,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let user_key = key.truncate_ts()?;
             // Skip the key if its latest write type is not `WriteType::Put` or
             // `WriteType::Delete`.
-            match WriteRef::parse(cursor.value(&mut self.statistics.write))?.write_type {
+            match WriteRef::parse(cursor.value_with_stats(&mut self.statistics.write))?.write_type {
                 WriteType::Put | WriteType::Delete => {}
                 WriteType::Lock | WriteType::Rollback => {
                     cursor.next(&mut self.statistics.write);
@@ -886,8 +901,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 resource_metering::record_read_keys(keys.len() as u32);
                 return Ok((keys, start));
             }
-            let key =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
+            let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
             start = Some(key.clone().append_ts(TimeStamp::zero()));
             keys.push(key);
         }
@@ -903,10 +917,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = cursor.key(&mut self.statistics.data);
+            let cur_key = cursor.key();
             let ts = Key::decode_ts_from(cur_key)?;
             if Key::is_user_key_eq(cur_key, key.as_encoded()) {
-                v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
+                v.push((
+                    ts,
+                    cursor.value_with_stats(&mut self.statistics.data).to_vec(),
+                ));
             } else {
                 break;
             }

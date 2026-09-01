@@ -969,8 +969,8 @@ pub mod tests {
         );
         let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
+        assert_eq!(cursor.key(), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(), pair.1);
     }
 
     fn assert_reverse_seek<E: Engine>(engine: &mut E, key: &[u8], pair: (&[u8], &[u8])) {
@@ -985,8 +985,8 @@ pub mod tests {
         cursor
             .reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap();
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
+        assert_eq!(cursor.key(), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(), pair.1);
     }
 
     fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
@@ -998,8 +998,8 @@ pub mod tests {
             "{}",
             log_wrappers::hex_encode_upper(key)
         );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
+        assert_eq!(cursor.key(), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(), pair.1);
     }
 
     fn assert_near_reverse_seek<I: Iterator>(
@@ -1015,8 +1015,8 @@ pub mod tests {
             "{}",
             log_wrappers::hex_encode_upper(key)
         );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
+        assert_eq!(cursor.key(), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(), pair.1);
     }
 
     pub fn test_base_curd_options<E: Engine>(engine: &mut E) {
@@ -1193,11 +1193,8 @@ pub mod tests {
                 $res
             );
             if let Some((ref k, ref v)) = $res {
-                assert_eq!(
-                    $cursor.key(&mut statistics),
-                    bytes::encode_bytes(k.as_bytes()).as_slice()
-                );
-                assert_eq!($cursor.value(&mut statistics), v.as_bytes());
+                assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
+                assert_eq!($cursor.value(), v.as_bytes());
             }
         }};
     }
@@ -1375,34 +1372,34 @@ pub mod tests {
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(&mut statistics), b"bar4");
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(), b"bar4");
         assert_eq!(statistics.seek, 1);
 
         let mut statistics = CfStatistics::default();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo6"));
-        assert_eq!(iter.value(&mut statistics), b"bar6");
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo6"));
+        assert_eq!(iter.value(), b"bar6");
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
 
         let mut statistics = CfStatistics::default();
         iter.prev(&mut statistics);
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(&mut statistics), b"bar4");
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(), b"bar4");
         assert_eq!(statistics.prev, 1);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
-        assert_eq!(iter.value(&mut statistics), b"bar2");
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo2"));
+        assert_eq!(iter.value(), b"bar2");
         assert_eq!(statistics.prev, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
-        assert_eq!(iter.value(&mut statistics), b"bar1");
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo"));
+        assert_eq!(iter.value(), b"bar1");
         assert_eq!(statistics.prev, 3);
     }
 }

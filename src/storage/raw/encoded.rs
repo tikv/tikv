@@ -47,10 +47,12 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
         key: &Key,
         stats: &mut Statistics,
     ) -> Result<Option<u64>> {
-        stats.data.flow_stats.read_keys = 1;
-        stats.data.flow_stats.read_bytes = key.as_encoded().len();
-        if let Some(v) = self.snap.get_cf(cf, key)? {
-            stats.data.flow_stats.read_bytes += v.len();
+        let value = self.snap.get_cf(cf, key)?;
+        stats.data.record_read(
+            key.as_encoded().len(),
+            value.as_ref().map_or(0, |value| value.len()),
+        );
+        if let Some(v) = value {
             let raw_value = F::decode_raw_value_owned(v)?;
             return match raw_value.expire_ts {
                 Some(expire_ts) if expire_ts <= self.current_ts => Ok(None),

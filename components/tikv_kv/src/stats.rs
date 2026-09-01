@@ -59,6 +59,11 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
+
+    #[inline]
+    pub fn add_key_size(&mut self, size: usize) {
+        self.stats.add_read_bytes(size);
+    }
 }
 
 impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
@@ -71,6 +76,10 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
                 .saturating_sub(self.block_read_count as u64) as usize;
         let internal_tombstone =
             self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
+        // A cursor movement is a read even when it ends at the range boundary. The
+        // operation count is what lets PD see scan pressure that does not return a KV
+        // pair.
+        self.stats.add_read_key();
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;
@@ -120,6 +129,22 @@ pub struct CfStatistics {
 const STATS_COUNT: usize = 14;
 
 impl CfStatistics {
+    #[inline]
+    pub fn add_read_key(&mut self) {
+        self.flow_stats.read_keys = self.flow_stats.read_keys.saturating_add(1);
+    }
+
+    #[inline]
+    pub fn add_read_bytes(&mut self, bytes: usize) {
+        self.flow_stats.read_bytes = self.flow_stats.read_bytes.saturating_add(bytes);
+    }
+
+    #[inline]
+    pub fn record_read(&mut self, key_len: usize, value_len: usize) {
+        self.add_read_key();
+        self.add_read_bytes(key_len.saturating_add(value_len));
+    }
+
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev

@@ -400,10 +400,8 @@ pub mod tests {
         let mut ret = vec![];
         loop {
             ret.push((
-                Key::from_encoded(cursor.key(&mut statistics).to_vec())
-                    .to_raw()
-                    .unwrap(),
-                cursor.value(&mut statistics).to_vec(),
+                Key::from_encoded(cursor.key().to_vec()).to_raw().unwrap(),
+                cursor.value().to_vec(),
             ));
 
             if !cursor.prev(&mut statistics) {

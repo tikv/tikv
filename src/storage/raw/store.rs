@@ -174,13 +174,14 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         key: &Key,
         stats: &mut Statistics,
     ) -> Result<Option<Vec<u8>>> {
-        // no scan_count for this kind of op.
-        let key_len = key.as_encoded().len();
-        self.snapshot.get_cf(cf, key).inspect(|value| {
-            stats.data.flow_stats.read_keys = 1;
-            stats.data.flow_stats.read_bytes =
-                key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
-        })
+        // No scan counters are maintained for this point operation, but the
+        // flow statistics should include both hits and misses.
+        let value = self.snapshot.get_cf(cf, key)?;
+        stats.data.record_read(
+            key.as_encoded().len(),
+            value.as_ref().map_or(0, |value| value.len()),
+        );
+        Ok(value)
     }
 
     /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys.
@@ -223,11 +224,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 row_count = 0;
             }
             pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
+                cursor.key().to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value(statistics).to_owned()
+                    cursor.value_with_stats(statistics).to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -280,11 +281,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 row_count = 0;
             }
             pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
+                cursor.key().to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value(statistics).to_owned()
+                    cursor.value_with_stats(statistics).to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -330,9 +331,9 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                     row_count = 0;
                 }
                 // Calculate checksum on user key, as timestamp is not visible on client side.
-                let v = cursor.value(cf_stats);
+                let v = cursor.value_with_stats(cf_stats);
                 let (raw_key, _) =
-                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key(cf_stats)), true)?;
+                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key()), true)?;
                 checksum = checksum_crc64_xor(checksum, digest.clone(), &raw_key, v);
                 total_kvs += 1;
                 total_bytes += raw_key.len() + v.len();
