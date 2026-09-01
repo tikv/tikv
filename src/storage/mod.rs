@@ -169,6 +169,28 @@ macro_rules! check_key_size {
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
 
+// Converts transactional scan bounds to the forward raw range used by load
+// split attribution. A malformed bound drops attribution for this request;
+// it must not be treated as an unbounded end.
+fn txn_raw_key_range(
+    start_key: Option<&Key>,
+    end_key: Option<&Key>,
+    reverse_scan: bool,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    // Keep the existing scan-lock behavior: without a start bound there is no
+    // concrete range to attribute to a hottest-key split.
+    let start_key = start_key?.to_raw().ok()?;
+    let end_key = match end_key {
+        Some(key) => key.to_raw().ok()?,
+        None => Vec::new(),
+    };
+    Some(if reverse_scan {
+        (end_key, start_key)
+    } else {
+        (start_key, end_key)
+    })
+}
+
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a
 /// given [`Engine`]. An [`Engine`] provides low level KV functionality.
 /// [`Engine`] has multiple implementations. When a TiKV server is running, a
@@ -1515,23 +1537,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
+        let raw_key_ranges = txn_raw_key_range(Some(&start_key), end_key.as_ref(), reverse_scan)
+            .into_iter()
+            .collect();
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
-            start_key
-                .to_raw()
-                .map(|start| {
-                    let end = end_key
-                        .as_ref()
-                        .and_then(|key| key.to_raw().ok())
-                        .unwrap_or_default();
-                    // Normalize to [lower, upper) regardless of scan direction.
-                    if reverse_scan {
-                        vec![(end, start)]
-                    } else {
-                        vec![(start, end)]
-                    }
-                })
-                .unwrap_or_default(),
+            raw_key_ranges,
         );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
@@ -1715,20 +1726,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
+        let raw_key_ranges = txn_raw_key_range(start_key.as_ref(), end_key.as_ref(), false)
+            .into_iter()
+            .collect();
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
-            start_key
-                .as_ref()
-                .map(|key| key.to_raw())
-                .transpose()
-                .and_then(|start| {
-                    end_key
-                        .as_ref()
-                        .map(|key| key.to_raw())
-                        .transpose()
-                        .map(|end| vec![(start.unwrap_or_default(), end.unwrap_or_default())])
-                })
-                .unwrap_or_default(),
+            raw_key_ranges,
         );
         let concurrency_manager = self.concurrency_manager.clone();
         // Do not allow replica read for scan_lock.
@@ -7563,6 +7566,38 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
+    }
+
+    #[test]
+    fn test_txn_raw_key_range_drops_malformed_bound() {
+        let start_key = Key::from_raw(b"a");
+        let end_key = Key::from_raw(b"z");
+        assert_eq!(
+            txn_raw_key_range(Some(&start_key), Some(&end_key), false),
+            Some((b"a".to_vec(), b"z".to_vec()))
+        );
+
+        let malformed_end_key = Key::from_encoded(vec![0xff]);
+        assert_eq!(
+            txn_raw_key_range(Some(&start_key), Some(&malformed_end_key), false),
+            None,
+            "a malformed end key must not widen attribution to an unbounded range"
+        );
+        assert_eq!(
+            txn_raw_key_range(Some(&end_key), Some(&start_key), true),
+            Some((b"a".to_vec(), b"z".to_vec()))
+        );
+        assert_eq!(
+            txn_raw_key_range(Some(&end_key), None, true),
+            Some((Vec::new(), b"z".to_vec()))
+        );
+        assert_eq!(txn_raw_key_range(None, None, false), None);
+
+        let malformed_start_key = Key::from_encoded(vec![0xff]);
+        assert_eq!(
+            txn_raw_key_range(Some(&malformed_start_key), Some(&end_key), false),
+            None
+        );
     }
 
     #[test]

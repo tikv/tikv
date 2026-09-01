@@ -416,7 +416,7 @@ mod tests {
                     store_id: 1,
                     region_id: 2,
                     peer_id: 3,
-                    key_ranges: vec![],
+                    raw_key_ranges: vec![],
                     extra_attachment: Arc::new(b"block-read-only".to_vec()),
                 }),
                 resource_tag_factory,

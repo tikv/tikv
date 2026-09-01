@@ -58,6 +58,9 @@ High-risk contracts:
 - `ProcessResult` and callback completion semantics
 - `TxnStatusCache` and max-ts related assumptions
 - raw KV API version and TTL rules from `config.rs`
+- transactional resource-metering ranges use raw keys normalized to forward
+  `[lower, upper)` bounds; malformed encoded bounds omit range attribution
+  instead of widening the range
 
 ## Start Here
 
