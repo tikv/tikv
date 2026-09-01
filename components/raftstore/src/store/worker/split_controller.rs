@@ -784,14 +784,15 @@ impl AutoSplitController {
         // RegionID -> (CPU usage, Hottest Key Range), calculate the CPU usage and its
         // hottest key range.
         let should_check_region_cpu = self.should_check_region_cpu();
-        let (cpu_stats_vec, cpu_stats_cache) = ctx.batch_recv_cpu_stats(cpu_stats_receiver);
-        // Keep draining records after CPU-based split is disabled. Otherwise, records
-        // collected before the collector is deregistered can be reused after the mode
-        // is enabled again.
         if !should_check_region_cpu {
-            cpu_stats_vec.clear();
-            return &cpu_stats_cache.region_cpu_map;
+            // A bounded batch is appropriate while collecting CPU load, but it
+            // is insufficient when the collector is disabled: records left in
+            // the channel could be consumed after CPU splitting is enabled
+            // again and attributed to a newer interval.
+            ctx.discard_pending_cpu_stats(cpu_stats_receiver);
+            return &ctx.cpu_stats_cache.region_cpu_map;
         }
+        let (cpu_stats_vec, cpu_stats_cache) = ctx.batch_recv_cpu_stats(cpu_stats_receiver);
 
         let CpuStatsCache {
             region_cpu_map,
@@ -805,13 +806,17 @@ impl AutoSplitController {
                 // Calculate the Region ID -> Unified Read CPU Time.
                 region_cpu_map
                     .entry(tag.region_id)
-                    .and_modify(|(cpu_time, _)| *cpu_time += record.unified_read_cpu_time as f64)
+                    .and_modify(|(cpu_time, _)| {
+                        *cpu_time += record.unified_read_cpu_time as f64
+                    })
                     .or_insert_with(|| (record.unified_read_cpu_time as f64, None));
                 // Calculate the (Region ID, Key Range) -> Unified Read CPU Time.
                 tag.key_ranges.iter().for_each(|key_range| {
                     region_key_range_cpu_time_map
                         .entry((tag.region_id, key_range))
-                        .and_modify(|cpu_time| *cpu_time += record.unified_read_cpu_time)
+                        .and_modify(|cpu_time| {
+                            *cpu_time = cpu_time.saturating_add(record.unified_read_cpu_time)
+                        })
                         .or_insert_with(|| record.unified_read_cpu_time);
                 })
             });
@@ -1179,10 +1184,18 @@ impl AutoSplitControllerContext {
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
     ) {
         self.read_stats_vec.clear();
+        while read_stats_receiver.try_recv().is_ok() {}
+        self.discard_pending_cpu_stats(cpu_stats_receiver);
+    }
+
+    /// Discards all CPU records currently queued by resource metering.
+    pub fn discard_pending_cpu_stats(
+        &mut self,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+    ) {
         self.cpu_stats_vec.clear();
         self.cpu_stats_cache.region_cpu_map.clear();
         self.cpu_stats_cache.hottest_key_range_cpu_time_map.clear();
-        while read_stats_receiver.try_recv().is_ok() {}
         while cpu_stats_receiver.try_recv().is_ok() {}
     }
 
@@ -2416,9 +2429,15 @@ mod tests {
         auto_split_controller
             .cfg
             .region_cpu_overload_threshold_ratio = Some(0.0);
-        let cpu_stats = gen_cpu_stats(1, vec![build_key_range(b"a", b"b", false)], vec![100]);
-        let (mut ctx, _, cpu_stats_receiver) =
-            new_auto_split_controller_ctx(vec![], vec![cpu_stats]);
+        let batch_limit = 2;
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(4);
+        for _ in 0..4 {
+            let cpu_stats =
+                gen_cpu_stats(1, vec![build_key_range(b"a", b"b", false)], vec![100]);
+            cpu_stats_sender.try_send(cpu_stats).unwrap();
+        }
+        drop(cpu_stats_sender);
+        let mut ctx = AutoSplitControllerContext::new(batch_limit);
 
         let region_cpu_map = auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
 

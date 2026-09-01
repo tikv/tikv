@@ -67,6 +67,9 @@ High-risk contracts:
   with their read statistics; execution must re-enter the current peer FSM and
   build the split request from its current Region and peer; a local follower
   rejects the candidate rather than forwarding it to the current leader
+- the load-based split CPU gate reads the unified read pool capacity already
+  applied by the read-pool runner; pool resizing must publish that current
+  capacity without resetting normal QPS or byte detection history
 - persisted apply/raft state alignment in `peer_storage.rs`
 - callback/result semantics in `store/msg.rs` and `store/fsm/apply.rs`
 
