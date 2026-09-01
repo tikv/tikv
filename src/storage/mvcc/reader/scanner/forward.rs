@@ -1237,6 +1237,44 @@ mod latest_kv_tests {
         assert_eq!(statistics.processed_size, 0);
     }
 
+    #[test]
+    fn test_flow_statistics_include_skipped_mvcc_versions() {
+        let key = b"scan-flow";
+        let value = vec![b'x'; 300];
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        for (start_ts, commit_ts) in [(10, 20), (30, 40), (50, 60)] {
+            must_prewrite_put(&mut engine, key, &value, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 20.into())
+            .range(Some(Key::from_raw(key)), None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key), value.clone()))
+        );
+
+        let statistics = scanner.take_statistics();
+        // The scanner visits the two versions newer than the read timestamp
+        // before returning the visible version. Those cursor operations must
+        // be visible even though only one row is returned.
+        assert_eq!(
+            statistics.write.flow_stats.read_keys,
+            statistics.write.total_op_count()
+        );
+        assert!(statistics.write.flow_stats.read_keys > statistics.write.processed_keys);
+
+        let default_key = Key::from_raw(key).append_ts(10.into());
+        assert_eq!(statistics.data.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.data.flow_stats.read_bytes,
+            default_key.len() + value.len()
+        );
+    }
+
     /// Check whether everything works as usual when
     /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of
     /// bound.

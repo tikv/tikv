@@ -47,6 +47,7 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
 }
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
+    /// Start collecting the engine counters for one cursor movement.
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
         let internal_tombstone = collector.internal_delete_skipped_count() as usize;
         let block_read_count = collector.block_read_count() as usize;
@@ -60,22 +61,34 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
         }
     }
 
+    /// Add bytes observed at the position reached by this cursor movement.
+    ///
+    /// Value bytes are added separately when the caller accesses the value via
+    /// `Cursor::value_with_stats`, which preserves lazy value loading.
     #[inline]
-    pub fn add_key_size(&mut self, size: usize) {
+    pub fn add_read_size(&mut self, size: usize) {
         self.stats.add_read_bytes(size);
     }
 }
 
 impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
     fn drop(&mut self) {
-        self.stats.raw_value_tombstone +=
-            RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
-        self.stats.block_read_count +=
+        let raw_value_tombstone = RAW_VALUE_TOMBSTONE
+            .with(|m| *m.borrow())
+            .saturating_sub(self.raw_value_tombstone);
+        self.stats.raw_value_tombstone = self
+            .stats
+            .raw_value_tombstone
+            .saturating_add(raw_value_tombstone);
+        self.stats.block_read_count = self.stats.block_read_count.saturating_add(
             self.collector
                 .block_read_count()
-                .saturating_sub(self.block_read_count as u64) as usize;
+                .saturating_sub(self.block_read_count as u64) as usize,
+        );
         let internal_tombstone =
-            self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
+            self.collector
+                .internal_delete_skipped_count()
+                .saturating_sub(self.internal_tombstone as u64) as usize;
         // A cursor movement is a read even when it ends at the range boundary. The
         // operation count is what lets PD see scan pressure that does not return a KV
         // pair.
@@ -98,6 +111,30 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
                 self.stats.seek_for_prev_tombstone += internal_tombstone;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pd_flow_scope() {
+        let mut statistics = Statistics::default();
+        assert!(!statistics.has_pd_read_flow());
+
+        // Lock-CF activity is retained for local diagnostics but has no
+        // corresponding field in PD's ReadStats flow payload.
+        statistics.lock.flow_stats.read_keys = 3;
+        statistics.lock.flow_stats.read_bytes = 17;
+        assert!(!statistics.has_pd_read_flow());
+        let (write, data) = statistics.pd_read_flows();
+        assert_eq!(write.read_keys, 0);
+        assert_eq!(data.read_bytes, 0);
+
+        statistics.write.flow_stats.read_keys = 1;
+        assert!(statistics.has_pd_read_flow());
+        assert_eq!(statistics.pd_read_flows().0.read_keys, 1);
     }
 }
 
@@ -129,22 +166,27 @@ pub struct CfStatistics {
 const STATS_COUNT: usize = 14;
 
 impl CfStatistics {
+    /// Count one cursor operation or direct key read.
     #[inline]
     pub fn add_read_key(&mut self) {
         self.flow_stats.read_keys = self.flow_stats.read_keys.saturating_add(1);
     }
 
+    /// Add bytes read from the current column family.
     #[inline]
     pub fn add_read_bytes(&mut self, bytes: usize) {
         self.flow_stats.read_bytes = self.flow_stats.read_bytes.saturating_add(bytes);
     }
 
+    /// Record a direct key/value read, including a miss when `value_len` is
+    /// zero.
     #[inline]
     pub fn record_read(&mut self, key_len: usize, value_len: usize) {
         self.add_read_key();
         self.add_read_bytes(key_len.saturating_add(value_len));
     }
 
+    /// Return the number of logical cursor operations recorded for this CF.
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
@@ -309,6 +351,41 @@ impl Statistics {
         self.processed_size += other.processed_size;
     }
 
+    /// Record a direct read in the column family that owns `cf`.
+    ///
+    /// The read is counted even when the key is absent. An empty CF name is
+    /// treated as the default CF, matching the snapshot API.
+    #[inline]
+    pub fn record_cf_read(&mut self, cf: &str, key_len: usize, value_len: usize) {
+        self.mut_cf_statistics(cf).record_read(key_len, value_len);
+    }
+
+    /// Return the two CF flows that are eligible for PD hot-region statistics.
+    ///
+    /// PD's `ReadStats` protocol has flow fields for user data and MVCC write
+    /// records. Lock-CF reads remain available in local scan details and are
+    /// intentionally excluded here because PD cannot attribute them to the
+    /// region's read/write flow fields separately.
+    pub fn pd_read_flows(&self) -> (&FlowStatistics, &FlowStatistics) {
+        (&self.write.flow_stats, &self.data.flow_stats)
+    }
+
+    /// Whether this request has a non-empty flow that can be represented by
+    /// PD's read-statistics protocol.
+    #[inline]
+    pub fn has_pd_read_flow(&self) -> bool {
+        let (write, data) = self.pd_read_flows();
+        write.read_keys != 0
+            || write.read_bytes != 0
+            || data.read_keys != 0
+            || data.read_bytes != 0
+            // Keep the coprocessor detail for legacy callers that only update
+            // the logical write-CF counters.
+            || self.write.next != 0
+            || self.write.prev != 0
+            || self.write.processed_keys != 0
+    }
+
     /// Deprecated
     pub fn scan_detail(&self) -> ScanDetail {
         let mut detail = ScanDetail::default();
@@ -318,6 +395,7 @@ impl Statistics {
         detail
     }
 
+    /// Get mutable statistics for a column family name.
     pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CfStatistics {
         if cf.is_empty() {
             return &mut self.data;
@@ -330,6 +408,7 @@ impl Statistics {
         }
     }
 
+    /// Get statistics for a column family name.
     pub fn cf_statistics(&self, cf: &str) -> &CfStatistics {
         if cf.is_empty() {
             return &self.data;

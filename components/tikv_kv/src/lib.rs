@@ -603,6 +603,16 @@ pub trait Iterator: Send + MetricsExt {
     fn key(&self) -> &[u8];
     /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
+
+    /// Return the current value length when it is already materialized.
+    ///
+    /// Implementations must return `None` when obtaining the length would
+    /// load a lazy value from the storage engine. Cursor statistics use this
+    /// hook after a movement to account cached values without adding an
+    /// implicit read to the request path.
+    fn cached_value_size(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

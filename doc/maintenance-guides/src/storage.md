@@ -176,6 +176,32 @@ High-risk contracts:
   apply/store write-worker activity to the request: those paths use write-only
   PerfContext metrics and may batch work from multiple requests.
 
+### Read-flow accounting
+
+`components/tikv_kv/src/cursor.rs` accounts one `read_keys` operation whenever
+the underlying iterator performs `seek`, `seek_for_prev`, `next`, or `prev`.
+This includes a movement that reaches the iterator boundary. Key bytes are
+added when the movement lands on a valid key. Value bytes are added when the
+caller accesses the value, or when a wrapper has already materialized it while
+filtering; this preserves lazy-value and key-only behavior.
+
+Direct point reads use `Statistics::record_cf_read` and account both hits and
+misses. Local statistics retain separate `lock`, `write`, and `default` CF
+flows. The PD `ReadStats` payload includes only the write and default CF flows:
+its protocol has no separate lock-CF flow, and lock records are transaction
+metadata rather than user-data flow. Lock-CF counters remain available in
+local scan details for diagnosis.
+
+RocksDB internal tombstones skipped during a movement remain in the
+`*_tombstone` diagnostic counters. They are not added to PD user flow because
+they are engine-internal entries and adding them would mix compaction and
+engine-layout effects with client-visible region traffic.
+
+`processed_keys` continues to describe logical MVCC results. It can be lower
+than `read_keys` when a request traverses versions or performs seeks without
+returning a row; the difference is expected and is the signal needed for hot
+read detection.
+
 Start triage with:
 
 - `src/storage/metrics.rs`

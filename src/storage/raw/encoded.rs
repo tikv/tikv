@@ -48,7 +48,8 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
         stats: &mut Statistics,
     ) -> Result<Option<u64>> {
         let value = self.snap.get_cf(cf, key)?;
-        stats.data.record_read(
+        stats.record_cf_read(
+            cf,
             key.as_encoded().len(),
             value.as_ref().map_or(0, |value| value.len()),
         );
@@ -109,6 +110,7 @@ pub struct RawEncodeIterator<I: Iterator, F: KvFormat> {
     inner: I,
     current_ts: u64,
     skip_invalid: usize,
+    cached_value_size: Option<usize>,
     _phantom: PhantomData<F>,
 }
 
@@ -118,18 +120,26 @@ impl<I: Iterator, F: KvFormat> RawEncodeIterator<I, F> {
             inner,
             current_ts,
             skip_invalid: 0,
+            cached_value_size: None,
             _phantom: PhantomData,
         }
     }
 
     fn find_valid_value(&mut self, mut res: Result<bool>, forward: bool) -> Result<bool> {
+        self.cached_value_size = None;
         loop {
             if res.is_err() {
                 break;
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = F::decode_raw_value(self.inner.value())?;
+                // `find_valid_value` has to materialize the encoded value to
+                // apply the TTL/delete filter. Keep the encoded length here:
+                // it is the number of bytes read from the wrapped CF, while
+                // `value()` exposes only the decoded user value.
+                let encoded_value = self.inner.value();
+                let encoded_value_len = encoded_value.len();
+                let raw_value = F::decode_raw_value(encoded_value)?;
                 if !raw_value.is_valid(self.current_ts) {
                     self.skip_invalid += 1;
                     res = if forward {
@@ -139,6 +149,7 @@ impl<I: Iterator, F: KvFormat> RawEncodeIterator<I, F> {
                     };
                     continue;
                 }
+                self.cached_value_size = Some(encoded_value_len);
             }
             break;
         }
@@ -199,6 +210,10 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
 
     fn value(&self) -> &[u8] {
         F::decode_raw_value(self.inner.value()).unwrap().user_value
+    }
+
+    fn cached_value_size(&self) -> Option<usize> {
+        self.cached_value_size
     }
 }
 

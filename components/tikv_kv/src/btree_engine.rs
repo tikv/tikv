@@ -236,6 +236,10 @@ impl Iterator for BTreeEngineIterator {
         assert!(self.valid().unwrap());
         self.cur_value.as_ref().unwrap().as_slice()
     }
+
+    fn cached_value_size(&self) -> Option<usize> {
+        self.cur_value.as_ref().map(Vec::len)
+    }
 }
 
 pub struct BTreeEngineIterMetricsCollector;
@@ -334,7 +338,7 @@ pub mod tests {
         super::{CfStatistics, TEST_ENGINE_CFS, tests::*},
         *,
     };
-    use crate::{Cursor, ScanMode};
+    use crate::{Cursor, CursorBuilder, ScanMode};
 
     #[test]
     fn test_btree_engine() {
@@ -352,6 +356,45 @@ pub mod tests {
     fn test_statistic_of_btree_engine() {
         let mut engine = BTreeEngine::default();
         test_cfs_statistics(&mut engine);
+    }
+
+    #[test]
+    fn test_cursor_accounts_cached_value_size() {
+        let mut engine = BTreeEngine::default();
+        must_put(&engine, b"a1", b"value");
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT).build().unwrap();
+        let mut statistics = CfStatistics::default();
+
+        assert!(cursor.seek(&Key::from_raw(b"a1"), &mut statistics).unwrap());
+        assert_eq!(statistics.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.flow_stats.read_bytes,
+            cursor.key().len() + b"value".len()
+        );
+
+        // The movement already saw the cached value. An explicit access must
+        // not charge it a second time.
+        let bytes_before_value_access = statistics.flow_stats.read_bytes;
+        assert_eq!(cursor.value_with_stats(&mut statistics), b"value");
+        assert_eq!(statistics.flow_stats.read_bytes, bytes_before_value_access);
+
+        // Key-only mode keeps the same movement accounting while suppressing
+        // value bytes, even for an iterator that has the value in memory.
+        let mut key_only_cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .key_only(true)
+            .build()
+            .unwrap();
+        let mut key_only_statistics = CfStatistics::default();
+        assert!(
+            key_only_cursor
+                .seek(&Key::from_raw(b"a1"), &mut key_only_statistics)
+                .unwrap()
+        );
+        assert_eq!(
+            key_only_statistics.flow_stats.read_bytes,
+            key_only_cursor.key().len()
+        );
     }
 
     #[test]

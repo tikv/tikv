@@ -207,7 +207,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
         } else {
             self.statistics.data.get += 1;
             let value = self.snapshot.get(&k)?;
-            self.statistics.data.record_read(
+            self.statistics.record_cf_read(
+                CF_DEFAULT,
                 k.as_encoded().len(),
                 value.as_ref().map_or(0, |value| value.len()),
             );
@@ -252,7 +253,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
         } else {
             self.statistics.lock.get += 1;
             let value = self.snapshot.get_cf(CF_LOCK, key)?;
-            self.statistics.lock.record_read(
+            self.statistics.record_cf_read(
+                CF_LOCK,
                 key.as_encoded().len(),
                 value.as_ref().map_or(0, |value| value.len()),
             );
@@ -599,7 +601,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
                                 let value = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?;
-                                self.statistics.write.record_read(
+                                self.statistics.record_cf_read(
+                                    CF_WRITE,
                                     key_with_ts.as_encoded().len(),
                                     value.as_ref().map_or(0, |value| value.len()),
                                 );

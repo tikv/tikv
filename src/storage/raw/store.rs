@@ -177,7 +177,8 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         // No scan counters are maintained for this point operation, but the
         // flow statistics should include both hits and misses.
         let value = self.snapshot.get_cf(cf, key)?;
-        stats.data.record_read(
+        stats.record_cf_read(
+            cf,
             key.as_encoded().len(),
             value.as_ref().map_or(0, |value| value.len()),
         );
@@ -201,11 +202,13 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(
+        let iterator_key_only = option.key_only();
+        let mut cursor = Cursor::new_with_key_only(
             self.snapshot.iter(cf, option)?,
             ScanMode::Forward,
             false,
             false,
+            iterator_key_only,
         );
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -258,11 +261,13 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(
+        let iterator_key_only = option.key_only();
+        let mut cursor = Cursor::new_with_key_only(
             self.snapshot.iter(cf, option)?,
             ScanMode::Backward,
             false,
             false,
+            iterator_key_only,
         );
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
@@ -342,5 +347,93 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
             statistics.push(stats);
         }
         Ok((checksum, total_kvs, total_bytes as u64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat, RawValue};
+    use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
+    use kvproto::kvrpcpb::Context;
+    use tikv_kv::{BTreeEngine, Engine, Result as KvResult, Statistics};
+    use txn_types::{KvPair, TimeStamp};
+
+    use super::RawStore;
+
+    fn put_raw<F: KvFormat>(
+        engine: &BTreeEngine,
+        user_key: &[u8],
+        ts: Option<u64>,
+        user_value: &[u8],
+    ) {
+        let key = F::encode_raw_key_owned(user_key.to_vec(), ts.map(TimeStamp::from));
+        let value = F::encode_raw_value_owned(RawValue {
+            user_value: user_value.to_vec(),
+            // Keep all records visible while exercising the TTL/MVCC decoder.
+            expire_ts: F::IS_TTL_ENABLED.then_some(u64::MAX),
+            is_delete: false,
+        });
+        engine
+            .put(&Context::default(), key, value)
+            .expect("put raw test value");
+    }
+
+    fn run_key_only_scan<F: KvFormat>(reverse: bool) -> (Vec<KvResult<KvPair>>, Statistics) {
+        let mut engine = BTreeEngine::default();
+        put_raw::<F>(&engine, b"r\0a", Some(10), b"one");
+        put_raw::<F>(&engine, b"r\0b", Some(10), b"three");
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let store = RawStore::new(snapshot, F::TAG);
+        let start_key = if reverse {
+            F::encode_raw_key(b"r\0z", None)
+        } else {
+            F::encode_raw_key(b"r\0a", None)
+        };
+        let mut statistics = Statistics::default();
+        let pairs = if reverse {
+            block_on(store.reverse_raw_scan(CF_DEFAULT, &start_key, None, 2, &mut statistics, true))
+                .unwrap()
+        } else {
+            block_on(store.forward_raw_scan(CF_DEFAULT, &start_key, None, 2, &mut statistics, true))
+                .unwrap()
+        };
+        (pairs, statistics)
+    }
+
+    fn assert_key_only_scan<F: KvFormat>(expect_value_bytes: bool, reverse: bool) {
+        let (pairs, statistics) = run_key_only_scan::<F>(reverse);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.iter().all(|pair| pair.as_ref().unwrap().1.is_empty()));
+
+        let returned_key_bytes: usize = pairs
+            .iter()
+            .map(|pair| pair.as_ref().unwrap().0.len())
+            .sum();
+        let read_bytes = statistics.data.flow_stats.read_bytes;
+        assert_eq!(statistics.data.flow_stats.read_keys, 2);
+        if expect_value_bytes {
+            assert!(
+                read_bytes > returned_key_bytes,
+                "decoder-required value reads must be reflected in flow statistics: read_bytes={read_bytes}, returned_key_bytes={returned_key_bytes}"
+            );
+        } else {
+            assert_eq!(read_bytes, returned_key_bytes);
+        }
+    }
+
+    #[test]
+    fn test_raw_key_only_flow_statistics() {
+        // API V1 can pass key-only to RocksDB, so no value bytes are charged.
+        assert_key_only_scan::<ApiV1>(false, false);
+        assert_key_only_scan::<ApiV1>(false, true);
+
+        // TTL and V2 iterators must decode values to filter expired/deleted
+        // records, even though the RPC response omits the values.
+        assert_key_only_scan::<ApiV1Ttl>(true, false);
+        assert_key_only_scan::<ApiV1Ttl>(true, true);
+        assert_key_only_scan::<ApiV2>(true, false);
+        assert_key_only_scan::<ApiV2>(true, true);
     }
 }

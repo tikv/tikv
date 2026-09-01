@@ -334,7 +334,8 @@ fn get_value_default<S: EngineSnapshot>(
     let mut opts = ReadOptions::new();
     opts.set_fill_cache(false);
     let value = snapshot.get_cf_opt(opts, CF_DEFAULT, key).unwrap();
-    statistics.data.record_read(
+    statistics.record_cf_read(
+        CF_DEFAULT,
         key.as_encoded().len(),
         value.as_ref().map_or(0, |value| value.len()),
     );

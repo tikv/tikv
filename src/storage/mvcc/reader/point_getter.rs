@@ -230,7 +230,8 @@ impl<S: Snapshot> PointGetter<S> {
     ) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
-        self.statistics.lock.record_read(
+        self.statistics.record_cf_read(
+            CF_LOCK,
             user_key.as_encoded().len(),
             lock_value.as_ref().map_or(0, |value| value.len()),
         );
@@ -395,7 +396,8 @@ impl<S: Snapshot> PointGetter<S> {
                         } if estimated_versions_to_last_change >= SEEK_BOUND => {
                             let key_with_ts = user_key.clone().append_ts(commit_ts);
                             let value = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?;
-                            self.statistics.write.record_read(
+                            self.statistics.record_cf_read(
+                                CF_WRITE,
                                 key_with_ts.as_encoded().len(),
                                 value.as_ref().map_or(0, |value| value.len()),
                             );
@@ -454,7 +456,8 @@ impl<S: Snapshot> PointGetter<S> {
         self.statistics.data.get += 1;
         let key = user_key.clone().append_ts(write_start_ts);
         let value = self.snapshot.get_cf(CF_DEFAULT, &key)?;
-        self.statistics.data.record_read(
+        self.statistics.record_cf_read(
+            CF_DEFAULT,
             key.as_encoded().len(),
             value.as_ref().map_or(0, |value| value.len()),
         );
@@ -862,6 +865,45 @@ mod tests {
             statistics.data.flow_stats.read_bytes,
             default_key.len() + value.len()
         );
+    }
+
+    #[test]
+    fn test_flow_statistics_preserve_lock_and_short_value_cf() {
+        let key = b"short-value";
+        let value = b"value";
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, key, value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+
+        let mut getter = new_point_getter(&mut engine, 20.into());
+        assert_eq!(
+            getter.get(&Key::from_raw(key)).unwrap(),
+            Some(value.to_vec())
+        );
+        let statistics = getter.take_statistics();
+
+        // SI checks the lock CF before looking up the committed version. The
+        // lock miss is still a read, while the short value remains in Write CF.
+        let encoded_key = Key::from_raw(key);
+        assert_eq!(statistics.lock.get, 1);
+        assert_eq!(statistics.lock.flow_stats.read_keys, 1);
+        assert_eq!(statistics.lock.flow_stats.read_bytes, encoded_key.len());
+
+        let write_key = encoded_key.clone().append_ts(20.into());
+        let write_value = engine
+            .snapshot(Default::default())
+            .unwrap()
+            .get_cf(CF_WRITE, &write_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.write.flow_stats.read_bytes,
+            write_key.len() + write_value.len()
+        );
+        assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        assert_eq!(statistics.data.flow_stats.read_bytes, 0);
     }
 
     #[test]

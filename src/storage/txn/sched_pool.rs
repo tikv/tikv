@@ -402,19 +402,10 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 /// ignored so write commands without storage reads do not create zero-load
 /// region entries.
 pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
-    let write_flow = &statistics.write.flow_stats;
-    let data_flow = &statistics.data.flow_stats;
-    let has_write_cf_cop_detail = statistics.write.next > 0
-        || statistics.write.prev > 0
-        || statistics.write.processed_keys > 0;
-    if write_flow.read_bytes == 0
-        && write_flow.read_keys == 0
-        && data_flow.read_bytes == 0
-        && data_flow.read_keys == 0
-        && !has_write_cf_cop_detail
-    {
+    if !statistics.has_pd_read_flow() {
         return;
     }
+    let (write_flow, data_flow) = statistics.pd_read_flows();
 
     TLS_SCHED_METRICS.with(|m| {
         let mut m = m.borrow_mut();
@@ -423,8 +414,8 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
             None,
             None,
             None,
-            &statistics.write.flow_stats,
-            &statistics.data.flow_stats,
+            write_flow,
+            data_flow,
             &RegionWriteCfCopDetail::new(
                 statistics.write.next,
                 statistics.write.prev,
@@ -523,6 +514,19 @@ mod tests {
             1
         );
         drop(read_stats);
+
+        // Lock-CF flow is kept in local scan details, but it must not create a
+        // zero-flow PD region entry on its own.
+        let reports_before_lock_only = reporter.read_stats.lock().unwrap().len();
+        let mut lock_only_statistics = Statistics::default();
+        lock_only_statistics.lock.flow_stats.read_keys = 9;
+        lock_only_statistics.lock.flow_stats.read_bytes = 99;
+        tls_collect_read_flow(44, &lock_only_statistics);
+        tls_flush(&reporter);
+        assert_eq!(
+            reporter.read_stats.lock().unwrap().len(),
+            reports_before_lock_only
+        );
 
         tls_flush(&reporter);
         assert_eq!(reporter.read_stats.lock().unwrap().len(), stats_before + 2);
