@@ -138,18 +138,17 @@ High-risk contracts:
 - `store/worker/refresh_config.rs`: runtime config propagation
 
 Load-based split sampling keeps an explicit item-count budget. `sample_num` is
-bounded independently of QPS, and each per-Region recorder keeps a sliding
-window of at most `detect_times` observation rounds. The validated
-`sample_num * detect_times` product therefore bounds retained `KeyRange` items
-per recorder. `sample_threshold` cannot exceed that product, so a full window
-can satisfy the minimum sample requirement. The limits allow more than 50 times
-the default per-round sample count and more than 20 times the default retained
-history. They are not a global byte limit: key payloads, producer threads,
-active Regions, and `Vec` spare capacity add memory beyond the item counts.
-Producer reservoirs initially reserve at most the default sample count and grow
-with observations. Split-key collection can compare up to twice `sample_num`
-candidate keys against `sample_num * detect_times` retained ranges, so changes
-to either upper bound require benchmarking.
+bounded to 1..=64, `detect_times` to 1..=20, and the product
+`sample_num * detect_times` to 1280. Each per-Region recorder keeps a sliding
+window of at most `detect_times` observation rounds, and each round is limited
+to `sample_num` ranges. `sample_threshold` must not exceed
+`sample_num * detect_times`, so a full retained window can satisfy the minimum
+observation requirement. These are not global byte limits: key payloads,
+producer threads, active Regions, and spare `Vec` capacity add memory beyond the
+item counts. Producer reservoirs initially reserve at most the default sample
+count and grow with observations. Split-key collection can compare up to twice
+`sample_num` candidate keys against the bounded retained history, so changes to
+either limit require benchmarking.
 
 ### Coprocessor hooks
 
