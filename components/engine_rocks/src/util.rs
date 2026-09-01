@@ -10,7 +10,7 @@ use rocksdb::{
     CompactionFilterValueType, DB, DBTableFileCreationReason, Env, Range as RocksRange,
     SliceTransform, load_latest_options,
 };
-use slog_global::warn;
+use slog_global::{error, warn};
 
 use crate::{
     DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK, RocksStatistics, cf_options::RocksCfOptions,
@@ -70,6 +70,13 @@ pub fn new_engine_opt_with_snapshot_sequence_number_check(
         .into_iter()
         .map(|(name, opt)| (name, opt.into_raw()))
         .collect();
+
+    // Fail closed before anything touches the directory: a crash while
+    // RocksDB was switching CURRENT can leave it truncated or missing, and a
+    // missing CURRENT makes `db_exist` below report false, so creation would
+    // run over the remains of an existing store. Only a genuinely new
+    // directory may be created; anything else needs offline recovery.
+    check_db_dir(path)?;
 
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -170,6 +177,184 @@ pub fn db_exist(path: &str) -> bool {
     // `DB::list_column_families` fails and we can clean up the directory by
     // this indication.
     fs::read_dir(path).unwrap().next().is_some()
+}
+
+/// State of RocksDB's `CURRENT` pointer file, classified before open.
+enum CurrentState {
+    /// `CURRENT` names a `MANIFEST-*` file that exists. Whether that MANIFEST
+    /// is complete is left for RocksDB's own recovery to decide at open.
+    Healthy,
+    /// `CURRENT` does not exist: the DB was never created, or the directory
+    /// belongs to an existing store whose pointer was lost.
+    Missing,
+    /// `CURRENT` exists but its content is not `MANIFEST-<digits>\n`: empty,
+    /// zero-filled or otherwise truncated by an incomplete write. The payload
+    /// is kept for the error message.
+    Truncated(Vec<u8>),
+    /// `CURRENT` parses but the MANIFEST it names is gone. The name is kept
+    /// for the error message.
+    Dangling(String),
+}
+
+fn classify_current(dir: &Path) -> std::io::Result<CurrentState> {
+    let bytes = match fs::read(dir.join("CURRENT")) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CurrentState::Missing),
+        Err(e) => return Err(e),
+    };
+    match parse_current_manifest(&bytes) {
+        Some((name, _)) => {
+            if dir.join(name).is_file() {
+                Ok(CurrentState::Healthy)
+            } else {
+                Ok(CurrentState::Dangling(name.to_owned()))
+            }
+        }
+        None => Ok(CurrentState::Truncated(bytes)),
+    }
+}
+
+/// Parses a RocksDB `CURRENT` payload, which must be exactly
+/// `MANIFEST-<digits>\n` (single trailing newline, no other whitespace).
+/// Returns the manifest file name and its number.
+fn parse_current_manifest(bytes: &[u8]) -> Option<(&str, u64)> {
+    let name = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
+    let digits = name.strip_prefix("MANIFEST-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((name, digits.parse().ok()?))
+}
+
+/// Returns whether `name` belongs to a file whose presence means a DB lives
+/// (or lived) in the directory: `MANIFEST-*` (including its temp files),
+/// `OPTIONS-*`, `IDENTITY`, the WAL `archive` directory, and the data files
+/// themselves — WAL `<digits>.log`, SST `<digits>.sst` and BlobDB
+/// `<digits>.blob`. Files like `LOCK`, `LOG` or `LOG.old.*` are deliberately
+/// not artifacts: they carry no data and can be left behind by an open
+/// attempt on an otherwise fresh directory.
+fn is_rocksdb_artifact(name: &str) -> bool {
+    if name == "IDENTITY"
+        || name == "archive"
+        || name.starts_with("MANIFEST-")
+        || name.starts_with("OPTIONS-")
+    {
+        return true;
+    }
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    // RocksDB writes data files as `<number>.<ext>` with at least six digits,
+    // but any width is accepted here.
+    !stem.is_empty()
+        && stem.bytes().all(|b| b.is_ascii_digit())
+        && matches!(ext, "log" | "sst" | "blob")
+}
+
+/// Returns the sorted names of RocksDB data and metadata files in `dir`.
+/// Errors while reading directory entries are propagated rather than
+/// skipped: an unreadable entry could be the only remaining artifact.
+fn rocksdb_artifacts(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut artifacts = Vec::new();
+    for ent in fs::read_dir(dir)? {
+        let ent = ent?;
+        let name = ent.file_name();
+        // Non-UTF-8 names cannot be any of RocksDB's pure-ASCII file names.
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_rocksdb_artifact(name) {
+            artifacts.push(name.to_owned());
+        }
+    }
+    artifacts.sort();
+    Ok(artifacts)
+}
+
+fn db_dir_io_err(op: &str, e: std::io::Error) -> engine_traits::Error {
+    engine_traits::Error::Engine(engine_traits::Status::with_error(
+        engine_traits::Code::IoError,
+        format!("check DB directory: {}: {}", op, e),
+    ))
+}
+
+/// Fails closed when a DB directory may belong to an existing store that
+/// lost its `CURRENT` pointer: opening (or worse, creating) it then risks
+/// silently discarding data, so the store must be recovered offline instead.
+///
+/// A crash or power loss while RocksDB updates its meta files can leave
+/// `CURRENT` empty, zero-filled or without its trailing newline; RocksDB
+/// then refuses to open the store forever. A *missing* `CURRENT` is worse:
+/// `db_exist` reports false, so the open path enables `create_if_missing`
+/// and either fails on the leftover WAL or silently creates a brand-new
+/// empty DB on top of the old data.
+///
+/// Automatically rebuilding `CURRENT` in the startup path is not safe:
+/// picking a MANIFEST requires the configured Env (with
+/// encryption-at-rest, MANIFEST contents are ciphertext to `std::fs`) and
+/// RocksDB's own VersionSet recovery invariants. So this only decides
+/// whether the directory is safe to open or create: a healthy `CURRENT`
+/// and a genuinely new directory (no `CURRENT`, no leftover artifacts)
+/// pass, everything else fails with a recovery-required error and the
+/// directory is left untouched.
+fn check_db_dir(path: &str) -> Result<()> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        // A new DB: RocksDB creates the directory itself.
+        return Ok(());
+    }
+    let state = classify_current(dir).map_err(|e| db_dir_io_err("read CURRENT", e))?;
+    if matches!(state, CurrentState::Healthy) {
+        return Ok(());
+    }
+    let artifacts = rocksdb_artifacts(dir).map_err(|e| db_dir_io_err("scan DB directory", e))?;
+    if matches!(state, CurrentState::Missing) && artifacts.is_empty() {
+        // Genuinely new: at most non-data leftovers like `LOCK` or `LOG`
+        // from a previous open attempt remain.
+        return Ok(());
+    }
+    let reason = match state {
+        CurrentState::Healthy => unreachable!(),
+        CurrentState::Missing => "CURRENT is missing".to_owned(),
+        CurrentState::Truncated(payload) => format!(
+            "CURRENT is truncated (payload {:?}, {} bytes)",
+            String::from_utf8_lossy(&payload[..payload.len().min(32)]),
+            payload.len()
+        ),
+        CurrentState::Dangling(name) => format!("CURRENT names missing {}", name),
+    };
+    let artifacts_msg = if artifacts.is_empty() {
+        "no other RocksDB files remain".to_owned()
+    } else if artifacts.len() > 8 {
+        format!(
+            "data files remain: {} and {} more",
+            artifacts[..8].join(", "),
+            artifacts.len() - 8
+        )
+    } else {
+        format!("data files remain: {}", artifacts.join(", "))
+    };
+    error!(
+        "RocksDB directory needs offline recovery; refusing to open";
+        "path" => path,
+        "reason" => %reason,
+        "artifacts" => ?artifacts,
+    );
+    Err(engine_traits::Error::Engine(
+        engine_traits::Status::with_error(
+            engine_traits::Code::Corruption,
+            format!(
+                "RocksDB directory {} cannot be opened safely: {} ({}). Creating a new DB \
+             over it would silently discard that data. Recover the store offline first: \
+             back up the directory, then either restore CURRENT from the newest complete \
+             MANIFEST-* (inspect with `tikv-ctl ldb`) or move the directory away to start \
+             a new, empty store",
+                dir.display(),
+                reason,
+                artifacts_msg,
+            ),
+        ),
+    ))
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
@@ -662,6 +847,348 @@ mod tests {
             .get_options_cf("cf_dynamic_level_bytes_disabled")
             .unwrap();
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    fn current_is_healthy(path_str: &str) -> bool {
+        matches!(
+            classify_current(Path::new(path_str)),
+            Ok(CurrentState::Healthy)
+        )
+    }
+
+    /// Creates a DB with committed data in two CFs and closes it.
+    fn build_db_with_data(path_str: &str) {
+        let db = new_engine(path_str, &[CF_DEFAULT, "write"]).unwrap();
+        db.put(b"k1", b"v-committed").unwrap();
+        db.put_cf("write", b"wk", b"wv").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        db.flush_cf("write", true).unwrap();
+        drop(db);
+    }
+
+    fn open_db(path_str: &str) -> Result<RocksEngine> {
+        new_engine_opt(
+            path_str,
+            RocksDbOptions::default(),
+            vec![
+                (CF_DEFAULT, Default::default()),
+                ("write", Default::default()),
+            ],
+        )
+    }
+
+    fn assert_data_intact(db: &RocksEngine) {
+        assert_eq!(
+            db.get_value(b"k1").unwrap().unwrap().as_ref(),
+            b"v-committed"
+        );
+        assert_eq!(
+            db.get_value_cf("write", b"wk").unwrap().unwrap().as_ref(),
+            b"wv"
+        );
+    }
+
+    #[test]
+    fn test_parse_current_manifest_strict() {
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-000001\n"),
+            Some(("MANIFEST-000001", 1))
+        );
+        assert_eq!(
+            parse_current_manifest(b"MANIFEST-018446744073709551615\n"),
+            Some(("MANIFEST-018446744073709551615", u64::MAX))
+        );
+        // Empty / missing newline.
+        assert!(parse_current_manifest(b"").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001").is_none());
+        // Whitespace, extra newlines, junk, non-digits, overflow.
+        assert!(parse_current_manifest(b" MANIFEST-000001\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001\n\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-000001 \n").is_none());
+        assert!(parse_current_manifest(b"NOT-A-MANIFEST\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-abc\n").is_none());
+        assert!(parse_current_manifest(b"MANIFEST-99999999999999999999\n").is_none());
+        assert!(parse_current_manifest(b"\x00\x00\x00\n").is_none());
+    }
+
+    #[test]
+    fn test_is_rocksdb_artifact() {
+        for name in [
+            "MANIFEST-000007",
+            "MANIFEST-999999.dbtmp",
+            "OPTIONS-000019",
+            "IDENTITY",
+            "archive",
+            "000123.log",
+            "000123.sst",
+            "000123.blob",
+            "1.log",
+        ] {
+            assert!(is_rocksdb_artifact(name), "{} must be an artifact", name);
+        }
+        for name in [
+            "CURRENT",
+            "LOCK",
+            "LOG",
+            "LOG.old.1712345678",
+            "note.txt",
+            "MANIFEST",
+            "OPTIONS",
+            ".log",
+            "log",
+            "000123.SST",
+            "abc.log",
+            "00012x.sst",
+            "000123.log.bak",
+        ] {
+            assert!(
+                !is_rocksdb_artifact(name),
+                "{} must not be an artifact",
+                name
+            );
+        }
+
+        let path = Builder::new()
+            .prefix("rocksdb_artifacts_scan")
+            .tempdir()
+            .unwrap();
+        let dir = path.path();
+        std::fs::write(dir.join("LOG"), b"info").unwrap();
+        std::fs::write(dir.join("LOCK"), b"").unwrap();
+        std::fs::write(dir.join("CURRENT"), b"MANIFEST-000007\n").unwrap();
+        std::fs::write(dir.join("OPTIONS-000019"), b"opts").unwrap();
+        std::fs::write(dir.join("000123.sst"), b"sst").unwrap();
+        std::fs::create_dir(dir.join("subdir")).unwrap();
+        assert_eq!(
+            rocksdb_artifacts(dir).unwrap(),
+            vec!["000123.sst".to_owned(), "OPTIONS-000019".to_owned()]
+        );
+    }
+
+    /// (file name, size) of every directory entry, for "left untouched"
+    /// comparisons.
+    fn snapshot_dir(dir: &Path) -> Vec<(String, u64)> {
+        let mut snap: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                (
+                    e.file_name().to_string_lossy().into_owned(),
+                    e.metadata().unwrap().len(),
+                )
+            })
+            .collect();
+        snap.sort();
+        snap
+    }
+
+    fn expect_recovery_required(res: Result<RocksEngine>, must_mention: &str) {
+        let err = format!("{}", res.unwrap_err());
+        assert!(
+            err.contains("CURRENT") && err.contains(must_mention),
+            "expected a recovery-required error mentioning {:?}, got: {}",
+            must_mention,
+            err
+        );
+    }
+
+    /// Empty CURRENT (crash mid-meta-write) makes raw RocksDB open fail with
+    /// "CURRENT file does not end with newline" while MANIFEST remains: the
+    /// baseline that makes the fail-closed guard below necessary.
+    #[test]
+    fn test_truncated_current_raw_open_fails() {
+        let path = Builder::new()
+            .prefix("rocksdb_truncated_current_raw_fail")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+
+        // Simulate incomplete CURRENT write leaving an empty file.
+        let current = path.path().join("CURRENT");
+        let before = std::fs::read(&current).unwrap();
+        assert!(before.ends_with(b"\n"), "precondition: CURRENT valid");
+        let has_manifest = std::fs::read_dir(path.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("MANIFEST-")
+        });
+        assert!(has_manifest, "precondition: MANIFEST present");
+        std::fs::write(&current, b"").unwrap();
+        assert!(!current_is_healthy(path_str));
+
+        // Direct open without the guard must fail.
+        let opts = RocksDbOptions::default().into_raw();
+        let err = DB::open_cf(opts, path_str, vec![(CF_DEFAULT, Default::default())]).unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("CURRENT") || msg.contains("Corruption") || msg.contains("newline"),
+            "expected CURRENT corruption error, got: {}",
+            msg
+        );
+    }
+
+    /// Every truncation shape a crash can leave in CURRENT (empty, missing
+    /// newline, zero-filled, garbage, extra newline) makes `new_engine_opt`
+    /// fail closed with a recovery-required error, the directory is left
+    /// untouched, and restoring the pointer brings the data back.
+    #[test]
+    fn test_open_refuses_truncated_current() {
+        let path = Builder::new()
+            .prefix("rocksdb_refuse_truncated_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+
+        type Corruptor = fn(&[u8]) -> Vec<u8>;
+        let corruptions: [(&str, Corruptor); 5] = [
+            ("empty", |_| Vec::new()),
+            ("missing trailing newline", |healthy| {
+                healthy[..healthy.len() - 1].to_vec()
+            }),
+            ("zero-filled", |healthy| vec![0; healthy.len()]),
+            ("garbage", |_| b"\xff\xfegarbage".to_vec()),
+            ("extra newline", |healthy| [healthy, b"\n"].concat()),
+        ];
+        for (name, corrupt) in corruptions {
+            let healthy = std::fs::read(&current).unwrap();
+            let broken = corrupt(&healthy);
+            std::fs::write(&current, &broken).unwrap();
+            assert!(!current_is_healthy(path_str), "case {}", name);
+
+            expect_recovery_required(open_db(path_str), "truncated");
+            assert_eq!(
+                std::fs::read(&current).unwrap(),
+                broken,
+                "case {}: CURRENT must stay untouched",
+                name
+            );
+
+            // Restoring the pointer brings the committed data back.
+            std::fs::write(&current, &healthy).unwrap();
+            let db = open_db(path_str).unwrap_or_else(|e| panic!("case {}: {:?}", name, e));
+            assert_data_intact(&db);
+        }
+    }
+
+    /// A missing CURRENT makes `db_exist` report false, so without the guard
+    /// the open path would try to create a brand-new DB: it fails on a
+    /// leftover WAL file, or silently succeeds with an empty DB when no WAL
+    /// remains. The guard must refuse both and leave the directory untouched.
+    #[test]
+    fn test_open_refuses_missing_current() {
+        let path = Builder::new()
+            .prefix("rocksdb_refuse_missing_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let before = snapshot_dir(path.path());
+
+        std::fs::remove_file(path.path().join("CURRENT")).unwrap();
+        assert!(!db_exist(path_str), "precondition: db_exist is fooled");
+
+        // Leftover WAL: without the guard RocksDB fails with "While creating
+        // a new Db, wal_dir contains existing log file".
+        expect_recovery_required(open_db(path_str), "missing");
+
+        // The worst case: no WAL file survived either, so creation would
+        // silently succeed over the old data.
+        let wals: Vec<_> = before
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| name.ends_with(".log"))
+            .collect();
+        assert!(!wals.is_empty(), "precondition: WAL present");
+        for wal in &wals {
+            std::fs::remove_file(path.path().join(wal)).unwrap();
+        }
+        expect_recovery_required(open_db(path_str), "missing");
+
+        // Nothing was created or modified on disk.
+        assert!(!path.path().join("CURRENT").exists());
+        let after = snapshot_dir(path.path());
+        let removed = 1 + wals.len();
+        assert_eq!(before.len() - after.len(), removed);
+        for entry in &after {
+            assert!(
+                before.contains(entry),
+                "unexpected new or changed file: {:?}",
+                entry
+            );
+        }
+    }
+
+    /// CURRENT naming a MANIFEST that no longer exists must not be silently
+    /// re-pointed (forward or backward): open fails closed with a
+    /// recovery-required error and CURRENT stays byte-identical until an
+    /// operator recovers it offline.
+    #[test]
+    fn test_open_refuses_dangling_current() {
+        let path = Builder::new()
+            .prefix("rocksdb_refuse_dangling_current")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        build_db_with_data(path_str);
+        let current = path.path().join("CURRENT");
+        let healthy = std::fs::read(&current).unwrap();
+
+        // Names a manifest newer than anything on disk: must not roll back.
+        std::fs::write(&current, b"MANIFEST-999999\n").unwrap();
+        expect_recovery_required(open_db(path_str), "MANIFEST-999999");
+        assert_eq!(std::fs::read(&current).unwrap(), b"MANIFEST-999999\n");
+
+        // Names an older, deleted manifest while a newer one exists: must not
+        // roll forward either.
+        std::fs::write(&current, b"MANIFEST-000000\n").unwrap();
+        expect_recovery_required(open_db(path_str), "MANIFEST-000000");
+        assert_eq!(std::fs::read(&current).unwrap(), b"MANIFEST-000000\n");
+
+        // Restoring the real pointer opens fine with the committed data.
+        std::fs::write(&current, &healthy).unwrap();
+        let db = open_db(path_str).unwrap();
+        assert_data_intact(&db);
+    }
+
+    /// Creation stays possible for a genuinely new directory: a path that
+    /// does not exist yet, an empty directory, and a directory holding only
+    /// non-data leftovers (LOCK, LOG) from a previous open attempt.
+    #[test]
+    fn test_open_allows_genuinely_new_dir() {
+        let root = Builder::new()
+            .prefix("rocksdb_allow_new_dir")
+            .tempdir()
+            .unwrap();
+        // Nonexistent path: RocksDB creates the directory itself.
+        let nested = root.path().join("db");
+        let db = open_db(nested.to_str().unwrap()).unwrap();
+        db.put(b"k1", b"v1").unwrap();
+        assert_eq!(db.get_value(b"k1").unwrap().unwrap().as_ref(), b"v1");
+        drop(db);
+
+        // Empty directory.
+        let empty = Builder::new()
+            .prefix("rocksdb_allow_new_dir_empty")
+            .tempdir()
+            .unwrap();
+        drop(open_db(empty.path().to_str().unwrap()).unwrap());
+
+        // Only LOCK and LOG remain from a crashed first open: no data, so
+        // creating a new DB here discards nothing.
+        let crashed = Builder::new()
+            .prefix("rocksdb_allow_new_dir_crashed")
+            .tempdir()
+            .unwrap();
+        std::fs::write(crashed.path().join("LOCK"), b"").unwrap();
+        std::fs::write(crashed.path().join("LOG"), b"info").unwrap();
+        let db = open_db(crashed.path().to_str().unwrap()).unwrap();
+        db.put(b"k1", b"v1").unwrap();
+        assert_eq!(db.get_value(b"k1").unwrap().unwrap().as_ref(), b"v1");
     }
 
     #[test]
