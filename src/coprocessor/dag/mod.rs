@@ -16,12 +16,11 @@ use tidb_query_common::{
     storage,
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor},
 };
-use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
-    coprocessor::{Deadline, RequestHandler, Result, metrics::*},
+    coprocessor::{Deadline, HandlerOutput, RequestHandler, Result, metrics::*},
     storage::{Statistics, Store},
     tikv_util::quota_limiter::QuotaLimiter,
 };
@@ -198,9 +197,10 @@ impl BatchDagHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDagHandler {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
+    async fn handle_request(&mut self) -> Result<HandlerOutput> {
         let result = self.runner.handle_request().await;
-        handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
+            .map(HandlerOutput::ready)
     }
 
     async fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {

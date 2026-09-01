@@ -398,7 +398,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
   "attributes",
   "std",
 ] }
-openssl = "0.10"
+openssl = "0.10.80"
 openssl-sys = "0.9"
 compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"

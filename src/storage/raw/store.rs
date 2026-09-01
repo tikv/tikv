@@ -39,6 +39,9 @@ impl<'a, S: Snapshot> RawStore<S> {
             ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 RawMvccSnapshot::from_snapshot(snapshot),
             ))),
+            ApiVersion::V3 => {
+                unreachable!("API V3 is not supported by this TiKV build")
+            }
         }
     }
 

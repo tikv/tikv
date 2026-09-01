@@ -2449,6 +2449,11 @@ where
     fn on_role_changed<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            // A pending pre-transfer request belongs to the previous SoftState.
+            // In particular, a follower can learn about a new leader without
+            // changing its role. Do not let it ACK the old request to the new
+            // leader.
+            self.transfer_leader_state.reset_transferee_state();
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -2484,8 +2489,6 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
-                    // Exit entry cache warmup state when the peer becomes leader.
-                    self.transfer_leader_state.cache_warmup_state = None;
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -4928,7 +4931,8 @@ where
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state
+            .set_pending_message(msg, deadline);
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -4941,6 +4945,14 @@ where
             return false;
         }
 
+        let current_leader = self.leader_id();
+        let current_term = self.term();
+        if self
+            .transfer_leader_state
+            .reset_if_stale(current_leader, current_term)
+        {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
@@ -6551,6 +6563,58 @@ pub struct TransferLeaderState {
     pub cache_warmup_state: Option<CacheWarmupState>,
 }
 
+impl TransferLeaderState {
+    /// Discards transferee state created for a previous leader or term.
+    ///
+    /// The peer FSM checks pending messages before processing Ready, so the
+    /// SoftState cleanup may not have run when this check is made.
+    /// A term change with the same leader ID may not produce a new SoftState,
+    /// so the leader ID alone cannot establish that the request is current.
+    /// This check must also happen before deadline evaluation: an expired
+    /// request from a previous leader or term must be discarded, not ACKed to
+    /// the current leader.
+    pub fn reset_if_stale(&mut self, current_leader: u64, current_term: u64) -> bool {
+        let is_stale = match &self.transfer_leader_msg {
+            Some((msg, _)) => {
+                msg.get_from() != current_leader || msg.get_log_term() != current_term
+            }
+            None => false,
+        };
+        if is_stale {
+            self.reset_transferee_state();
+        }
+        is_stale
+    }
+
+    /// Clears state created while this peer was a leader transferee.
+    ///
+    /// The state is valid only while the leader ID and term that accepted the
+    /// pre-transfer request remain current.
+    pub fn reset_transferee_state(&mut self) {
+        self.transfer_leader_msg = None;
+        self.cache_warmup_state = None;
+    }
+
+    /// Records a pre-transfer-leader message without extending the deadline
+    /// when the leader retries the same transfer attempt. A different sender
+    /// or leader term starts a new attempt.
+    ///
+    /// The preserved deadline may already have elapsed. Callers immediately
+    /// check the pending message: a request from the current leader receives
+    /// its timeout ACK, while a stale request is discarded first.
+    pub fn set_pending_message(&mut self, msg: &eraftpb::Message, deadline: Instant) {
+        let is_retry = self
+            .transfer_leader_msg
+            .as_ref()
+            .is_some_and(|(pending, _)| {
+                pending.get_from() == msg.get_from() && pending.get_log_term() == msg.get_log_term()
+            });
+        if !is_retry {
+            self.transfer_leader_msg = Some((msg.clone(), deadline));
+        }
+    }
+}
+
 mod memtrace {
     use std::mem;
 
@@ -6597,6 +6661,71 @@ mod tests {
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_pending_transfer_leader_message_deadline() {
+        let mut state = TransferLeaderState::default();
+        let first_deadline = Instant::now() + Duration::from_secs(1);
+        let mut first = eraftpb::Message::default();
+        first.set_from(1);
+        first.set_log_term(1);
+        first.set_index(10);
+        state.set_pending_message(&first, first_deadline);
+
+        // A retry of the same transfer attempt must preserve the first message
+        // and deadline even if fields such as the cache warmup index change.
+        let retry_deadline = first_deadline + Duration::from_secs(1);
+        let mut retry = first.clone();
+        retry.set_index(20);
+        state.set_pending_message(&retry, retry_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 10);
+        assert_eq!(*deadline, first_deadline);
+
+        // A request from a new leader term is a new attempt and gets its own
+        // message and deadline.
+        let next_deadline = retry_deadline + Duration::from_secs(1);
+        let mut next = retry;
+        next.set_log_term(2);
+        state.set_pending_message(&next, next_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 20);
+        assert_eq!(pending.get_log_term(), 2);
+        assert_eq!(*deadline, next_deadline);
+    }
+
+    #[test]
+    fn test_reset_transfer_leader_transferee_state() {
+        let mut msg = eraftpb::Message::default();
+        msg.set_from(1);
+        msg.set_log_term(5);
+        let mut state = TransferLeaderState {
+            leader_transferee: 10,
+            transfer_leader_msg: Some((msg.clone(), Instant::now() - Duration::from_secs(1))),
+            cache_warmup_state: Some(CacheWarmupState::new(
+                1,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )),
+        };
+
+        // Even an expired request must not be ACKed to a different leader.
+        assert!(state.reset_if_stale(2, 5));
+
+        // The leader-side state is handled separately when Ready is processed.
+        assert_eq!(state.leader_transferee, 10);
+        assert!(state.transfer_leader_msg.is_none());
+        assert!(state.cache_warmup_state.is_none());
+
+        state.transfer_leader_msg = Some((msg.clone(), Instant::now() - Duration::from_secs(1)));
+        assert!(state.reset_if_stale(1, 6));
+        assert!(state.transfer_leader_msg.is_none());
+
+        state.transfer_leader_msg = Some((msg, Instant::now() - Duration::from_secs(1)));
+        assert!(!state.reset_if_stale(1, 5));
+        assert!(state.transfer_leader_msg.is_some());
+    }
 
     #[test]
     fn test_sync_log() {

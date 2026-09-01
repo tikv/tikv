@@ -2,6 +2,7 @@
 
 use std::{cell::RefCell, mem, sync::Arc};
 
+use ::tracker::{GLOBAL_TRACKERS, TrackerToken};
 use collections::HashMap;
 use kvproto::{metapb, pdpb::QueryKind};
 use lazy_static::lazy_static;
@@ -9,6 +10,7 @@ use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
+use resource_metering::record_network_out_bytes;
 use tikv_util::memory::MemoryQuota;
 
 use crate::{
@@ -187,16 +189,23 @@ lazy_static! {
             &["type"],
         )
         .unwrap();
-    pub static ref COPR_WAITING_FOR_SEMAPHORE: IntGauge = register_int_gauge!(
-        "tikv_coprocessor_waiting_for_semaphore",
-        "The number of tasks waiting for the semaphore"
-    )
-    .unwrap();
-    pub static ref COPR_SEMAPHORE_WAIT_TIME: Histogram = register_histogram!(
-        "tikv_coprocessor_semaphore_wait_time_duration_seconds",
-        "The duration of heavy tasks waiting for the semaphore",
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
-    ).unwrap();
+    pub static ref COPR_WAITING_FOR_SEMAPHORE: CoprWaitingForSemaphoreGaugeVec =
+        register_static_int_gauge_vec!(
+            CoprWaitingForSemaphoreGaugeVec,
+            "tikv_coprocessor_waiting_for_semaphore",
+            "The number of tasks waiting for the semaphore",
+            &["group"],
+        )
+        .unwrap();
+    pub static ref COPR_SEMAPHORE_WAIT_TIME: CoprSemaphoreWaitTimeHistogramVec =
+        register_static_histogram_vec!(
+            CoprSemaphoreWaitTimeHistogramVec,
+            "tikv_coprocessor_semaphore_wait_time_duration_seconds",
+            "The duration of heavy tasks waiting for the semaphore",
+            &["group"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+        )
+        .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
@@ -229,8 +238,21 @@ make_static_metric! {
         acquired,
     }
 
+    pub label_enum SemaphoreGroupLabel {
+        shared,
+        background_limited,
+    }
+
     pub struct CoprAcquireSemaphoreTypeCounterVec: IntCounter {
         "type" => AcquireSemaphoreType,
+    }
+
+    pub struct CoprWaitingForSemaphoreGaugeVec: IntGauge {
+        "group" => SemaphoreGroupLabel,
+    }
+
+    pub struct CoprSemaphoreWaitTimeHistogramVec: Histogram {
+        "group" => SemaphoreGroupLabel,
     }
 }
 
@@ -290,6 +312,19 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::cache_missing_range => ScanKind::cache_missing_range,
         }
     }
+}
+
+/// Records response data against the coprocessor metrics and request identified
+/// by `tracker`.
+pub fn record_coprocessor_response_size(resp_size: u64, tracker: TrackerToken) {
+    COPR_RESP_SIZE.inc_by(resp_size);
+    record_network_out_bytes(resp_size);
+    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+        tracker.metrics.coprocessor_response_bytes = tracker
+            .metrics
+            .coprocessor_response_bytes
+            .saturating_add(resp_size);
+    });
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {

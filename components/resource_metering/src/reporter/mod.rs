@@ -99,12 +99,27 @@ impl Reporter {
         let ts = records.begin_unix_time_secs;
         let n = self.config.max_resource_groups;
         if self.config.enable_network_io_collection {
+            let enable_detailed_io_collection = self.config.detailed_io_collection_enabled();
             let (agg_tag_map, agg_region_map) = records.aggregate_by_extra_tag_and_region();
-            handle_records_impl(&mut self.records, true, &agg_tag_map, ts, n);
-            handle_records_impl(&mut self.region_records, true, &agg_region_map, ts, n);
+            handle_records_impl(
+                &mut self.records,
+                true,
+                enable_detailed_io_collection,
+                &agg_tag_map,
+                ts,
+                n,
+            );
+            handle_records_impl(
+                &mut self.region_records,
+                true,
+                enable_detailed_io_collection,
+                &agg_region_map,
+                ts,
+                n,
+            );
         } else {
             let agg_map = records.aggregate_by_extra_tag();
-            handle_records_impl(&mut self.records, false, &agg_map, ts, n);
+            handle_records_impl(&mut self.records, false, false, &agg_map, ts, n);
         }
     }
 
@@ -301,6 +316,7 @@ mod tests {
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
@@ -421,6 +437,7 @@ mod tests {
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),
             enable_network_io_collection: true,
+            enable_detailed_io_collection: false,
         }));
         assert_eq!(r.get_interval(), Duration::from_secs(120));
         let mut records = HashMap::default();
