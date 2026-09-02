@@ -763,7 +763,8 @@ impl<E: Engine> Endpoint<E> {
             Duration::from_millis(req.get_context().get_busy_threshold_ms() as u64),
             req.get_context()
                 .get_resource_control_context()
-                .get_resource_group_name(),
+                .get_resource_group_name()
+                .as_bytes(),
         ) {
             let mut pb_error = errorpb::Error::new();
             pb_error.set_server_is_busy(busy_err);
