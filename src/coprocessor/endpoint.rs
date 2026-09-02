@@ -759,9 +759,12 @@ impl<E: Engine> Endpoint<E> {
         });
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
-            req.get_context().get_busy_threshold_ms() as u64,
-        )) {
+        if let Err(busy_err) = self.read_pool.check_busy_threshold(
+            Duration::from_millis(req.get_context().get_busy_threshold_ms() as u64),
+            req.get_context()
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        ) {
             let mut pb_error = errorpb::Error::new();
             pb_error.set_server_is_busy(busy_err);
             let resp = make_error_response(Error::Region(pb_error));
