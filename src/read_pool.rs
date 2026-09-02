@@ -21,8 +21,7 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResul
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
     AdmissionDecision, CONTROL_TICK, ControlledFuture, LEEWAY_FRACTION, READ_POOL_CPU_VEC,
-    ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority,
-    with_resource_limiter,
+    ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -171,9 +170,14 @@ async fn admission_and_enqueue(
     if gauge.get() as usize >= max_tasks {
         let rejected_group = {
             let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-            std::str::from_utf8(meta.group_name())
-                .unwrap_or("unknown")
-                .to_owned()
+            // The default group's metadata reports an empty name, so map it the
+            // same way `check_busy_threshold` does. Otherwise the two pre-pool
+            // rejection counters label the same group differently.
+            match std::str::from_utf8(meta.group_name()) {
+                Ok("") => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+                Ok(name) => name.to_owned(),
+                Err(_) => "unknown".to_owned(),
+            }
         };
         if let Some(ref _resource_ctl) = resource_ctl {
             if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
@@ -1303,11 +1307,33 @@ mod tests {
         block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
             .unwrap();
 
+        let full_rejected = || {
+            UNIFIED_READ_POOL_FULL_REJECTED
+                .with_label_values(&[DEFAULT_RESOURCE_GROUP_NAME])
+                .get()
+        };
+        let before = full_rejected();
+
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
+        // The metadata above carries no resource group. Its rejection has to be
+        // attributed to "default", the label `check_busy_threshold` uses for the
+        // same group, so the two pre-pool counters stay comparable.
+        assert!(
+            full_rejected() > before,
+            "the default group's full-pool rejection must be counted under \
+             {DEFAULT_RESOURCE_GROUP_NAME}"
+        );
+        assert_eq!(
+            UNIFIED_READ_POOL_FULL_REJECTED
+                .with_label_values(&[""])
+                .get(),
+            0,
+            "an empty group name must never reach the label"
+        );
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));

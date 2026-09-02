@@ -26,7 +26,7 @@ use tikv_util::{
 
 use crate::{
     metrics::*,
-    resource_group::{ResourceGroupManager, LEEWAY_FRACTION, THROTTLE_INCREASE_FACTOR},
+    resource_group::{LEEWAY_FRACTION, ResourceGroupManager, THROTTLE_INCREASE_FACTOR},
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
     score::{
         ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
