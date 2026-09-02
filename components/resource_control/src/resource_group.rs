@@ -5,7 +5,7 @@ use std::{
     cmp::{max, min},
     collections::HashSet,
     sync::{
-        Arc, Mutex,
+        Arc, LockResult, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -128,8 +128,9 @@ pub struct RuTracker {
     /// Ring buffer of completed 30-second bucket totals (oldest at `head`).
     buckets: Vec<u64>,
     /// RU accumulated in the currently-open (incomplete) bucket.
-    /// Atomic so that `record_ru_consumption` can add without taking the Mutex.
-    current_bucket: AtomicU64,
+    /// Atomic, and shared with the enclosing [`RuTrackerSlot`], so that
+    /// `record_ru_consumption` can add without taking the Mutex.
+    current_bucket: Arc<AtomicU64>,
     /// RU/s over the trailing 30-60 seconds, refreshed once per tick. See
     /// [`Self::current_rate`].
     cached_current_rate: f64,
@@ -166,7 +167,7 @@ impl RuTracker {
         let num_buckets = num_buckets.max(2); // need at least 2 to warm up
         Self {
             buckets: vec![0u64; num_buckets],
-            current_bucket: AtomicU64::new(0),
+            current_bucket: Arc::new(AtomicU64::new(0)),
             cached_current_rate: 0.0,
             bucket_start_secs: now_secs,
             head: 0,
@@ -190,6 +191,12 @@ impl RuTracker {
     #[inline]
     fn num_buckets(&self) -> usize {
         self.buckets.len()
+    }
+
+    /// The open-bucket counter, so a holder can add to it without reaching
+    /// through the Mutex. Only [`RuTrackerSlot::new`] needs this.
+    fn open_bucket_counter(&self) -> Arc<AtomicU64> {
+        self.current_bucket.clone()
     }
 
     /// Record `ru` in the current bucket (lock-free atomic add).
@@ -478,6 +485,42 @@ impl Drop for DelaySlotGuard {
 }
 
 /// ResourceGroupManager manages the metadata of each resource group.
+/// A group's sliding-window tracker together with its foreground limiter.
+///
+/// `open_bucket` is the tracker's own open-bucket counter, held out here so
+/// `record_ru_consumption` can add to it with a single atomic and no lock --
+/// which is what making that counter atomic was always for. The Mutex is
+/// still what the tick takes to advance buckets and read the derived rates.
+pub(crate) struct RuTrackerSlot {
+    open_bucket: Arc<AtomicU64>,
+    inner: Mutex<(RuTracker, Arc<ResourceLimiter>)>,
+}
+
+impl RuTrackerSlot {
+    fn new(tracker: RuTracker, limiter: Arc<ResourceLimiter>) -> Self {
+        Self {
+            open_bucket: tracker.open_bucket_counter(),
+            inner: Mutex::new((tracker, limiter)),
+        }
+    }
+
+    /// Add to the open bucket without taking the lock.
+    fn record(&self, ru: u64) {
+        self.open_bucket.fetch_add(ru, Ordering::Relaxed);
+    }
+
+    /// Deliberately the same shape as locking the Mutex directly, so every
+    /// caller that needs the tracker itself reads as it did before the
+    /// counter was lifted out.
+    fn lock(&self) -> LockResult<MutexGuard<'_, (RuTracker, Arc<ResourceLimiter>)>> {
+        self.inner.lock()
+    }
+
+    fn get_mut(&mut self) -> LockResult<&mut (RuTracker, Arc<ResourceLimiter>)> {
+        self.inner.get_mut()
+    }
+}
+
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
     // the count of all groups, a fast path because call `DashMap::len` is a little slower.
@@ -493,7 +536,7 @@ pub struct ResourceGroupManager {
     // Per-group sliding-window tracker and token-bucket limiter. The Arc
     // allows handing out limiter references to LimitedFuture wrappers in the
     // read/write pools without copying the limiter state.
-    ru_trackers: DashMap<String, Mutex<(RuTracker, Arc<ResourceLimiter>)>>,
+    ru_trackers: DashMap<String, RuTrackerSlot>,
     // Number of requests currently held in the admission-control delay phase.
     delayed_req_count: AtomicI64,
     // Unix seconds when this manager was created. Used to determine whether
@@ -862,20 +905,19 @@ impl ResourceGroupManager {
     /// Record `ru` units consumed by `group` into the sliding-window tracker
     /// and consume tokens from the group's rate limiter.
     pub fn record_ru_consumption(&self, group: &str, ru: u64) {
-        // Fast path: a shared shard read, no allocation, no config lock.
-        // `entry()` below takes the shard exclusively even when the key is
-        // already there, and needs an owned key to do it, so on the hot
-        // default group -- one key, every gRPC thread -- it would serialize
-        // what is otherwise a single atomic add.
+        // Fast path: a shared shard read and a single atomic add. `entry()`
+        // below takes the shard exclusively even when the key is already
+        // there, and needs an owned key to do it, so on the hot default group
+        // -- one key, every gRPC thread -- it would serialize this.
         if let Some(entry) = self.ru_trackers.get(group) {
-            entry.lock().unwrap().0.record(ru);
+            entry.record(ru);
             return;
         }
         let entry = self.ru_trackers.entry(group.to_owned()).or_insert_with(|| {
             // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
             let num_buckets =
                 (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
-            Mutex::new((
+            RuTrackerSlot::new(
                 RuTracker::new(RuTracker::now_secs(), num_buckets),
                 Arc::new(ResourceLimiter::new(
                     group.to_owned(),
@@ -884,12 +926,11 @@ impl ResourceGroupManager {
                     0,
                     false,
                 )),
-            ))
+            )
         });
-        // Lock-free: only atomically adds to current_bucket.
-        // advance() is called separately by online_adjust_resource_quota under the
-        // lock.
-        entry.lock().unwrap().0.record(ru);
+        // advance() is called separately by online_adjust_resource_quota
+        // under the lock.
+        entry.record(ru);
     }
 
     /// Called by the background adjust worker after computing the new
@@ -1451,7 +1492,7 @@ impl ResourceGroupManager {
         self.ru_trackers
             .entry(group.to_owned())
             .or_insert_with(|| {
-                Mutex::new((
+                RuTrackerSlot::new(
                     RuTracker::new(now, num_buckets),
                     Arc::new(ResourceLimiter::new(
                         group.to_owned(),
@@ -1460,7 +1501,7 @@ impl ResourceGroupManager {
                         0,
                         false,
                     )),
-                ))
+                )
             })
             .lock()
             .unwrap()
@@ -2535,7 +2576,7 @@ pub(crate) mod tests {
     // baseline is `hist`, both in RU/s.
     fn seed_tracker(mgr: &ResourceGroupManager, name: &str, hist: f64, current: f64, t0: u64) {
         let e = mgr.ru_trackers.entry(name.to_owned()).or_insert_with(|| {
-            Mutex::new((
+            RuTrackerSlot::new(
                 RuTracker::new(t0 - RU_BUCKET_SECS, 30),
                 Arc::new(ResourceLimiter::new(
                     name.into(),
@@ -2544,7 +2585,7 @@ pub(crate) mod tests {
                     0,
                     false,
                 )),
-            ))
+            )
         });
         let mut tr = e.lock().unwrap();
         // Recorded so the tracker is not idle, and so `retain` keeps it. The
@@ -3095,7 +3136,7 @@ pub(crate) mod tests {
                 .ru_trackers
                 .entry("steady".to_owned())
                 .or_insert_with(|| {
-                    Mutex::new((
+                    RuTrackerSlot::new(
                         RuTracker::new(t0, 30),
                         Arc::new(ResourceLimiter::new(
                             "".into(),
@@ -3104,7 +3145,7 @@ pub(crate) mod tests {
                             0,
                             false,
                         )),
-                    ))
+                    )
                 });
             let mut tr = e.lock().unwrap();
             tr.0.record_at(6000, t0 + 15);
@@ -3118,7 +3159,7 @@ pub(crate) mod tests {
                 .ru_trackers
                 .entry("spike".to_owned())
                 .or_insert_with(|| {
-                    Mutex::new((
+                    RuTrackerSlot::new(
                         RuTracker::new(t0, 30),
                         Arc::new(ResourceLimiter::new(
                             "".into(),
@@ -3127,7 +3168,7 @@ pub(crate) mod tests {
                             0,
                             false,
                         )),
-                    ))
+                    )
                 });
             let mut tr = e.lock().unwrap();
             tr.0.record_at(3000, t0 + 30);
@@ -3229,7 +3270,7 @@ pub(crate) mod tests {
                 .ru_trackers
                 .entry("spike".to_owned())
                 .or_insert_with(|| {
-                    Mutex::new((
+                    RuTrackerSlot::new(
                         RuTracker::new(t0, 30),
                         Arc::new(ResourceLimiter::new(
                             "".into(),
@@ -3238,7 +3279,7 @@ pub(crate) mod tests {
                             0,
                             false,
                         )),
-                    ))
+                    )
                 });
             let mut tr = e.lock().unwrap();
             tr.0.record_at(3000, t0 + 30);
@@ -3300,7 +3341,7 @@ pub(crate) mod tests {
                 .ru_trackers
                 .entry("spike".to_owned())
                 .or_insert_with(|| {
-                    Mutex::new((
+                    RuTrackerSlot::new(
                         RuTracker::new(t0, 30),
                         Arc::new(ResourceLimiter::new(
                             "".into(),
@@ -3309,7 +3350,7 @@ pub(crate) mod tests {
                             0,
                             false,
                         )),
-                    ))
+                    )
                 });
             let mut tr = e.lock().unwrap();
             tr.0.record_at(3000, t0 + 30);
@@ -3437,7 +3478,7 @@ pub(crate) mod tests {
                 .ru_trackers
                 .entry("spike".to_owned())
                 .or_insert_with(|| {
-                    Mutex::new((
+                    RuTrackerSlot::new(
                         RuTracker::new(t0, 30),
                         Arc::new(ResourceLimiter::new(
                             "".into(),
@@ -3446,7 +3487,7 @@ pub(crate) mod tests {
                             0,
                             false,
                         )),
-                    ))
+                    )
                 });
             let mut tr = e.lock().unwrap();
             tr.0.record_at(3000, t0 + 30);
@@ -4768,6 +4809,38 @@ pub(crate) mod tests {
 
         assert!(mgr.ru_trackers.get("never-configured").is_none());
         assert_eq!(open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME), 40);
+    }
+
+    /// The slot's lock-free counter and the tracker inside its Mutex have to
+    /// be the same counter, or a tick would flush a bucket that never saw the
+    /// arrival charges.
+    #[test]
+    fn test_slot_counter_is_the_trackers_own() {
+        let mgr = ResourceGroupManager::default();
+        mgr.record_ru_consumption("g", 9);
+
+        let entry = mgr.ru_trackers.get("g").unwrap();
+        // Written without the lock, read through it.
+        assert_eq!(
+            entry
+                .lock()
+                .unwrap()
+                .0
+                .current_bucket
+                .load(Ordering::Relaxed),
+            9
+        );
+        // And the other way round.
+        entry.lock().unwrap().0.record(5);
+        assert_eq!(entry.open_bucket.load(Ordering::Relaxed), 14);
+
+        // A tick flushing the bucket must see both.
+        entry
+            .lock()
+            .unwrap()
+            .0
+            .advance(RuTracker::now_secs() + RU_BUCKET_SECS);
+        assert_eq!(entry.open_bucket.load(Ordering::Relaxed), 0);
     }
 
     /// `record_ru_consumption` takes a shared-read fast path when the group is
