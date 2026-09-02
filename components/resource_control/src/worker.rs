@@ -26,7 +26,7 @@ use tikv_util::{
 
 use crate::{
     metrics::*,
-    resource_group::{LEEWAY_FRACTION, ResourceGroupManager, THROTTLE_INCREASE_FACTOR},
+    resource_group::{LEEWAY_FACTOR, ResourceGroupManager, THROTTLE_INCREASE_FACTOR},
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
     score::{
         ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
@@ -456,8 +456,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         } else if current_limit_score > target_score {
             // Background limit exceeds its allowed share; reset to target.
             target_score
-        } else if current_limit_score < (1.0 - LEEWAY_FRACTION) * target_score
-            && resource_score < (1.0 - LEEWAY_FRACTION) * bg_scale_start
+        } else if current_limit_score < LEEWAY_FACTOR * target_score
+            && resource_score < LEEWAY_FACTOR * bg_scale_start
         {
             // System is idle; increase limit incrementally from current limit.
             current_limit_score * THROTTLE_INCREASE_FACTOR

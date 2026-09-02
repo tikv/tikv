@@ -7,7 +7,7 @@ use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    AdmissionDecision, CONTROL_TICK, DelaySlotGuard, LEEWAY_FRACTION, LEEWAY_PCT,
+    AdmissionDecision, CONTROL_TICK, DelaySlotGuard, LEEWAY_FACTOR, LEEWAY_FRACTION,
     MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
