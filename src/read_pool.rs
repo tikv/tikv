@@ -172,10 +172,11 @@ async fn admission_and_enqueue(
             let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
             // The name reaches us from the client, so bound it to the
             // configured groups before it becomes a metric label -- see
-            // `ResourceGroupManager::bounded_group_name`. This also maps the
-            // default group's empty name onto "default", the label
-            // `check_busy_threshold` uses for the same group, so the two
-            // pre-pool rejection counters stay comparable.
+            // `ResourceGroupManager::bounded_group_name`. Invalid UTF-8
+            // cannot name a configured group either, so it collapses the same
+            // way. `group_name()` already reports "default" for the default
+            // group, which is the label `check_busy_threshold` uses for it,
+            // so the two pre-pool counters agree there with no special case.
             let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
             match resource_manager.as_deref() {
                 Some(rm) => rm.bounded_group_name(name).to_owned(),
