@@ -153,14 +153,14 @@ async fn admission_and_enqueue(
                           "group" => limiter.name(),
                           "delay" => ?d);
                 }
-                Some((d, resource_manager))
+                Some(d)
             }
             AdmissionDecision::Allow => None,
         },
         _ => None,
     };
-    if let Some((d, slot)) = delay {
-        let mut _guard = slot.as_ref().map(|rm| rm.delay_slot_guard());
+    if let Some(d) = delay {
+        let mut _guard = resource_manager.as_ref().map(|rm| rm.delay_slot_guard());
         futures_timer::Delay::new(d).await;
         if let Some(guard) = _guard.as_mut() {
             guard.release();
@@ -170,13 +170,16 @@ async fn admission_and_enqueue(
     if gauge.get() as usize >= max_tasks {
         let rejected_group = {
             let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-            // The default group's metadata reports an empty name, so map it the
-            // same way `check_busy_threshold` does. Otherwise the two pre-pool
-            // rejection counters label the same group differently.
-            match std::str::from_utf8(meta.group_name()) {
-                Ok("") => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-                Ok(name) => name.to_owned(),
-                Err(_) => "unknown".to_owned(),
+            // The name reaches us from the client, so bound it to the
+            // configured groups before it becomes a metric label -- see
+            // `ResourceGroupManager::bounded_group_name`. This also maps the
+            // default group's empty name onto "default", the label
+            // `check_busy_threshold` uses for the same group, so the two
+            // pre-pool rejection counters stay comparable.
+            let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
+            match resource_manager.as_deref() {
+                Some(rm) => rm.bounded_group_name(name).to_owned(),
+                None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
             }
         };
         if let Some(ref _resource_ctl) = resource_ctl {
@@ -457,6 +460,20 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
+    /// Bound a wire-supplied resource group name for use as a metric label.
+    /// With no resource manager there are no configured groups to validate
+    /// against, so everything collapses to the default rather than letting an
+    /// unvalidated name reach the label.
+    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> &'a str {
+        match self {
+            ReadPoolHandle::Yatp {
+                resource_manager: Some(rm),
+                ..
+            } => rm.bounded_group_name(resource_group),
+            _ => DEFAULT_RESOURCE_GROUP_NAME,
+        }
+    }
+
     pub fn check_busy_threshold(
         &self,
         busy_threshold: Duration,
@@ -475,14 +492,8 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
-        // A client that sends no resource group is the default group, the same
-        // way `TaskMetadata::group_name` reports it.
         UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
-            .with_label_values(&[if resource_group.is_empty() {
-                DEFAULT_RESOURCE_GROUP_NAME
-            } else {
-                resource_group
-            }])
+            .with_label_values(&[self.bounded_group_label(resource_group)])
             .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,
@@ -2303,13 +2314,15 @@ mod tests {
             max_tasks_per_worker: 100,
             ..Default::default()
         };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        resource_manager.add_resource_group(new_resource_group_ru("noisy".into(), 5000, 1));
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool_with_name(
             &config,
             DummyReporter,
             engine,
             None,
-            None,
+            Some(resource_manager.clone()),
             CleanupMethod::InPlace,
             "test-busy-threshold".to_owned(),
             false,
@@ -2362,6 +2375,23 @@ mod tests {
             counter("quiet"),
             0,
             "rejection must be attributed to its own group"
+        );
+
+        // An unconfigured name arrives from the client and must not become a
+        // label of its own, or a caller mints a new series per request.
+        let default_before = counter(DEFAULT_RESOURCE_GROUP_NAME);
+        handle
+            .check_busy_threshold(Duration::from_millis(100), "../../etc/passwd\n{injected}")
+            .expect_err("the estimate is over the threshold");
+        assert_eq!(
+            counter("../../etc/passwd\n{injected}"),
+            0,
+            "an unconfigured group name must never reach the label"
+        );
+        assert_eq!(
+            counter(DEFAULT_RESOURCE_GROUP_NAME),
+            default_before + 1,
+            "it is counted against the default group instead"
         );
 
         running_tasks[0].sub(500);

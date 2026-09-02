@@ -812,6 +812,22 @@ impl ResourceGroupManager {
         self.charge_request_base_cost(&ctx.resource_group_name);
     }
 
+    /// Map a client-supplied group name onto the bounded set of configured
+    /// groups, so it is safe to use as a metric label or a map key.
+    ///
+    /// The name arrives off the wire and is never validated, so an unknown or
+    /// empty one has to collapse to the default group. Used directly it would
+    /// let a caller mint a new label value -- and so a new permanently
+    /// retained metric series, or a new `ru_trackers` entry -- on every
+    /// request.
+    pub fn bounded_group_name<'a>(&self, group: &'a str) -> &'a str {
+        if self.resource_groups.contains_key(group) {
+            group
+        } else {
+            DEFAULT_RESOURCE_GROUP_NAME
+        }
+    }
+
     /// Charge `group` the fixed cost of a request arriving, whether or not it
     /// goes on to run. See `Config::request_base_cost_micros`.
     fn charge_request_base_cost(&self, group: &str) {
@@ -819,15 +835,7 @@ impl ResourceGroupManager {
         if micros == 0 {
             return;
         }
-        // `group` comes straight off the wire, so normalize it the way
-        // `get_resource_limiter` does: an unknown or removed group must not
-        // leak a `ru_trackers` entry.
-        let name = if self.resource_groups.contains_key(group) {
-            group
-        } else {
-            DEFAULT_RESOURCE_GROUP_NAME
-        };
-        self.record_ru_consumption(name, micros);
+        self.record_ru_consumption(self.bounded_group_name(group), micros);
     }
 
     /// Record `ru` units consumed by `group` into the sliding-window tracker
@@ -1445,12 +1453,7 @@ impl ResourceGroupManager {
         }
         // Only create a foreground limiter for known groups; unknown or removed
         // groups fall back to "default" to avoid leaking ru_trackers entries.
-        let group_name = if self.resource_groups.contains_key(rg) {
-            rg
-        } else {
-            DEFAULT_RESOURCE_GROUP_NAME
-        };
-        Some(self.get_foreground_group_limiter(group_name))
+        Some(self.get_foreground_group_limiter(self.bounded_group_name(rg)))
     }
 
     // return a ResourceLimiter for background tasks only.
