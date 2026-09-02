@@ -657,4 +657,9 @@ lazy_static! {
         "The count of running scheduler commands"
     )
     .unwrap();
+    pub static ref SCHED_LATCH_MEMORY_USAGE_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_latch_memory_usage",
+        "Bytes of memory held by the scheduler write latches (fixed slot array plus per-slot waiting queues)."
+    )
+    .unwrap();
 }

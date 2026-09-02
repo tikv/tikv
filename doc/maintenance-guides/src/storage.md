@@ -147,6 +147,7 @@ High-risk contracts:
 ## Observability And Operational Signals
 
 - scheduler latency, latch wait, and pending-write signals
+- scheduler write-latch memory usage in `tikv_scheduler_latch_memory_usage`
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
