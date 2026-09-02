@@ -64,17 +64,21 @@ const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 pub const CONTROL_TICK: Duration = Duration::from_secs(10);
 
 /// Margin below a setpoint before a controller trusts there is room to expand:
-/// `measured < (1 - LEEWAY_FRACTION) * setpoint`. Shared by the foreground
-/// throttle's release gate, the read pool's scale-up permission and scale-out
-/// band, and the background idle gate.
-pub const LEEWAY_PCT: f64 = 10.0;
+/// `measured < LEEWAY_FACTOR * setpoint`. Shared by the foreground throttle's
+/// release gate, the read pool's scale-up permission and scale-out band, and
+/// the background idle gate.
+const LEEWAY_PCT: f64 = 10.0;
+/// The margin itself. Only the scale-*in* band wants it in this form, as
+/// `1 + LEEWAY_FRACTION`; everything comparing downward wants
+/// [`LEEWAY_FACTOR`].
 pub const LEEWAY_FRACTION: f64 = LEEWAY_PCT / 100.0;
+pub const LEEWAY_FACTOR: f64 = 1.0 - LEEWAY_FRACTION;
 
 /// How far below `fg_cpu_throttle_threshold` the node must sit for a group's
 /// sliding average to be trusted as its baseline. Above that mark the baseline
 /// is left alone, so it holds the last quiet reading for the whole episode.
-/// Stricter than [`LEEWAY_PCT`]: that decides when to hand capacity back, this
-/// decides when a sample is representative.
+/// Stricter than [`LEEWAY_FACTOR`]: that decides when to hand capacity back,
+/// this decides when a sample is representative.
 const BASELINE_QUIET_PCT: f64 = 15.0;
 const BASELINE_QUIET_FACTOR: f64 = 1.0 - BASELINE_QUIET_PCT / 100.0;
 
@@ -146,9 +150,6 @@ pub struct RuTracker {
     /// which has climbed with the load and so keeps release conservative.
     /// `None` until the first quiet window.
     quiet_baseline: Option<f64>,
-    /// True while `adjust_group_throttling` holds a CPU rate limit on this
-    /// group.
-    throttle_backpressure: bool,
     /// True while this group is deprioritized in the read scheduler.
     scheduler_backpressure: bool,
     /// Consecutive ticks over this group's own burst target, saturating at
@@ -173,7 +174,6 @@ impl RuTracker {
             cached_historical_rate: 0.0,
             ramp_up_epochs: 0,
             quiet_baseline: None,
-            throttle_backpressure: false,
             scheduler_backpressure: false,
             over_baseline_ticks: 0,
             quiet_since_secs: u64::MAX,
@@ -381,10 +381,6 @@ impl RuTracker {
     }
 
     /// Records whether a CPU rate limit is applied to this group.
-    fn set_throttle_backpressure(&mut self, on: bool) {
-        self.throttle_backpressure = on;
-    }
-
     /// Records whether this group is deprioritized in the read scheduler.
     fn set_scheduler_backpressure(&mut self, on: bool) {
         self.scheduler_backpressure = on;
@@ -940,12 +936,10 @@ impl ResourceGroupManager {
     }
 
     /// Records `read_pool_cpu` (in cores) into the historical tracker and
-    /// returns the resulting live average, in cores.
-    pub fn read_pool_cpu_floor(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
-        self.read_pool_cpu_floor_at(read_pool_cpu, interval_secs, RuTracker::now_secs())
-    }
-
-    fn read_pool_cpu_floor_at(&self, read_pool_cpu: f64, interval_secs: f64, now: u64) -> f64 {
+    /// returns the resulting live average, in cores. Not a floor: the floor is
+    /// `quiet_read_pool_floor`, and the live average is deliberately not used
+    /// as one -- see `compute_read_pool_target_cpu_at`.
+    fn record_read_pool_cpu_at(&self, read_pool_cpu: f64, interval_secs: f64, now: u64) -> f64 {
         let mut tracker = self.read_pool_cpu_tracker.lock().unwrap();
         tracker.advance(now);
         if interval_secs > 0.0 {
@@ -973,7 +967,7 @@ impl ResourceGroupManager {
         // counter holds.
         let threshold = self.config.value().fg_cpu_throttle_threshold;
         let loaded = cpu_score > threshold;
-        let cleared = cpu_score < threshold * (1.0 - LEEWAY_FRACTION);
+        let cleared = cpu_score < threshold * LEEWAY_FACTOR;
         let quiet = cpu_score < threshold * BASELINE_QUIET_FACTOR;
 
         // A group over its own average is no problem on an idle node, so both
@@ -1094,7 +1088,14 @@ impl ResourceGroupManager {
             let guard = entry.lock().unwrap();
             let baseline = guard.0.effective_baseline();
             let current = guard.0.current_rate();
-            let held = guard.0.throttle_backpressure || guard.0.scheduler_backpressure;
+            // A finite CPU rate limit *is* throttle backpressure, so read it
+            // off the limiter rather than a mirror of it that is a tick stale.
+            let throttled = guard
+                .1
+                .get_limiter(ResourceType::Cpu)
+                .get_rate_limit()
+                .is_finite();
+            let held = throttled || guard.0.scheduler_backpressure;
             let sustained = guard.0.sustained_over_baseline();
             drop(guard);
 
@@ -1139,7 +1140,7 @@ impl ResourceGroupManager {
         const MIN_RAMP_UP_EPOCHS: u32 = 2;
 
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        let leeway_threshold = throttle_threshold * (1.0 - LEEWAY_FRACTION);
+        let leeway_threshold = throttle_threshold * LEEWAY_FACTOR;
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
 
         // Live pressure, not the cache being non-empty: the cache outlives the
@@ -1155,36 +1156,33 @@ impl ResourceGroupManager {
                 // The quiet-tick baseline, so the throttle floor cannot drift
                 // up with the load being shed.
                 let hist = guard.0.effective_baseline();
+                // No zero special case: a zero baseline is a target of zero,
+                // not a reason to skip. A group with no history of its own,
+                // and every group under `current-usage` detection, is
+                // throttled on this same path -- the target simply stops
+                // clamping the decrease, so a named group keeps being cut
+                // while it stays named.
                 let burst_target = hist * burst_factor;
-                // `>=`: a zero baseline is a target of zero, not a reason to
-                // skip. A group with no history of its own, and every group
-                // under `current-usage` detection, is throttled on the same
-                // path — the target simply stops clamping the decrease, so a
-                // named group keeps being cut while it stays named.
-                if hist >= 0.0 {
-                    let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
-                    let base = if current_limit.is_infinite() {
-                        guard.0.current_rate()
-                    } else {
-                        current_limit
-                    };
-                    if base > burst_target {
-                        let rate = (base * THROTTLE_DECREASE_FACTOR).max(burst_target);
-                        guard.0.ramp_up_epochs = 0;
-                        guard
-                            .1
-                            .get_limiter(ResourceType::Cpu)
-                            .set_rate_limit(rate.max(1.0));
-                    }
+                let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
+                let base = if current_limit.is_infinite() {
+                    guard.0.current_rate()
+                } else {
+                    current_limit
+                };
+                if base > burst_target {
+                    let rate = (base * THROTTLE_DECREASE_FACTOR).max(burst_target);
+                    guard.0.ramp_up_epochs = 0;
+                    guard
+                        .1
+                        .get_limiter(ResourceType::Cpu)
+                        .set_rate_limit(rate.max(1.0));
                 }
             }
         }
 
-        // One pass over every group, not just the named ones: this both hands
-        // capacity back and clears `throttle_backpressure` once a limit is
-        // infinite again, and a group that has left the verdict still needs
-        // both. Skipping it would strand a finite limit and freeze its
-        // baseline for good.
+        // One pass over every group, not just the named ones: a group that
+        // has left the verdict still needs its capacity handed back. Skipping
+        // it would strand a finite limit and freeze its baseline for good.
         let recovering = !under_pressure && cpu_score < leeway_threshold;
         for entry in &self.ru_trackers {
             let mut guard = entry.lock().unwrap();
@@ -1218,10 +1216,7 @@ impl ResourceGroupManager {
                 }
             }
 
-            // Derived from the limiter so no transition is missed: finite =
-            // throttled.
             let limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
-            guard.0.set_throttle_backpressure(limit.is_finite());
             let val = if limit.is_finite() {
                 (limit / 1_000_000.0) * 100.0
             } else {
@@ -1235,7 +1230,7 @@ impl ResourceGroupManager {
 
     fn adjust_group_scheduling_at(&self, cpu_score: f64, engaged: bool, now: u64) {
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        let leeway_threshold = throttle_threshold * (1.0 - LEEWAY_FRACTION);
+        let leeway_threshold = throttle_threshold * LEEWAY_FACTOR;
 
         // Reset to 0 whenever foreground is not under CPU pressure, so a
         // transient spike cannot pin the read pool down indefinitely.
@@ -1309,7 +1304,7 @@ impl ResourceGroupManager {
         interval_secs: f64,
         now: u64,
     ) -> f64 {
-        let historical_cpu = self.read_pool_cpu_floor_at(read_pool_cpu, interval_secs, now);
+        let historical_cpu = self.record_read_pool_cpu_at(read_pool_cpu, interval_secs, now);
         // The quiet-tick floor, or a fixed one core until there has been a
         // quiet tick -- not the live average, which keeps recording the
         // overload and so rises in step with the load being shed, floating the
@@ -2599,7 +2594,7 @@ pub(crate) mod tests {
     fn tick(mgr: &ResourceGroupManager, cpu_score: f64) {
         let cfg = mgr.get_config().value();
         let loaded = cpu_score > cfg.fg_cpu_throttle_threshold;
-        let cleared = cpu_score < cfg.fg_cpu_throttle_threshold * (1.0 - LEEWAY_FRACTION);
+        let cleared = cpu_score < cfg.fg_cpu_throttle_threshold * LEEWAY_FACTOR;
         let under_pressure = loaded && mgr.is_bg_cpu_at_floor();
         let burst_factor = 1.0 + cfg.baseline_burst_pct / 100.0;
         for entry in &mgr.ru_trackers {
@@ -2680,19 +2675,11 @@ pub(crate) mod tests {
     fn set_backpressure(mgr: &ResourceGroupManager, name: &str, throttle: bool, scheduler: bool) {
         let e = mgr.ru_trackers.get(name).unwrap();
         let mut tr = e.lock().unwrap();
-        tr.0.set_throttle_backpressure(throttle);
+        // Throttle backpressure is the limiter's own state: a finite CPU
+        // rate limit is what being throttled means.
+        tr.1.get_limiter(ResourceType::Cpu)
+            .set_rate_limit(if throttle { 1_000_000.0 } else { f64::INFINITY });
         tr.0.set_scheduler_backpressure(scheduler);
-    }
-
-    /// States the baseline a previous quiet tick would have taken for `name`.
-    fn set_quiet_baseline(mgr: &ResourceGroupManager, name: &str, hist: f64) {
-        mgr.ru_trackers
-            .get(name)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .0
-            .quiet_baseline = Some(hist);
     }
 
     // seed_tracker builds a 30-bucket tracker, so one window is 15 minutes.
@@ -3003,7 +2990,7 @@ pub(crate) mod tests {
         // decides when a sample is representative of normal behaviour. A
         // reference taken at the release point would already include the
         // run-up to the episode.
-        assert!(BASELINE_QUIET_FACTOR < 1.0 - LEEWAY_FRACTION);
+        assert!(BASELINE_QUIET_FACTOR < LEEWAY_FACTOR);
     }
 
     #[test]
@@ -3556,7 +3543,7 @@ pub(crate) mod tests {
             mgr.compute_read_pool_target_cpu_at(8.0, 10.0, t0 + 10 * i);
         }
         assert!(
-            mgr.read_pool_cpu_floor(0.0, 0.0) > 1.0,
+            mgr.record_read_pool_cpu_at(0.0, 0.0, RuTracker::now_secs()) > 1.0,
             "the live average should exceed a core for this to prove anything"
         );
         let target = mgr.compute_read_pool_target_cpu_at(1.0, 10.0, t0 + 120);
@@ -4526,12 +4513,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_read_pool_cpu_floor_cold_tracker() {
+    fn test_read_pool_historical_cpu_cold_tracker() {
         let mgr = ResourceGroupManager::default();
         let t0 = RuTracker::now_secs();
-        // Cold tracker → historical rate 0 → floor == 0.0 cores.
-        let floor = mgr.read_pool_cpu_floor_at(8.0, 10.0, t0);
-        assert_eq!(floor, 0.0);
+        // Cold tracker → historical rate 0 → 0.0 cores.
+        let historical = mgr.record_read_pool_cpu_at(8.0, 10.0, t0);
+        assert_eq!(historical, 0.0);
     }
 
     /// A quiet period of a sustained 1 core, then the pool's own window
@@ -4696,7 +4683,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_read_pool_cpu_floor_matches_historical_usage() {
+    fn test_read_pool_historical_cpu_matches_usage() {
         // Small window (minimum 2 min = 4 buckets = 120s) so a handful of
         // directly-seeded buckets fully cover it, giving an exact,
         // non-ramping historical rate to assert against.
@@ -4721,9 +4708,9 @@ pub(crate) mod tests {
         }
         // system_uptime (150s) >= window_secs (120s) → historical_rate uses
         // the full window as denominator: 480_000_000 / 120 = 4_000_000 us/s
-        // = 4 cores → floor = 4.0.
-        let floor = mgr.read_pool_cpu_floor_at(4.0, 30.0, t0 + 150);
-        assert_eq!(floor, 4.0);
+        // = 4 cores.
+        let historical = mgr.record_read_pool_cpu_at(4.0, 30.0, t0 + 150);
+        assert_eq!(historical, 4.0);
     }
 
     /// RU sitting in the still-open bucket, which is where an arrival charge

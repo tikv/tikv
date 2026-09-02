@@ -20,8 +20,9 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, CONTROL_TICK, ControlledFuture, LEEWAY_FRACTION, READ_POOL_CPU_VEC,
-    ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
+    AdmissionDecision, CONTROL_TICK, ControlledFuture, LEEWAY_FACTOR, LEEWAY_FRACTION,
+    READ_POOL_CPU_VEC, ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority,
+    with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -963,7 +964,7 @@ impl ReadPoolConfigRunner {
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
         let busy_cpu_scale_in = read_pool_cpu > (1.0 + LEEWAY_FRACTION) * target_cpu_cores;
-        let busy_cpu_scale_out = read_pool_cpu < (1.0 - LEEWAY_FRACTION) * target_cpu_cores
+        let busy_cpu_scale_out = read_pool_cpu < LEEWAY_FACTOR * target_cpu_cores
             && self.cur_thread_count < self.core_thread_count
             && scale_out_allowed;
 
