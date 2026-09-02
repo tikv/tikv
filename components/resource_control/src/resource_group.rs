@@ -81,6 +81,17 @@ pub const LEEWAY_FACTOR: f64 = 1.0 - LEEWAY_FRACTION;
 /// this decides when a sample is representative.
 const BASELINE_QUIET_PCT: f64 = 15.0;
 const BASELINE_QUIET_FACTOR: f64 = 1.0 - BASELINE_QUIET_PCT / 100.0;
+// Leeway decides when it is safe to hand capacity back; the quiet gate decides
+// when a sample is representative of normal behaviour. A reference taken at the
+// release point would already include the run-up to the episode, so the quiet
+// gate has to stay the stricter of the two -- checked here so retuning either
+// percentage above cannot silently invert them.
+//
+// `assertions_on_constants` reads this as `assert!(true)` to be optimized out;
+// in a `const` item there is nothing to optimize out, the evaluation *is* the
+// check.
+#[allow(clippy::assertions_on_constants)]
+const _: () = assert!(BASELINE_QUIET_FACTOR < LEEWAY_FACTOR);
 
 /// Per-tick step that tightens an enforced rate while pressure is engaged: the
 /// per-group CPU limit and the read pool's CPU ceiling. Larger than the
@@ -3026,15 +3037,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_quiet_gate_is_stricter_than_the_release_leeway() {
-        // Leeway decides when it is safe to hand capacity back; the quiet gate
-        // decides when a sample is representative of normal behaviour. A
-        // reference taken at the release point would already include the
-        // run-up to the episode.
-        assert!(BASELINE_QUIET_FACTOR < LEEWAY_FACTOR);
-    }
-
-    #[test]
     fn test_held_credit_covers_target_and_spares_new_candidates() {
         // A held group's credit keeps covering the target, sparing a small
         // group that drifts over its gate.
@@ -3737,11 +3739,14 @@ pub(crate) mod tests {
         mark_sustained(&mgr, "g1");
         mgr.online_adjust_resource_quota_at(90.0, now);
         let after_tick1 = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
-        let current_rate = {
-            let entry = mgr.ru_trackers.get("g1").unwrap();
-            let rate = entry.lock().unwrap().0.current_rate();
-            rate
-        };
+        let current_rate = mgr
+            .ru_trackers
+            .get("g1")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .0
+            .current_rate();
         assert!(
             (after_tick1 - current_rate * 0.85).abs() < current_rate * 0.01,
             "first tick should tighten 15% below measured current rate, got {after_tick1}, \
@@ -4101,7 +4106,7 @@ pub(crate) mod tests {
         // It slows down, and its trailing average has now absorbed the spike.
         set_sampled_rate(&mgr, "tenant1", 10.0);
         set_baseline(&mgr, "tenant1", 500.0);
-        for i in 1..=3 {
+        for _ in 1..=3 {
             tick(&mgr, 50.0);
         }
         assert!(
@@ -4179,7 +4184,7 @@ pub(crate) mod tests {
 
         // Recovery: load back to its (now higher) baseline, CPU below leeway.
         set_sampled_rate(&mgr, "tenant1", 1000.0);
-        for i in 2..=40 {
+        for _ in 2..=40 {
             tick(&mgr, 50.0);
         }
         assert!(
