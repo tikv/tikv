@@ -715,7 +715,7 @@ where
         if let Some(resource_ctl) = &self.resource_manager {
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
-                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+                Box::new(ResourceContrlCfgMgr::new(resource_ctl.clone())),
             );
         }
 
