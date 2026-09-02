@@ -230,6 +230,11 @@ impl<S: Snapshot> PointGetter<S> {
     ) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
+        self.statistics.record_cf_read(
+            CF_LOCK,
+            user_key.as_encoded().len(),
+            lock_value.as_ref().map_or(0, |value| value.len()),
+        );
 
         if let Some(ref lock_value) = lock_value {
             let lock_or_shared_locks = txn_types::parse_lock(lock_value)?;
@@ -287,7 +292,7 @@ impl<S: Snapshot> PointGetter<S> {
             seek_key = seek_key.truncate_ts()?;
             use_near_seek = true;
 
-            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+            let cursor_key = self.write_cursor.key();
             // No need to compare user key because it uses prefix seek.
             let key_commit_ts = Key::decode_ts_from(cursor_key)?;
             if key_commit_ts > self.ts {
@@ -312,8 +317,7 @@ impl<S: Snapshot> PointGetter<S> {
 
         seek_key = seek_key.append_ts(self.ts);
         let data_found = if use_near_seek {
-            if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()
-            {
+            if self.write_cursor.key() >= seek_key.as_encoded().as_slice() {
                 // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
                 // it will call prev() several times, whereas we just want to seek forward here
                 // so cmp them in advance
@@ -330,7 +334,10 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
-        let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+        let mut write = WriteRef::parse(
+            self.write_cursor
+                .value_with_stats(&mut self.statistics.write),
+        )?;
         // Commit ts of `write` when it is loaded by `last_change` shortcut via
         // `get_cf`. In that case write cursor still points to a newer version
         // and its ts must not be used.
@@ -347,7 +354,7 @@ impl<S: Snapshot> PointGetter<S> {
                         if let Some(ts) = loaded_write_commit_ts {
                             Some(ts)
                         } else {
-                            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                            let cursor_key = self.write_cursor.key();
                             Some(Key::decode_ts_from(cursor_key)?)
                         }
                     } else {
@@ -388,7 +395,13 @@ impl<S: Snapshot> PointGetter<S> {
                             estimated_versions_to_last_change,
                         } if estimated_versions_to_last_change >= SEEK_BOUND => {
                             let key_with_ts = user_key.clone().append_ts(commit_ts);
-                            match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
+                            let value = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?;
+                            self.statistics.record_cf_read(
+                                CF_WRITE,
+                                key_with_ts.as_encoded().len(),
+                                value.as_ref().map_or(0, |value| value.len()),
+                            );
+                            match value {
                                 Some(v) => owned_value = v,
                                 None => return Ok(None),
                             }
@@ -416,7 +429,10 @@ impl<S: Snapshot> PointGetter<S> {
             }
             loaded_write_commit_ts = None;
             // No need to compare user key because it uses prefix seek.
-            write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            write = WriteRef::parse(
+                self.write_cursor
+                    .value_with_stats(&mut self.statistics.write),
+            )?;
         }
     }
 
@@ -438,10 +454,13 @@ impl<S: Snapshot> PointGetter<S> {
             )
         ));
         self.statistics.data.get += 1;
-        // TODO: We can avoid this clone.
-        let value = self
-            .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write_start_ts))?;
+        let key = user_key.clone().append_ts(write_start_ts);
+        let value = self.snapshot.get_cf(CF_DEFAULT, &key)?;
+        self.statistics.record_cf_read(
+            CF_DEFAULT,
+            key.as_encoded().len(),
+            value.as_ref().map_or(0, |value| value.len()),
+        );
 
         if let Some(value) = value {
             self.statistics.data.processed_keys += 1;
@@ -801,6 +820,94 @@ mod tests {
             s.processed_size,
             Key::from_raw(b"zz").len() + b"zz".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
         );
+    }
+
+    #[test]
+    fn test_flow_statistics_include_mvcc_versions_and_default_cf() {
+        let key = b"flow";
+        let value = vec![b'x'; SHORT_VALUE_MAX_LEN + 10];
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, key, &value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+
+        // Add enough newer versions to cross SEEK_BOUND. The stale read first
+        // advances with `next` and then falls back to a direct `seek` before it
+        // reaches the visible version at commit_ts 20.
+        for version in 0..SEEK_BOUND + 2 {
+            let start_ts = 30 + version * 20;
+            let commit_ts = start_ts + 10;
+            must_prewrite_put(&mut engine, key, &value, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 20.into())
+            .check_has_newer_ts_data(true)
+            .build()
+            .unwrap();
+        assert_eq!(
+            getter.get(&Key::from_raw(key)).unwrap(),
+            Some(value.clone())
+        );
+
+        let statistics = getter.take_statistics();
+        assert_eq!(statistics.write.seek, 2);
+        assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.write.over_seek_bound, 1);
+        assert_eq!(
+            statistics.write.flow_stats.read_keys,
+            statistics.write.total_op_count()
+        );
+        assert!(
+            statistics.write.flow_stats.read_keys > statistics.write.processed_keys,
+            "MVCC versions skipped by seek/next must be visible to PD flow statistics"
+        );
+
+        let default_key = Key::from_raw(key).append_ts(10.into());
+        assert_eq!(statistics.data.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.data.flow_stats.read_bytes,
+            default_key.len() + value.len()
+        );
+    }
+
+    #[test]
+    fn test_flow_statistics_preserve_lock_and_short_value_cf() {
+        let key = b"short-value";
+        let value = b"value";
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, key, value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+
+        let mut getter = new_point_getter(&mut engine, 20.into());
+        assert_eq!(
+            getter.get(&Key::from_raw(key)).unwrap(),
+            Some(value.to_vec())
+        );
+        let statistics = getter.take_statistics();
+
+        // SI checks the lock CF before looking up the committed version. The
+        // lock miss is still a read, while the short value remains in Write CF.
+        let encoded_key = Key::from_raw(key);
+        assert_eq!(statistics.lock.get, 1);
+        assert_eq!(statistics.lock.flow_stats.read_keys, 1);
+        assert_eq!(statistics.lock.flow_stats.read_bytes, encoded_key.len());
+
+        let write_key = encoded_key.clone().append_ts(20.into());
+        let write_value = engine
+            .snapshot(Default::default())
+            .unwrap()
+            .get_cf(CF_WRITE, &write_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.write.flow_stats.read_bytes,
+            write_key.len() + write_value.len()
+        );
+        assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        assert_eq!(statistics.data.flow_stats.read_bytes, 0);
     }
 
     #[test]
