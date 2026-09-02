@@ -53,8 +53,8 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<Vec<u8>>> {
         match self {
             RawStore::V1(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::V1Ttl(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::V2(inner) => inner.raw_get_key_value(cf, key, stats),
+            RawStore::V1Ttl(inner) => inner.snapshot.get_cf_with_stats(cf, key, stats),
+            RawStore::V2(inner) => inner.snapshot.get_cf_with_stats(cf, key, stats),
         }
     }
 
@@ -361,6 +361,15 @@ mod tests {
 
     use super::RawStore;
 
+    fn encode_raw_value<F: KvFormat>(user_value: &[u8]) -> Vec<u8> {
+        F::encode_raw_value_owned(RawValue {
+            user_value: user_value.to_vec(),
+            // Keep all records visible while exercising the TTL/MVCC decoder.
+            expire_ts: F::IS_TTL_ENABLED.then_some(u64::MAX),
+            is_delete: false,
+        })
+    }
+
     fn put_raw<F: KvFormat>(
         engine: &BTreeEngine,
         user_key: &[u8],
@@ -368,15 +377,41 @@ mod tests {
         user_value: &[u8],
     ) {
         let key = F::encode_raw_key_owned(user_key.to_vec(), ts.map(TimeStamp::from));
-        let value = F::encode_raw_value_owned(RawValue {
-            user_value: user_value.to_vec(),
-            // Keep all records visible while exercising the TTL/MVCC decoder.
-            expire_ts: F::IS_TTL_ENABLED.then_some(u64::MAX),
-            is_delete: false,
-        });
+        let value = encode_raw_value::<F>(user_value);
         engine
             .put(&Context::default(), key, value)
             .expect("put raw test value");
+    }
+
+    fn assert_point_get_flow<F: KvFormat>(ts: Option<u64>) {
+        let mut engine = BTreeEngine::default();
+        let user_key = b"r\0point";
+        let user_value = b"point-value";
+        let encoded_value = encode_raw_value::<F>(user_value);
+        put_raw::<F>(&engine, user_key, ts, user_value);
+
+        let key = F::encode_raw_key(user_key, None);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let store = RawStore::new(snapshot, F::TAG);
+        let mut statistics = Statistics::default();
+        assert_eq!(
+            store
+                .raw_get_key_value(CF_DEFAULT, &key, &mut statistics)
+                .unwrap(),
+            Some(user_value.to_vec())
+        );
+        assert_eq!(statistics.data.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.data.flow_stats.read_bytes,
+            key.len() + encoded_value.len()
+        );
+    }
+
+    #[test]
+    fn test_raw_point_get_flow_statistics() {
+        assert_point_get_flow::<ApiV1>(None);
+        assert_point_get_flow::<ApiV1Ttl>(None);
+        assert_point_get_flow::<ApiV2>(Some(10));
     }
 
     fn run_key_only_scan<F: KvFormat>(reverse: bool) -> (Vec<KvResult<KvPair>>, Statistics) {

@@ -77,19 +77,15 @@ pub fn tls_collect_read_flow(
     statistics: &Statistics,
     buckets: Option<&Arc<BucketMeta>>,
 ) {
-    if !statistics.has_pd_read_flow() {
-        return;
-    }
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        let (write_flow, data_flow) = statistics.pd_read_flows();
         m.local_read_stats.add_flow(
             region_id,
             buckets,
             start,
             end,
-            write_flow,
-            data_flow,
+            &statistics.write.flow_stats,
+            &statistics.data.flow_stats,
             &RegionWriteCfCopDetail::new(
                 statistics.write.next,
                 statistics.write.prev,

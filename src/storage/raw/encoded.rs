@@ -41,18 +41,38 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
         Ok(None)
     }
 
-    pub fn get_key_ttl_cf(
+    fn get_encoded_value_cf(
         &self,
         cf: CfName,
         key: &Key,
         stats: &mut Statistics,
-    ) -> Result<Option<u64>> {
+    ) -> Result<Option<Value>> {
         let value = self.snap.get_cf(cf, key)?;
         stats.record_cf_read(
             cf,
             key.as_encoded().len(),
             value.as_ref().map_or(0, |value| value.len()),
         );
+        Ok(value)
+    }
+
+    pub fn get_cf_with_stats(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<Value>> {
+        let value = self.get_encoded_value_cf(cf, key, stats)?;
+        self.map_value(Ok(value))
+    }
+
+    pub fn get_key_ttl_cf(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<u64>> {
+        let value = self.get_encoded_value_cf(cf, key, stats)?;
         if let Some(v) = value {
             let raw_value = F::decode_raw_value_owned(v)?;
             return match raw_value.expire_ts {
