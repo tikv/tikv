@@ -346,9 +346,13 @@ fn check_db_dir(path: &str) -> Result<()> {
             format!(
                 "RocksDB directory {} cannot be opened safely: {} ({}). Creating a new DB \
              over it would silently discard that data. Recover the store offline first: \
-             back up the directory, then either restore CURRENT from the newest complete \
-             MANIFEST-* (inspect with `tikv-ctl ldb`) or move the directory away to start \
-             a new, empty store",
+             back up the directory, then either restore a verified backup or move the \
+             directory away to start a new, empty store. Do not repoint CURRENT at a \
+             MANIFEST picked by file name: a complete higher-numbered MANIFEST can exist \
+             that CURRENT was never durably switched to, so metadata-level recovery has \
+             to run offline under this store's configured Env (e.g. `tikv-ctl --config \
+             <conf> ldb --db=<path> repair`), which validates the metadata instead of \
+             trusting file numbers",
                 dir.display(),
                 reason,
                 artifacts_msg,
