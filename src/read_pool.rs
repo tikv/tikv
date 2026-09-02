@@ -169,38 +169,41 @@ async fn admission_and_enqueue(
     }
     // After admission (and any sleep), check pool capacity and evict if needed.
     if gauge.get() as usize >= max_tasks {
-        let rejected_group = {
-            let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-            // The name reaches us from the client, so bound it to the
-            // configured groups before it becomes a metric label -- see
-            // `ResourceGroupManager::bounded_group_name`. Invalid UTF-8
-            // cannot name a configured group either, so it collapses the same
-            // way. `group_name()` already reports "default" for the default
-            // group, which is the label `check_busy_threshold` uses for it,
-            // so the two pre-pool counters agree there with no special case.
-            let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
-            match resource_manager.as_deref() {
-                Some(rm) => rm.bounded_group_name(name).to_owned(),
-                None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-            }
+        // Eviction is only available with a resource controller, and normally
+        // succeeds -- so nothing about the rejection is computed until the
+        // request is actually being rejected.
+        let evicted = if resource_ctl.is_some() {
+            remote.try_evict_lowest(estimated_priority)
+        } else {
+            None
         };
-        if let Some(ref _resource_ctl) = resource_ctl {
-            if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
+        match evicted {
+            Some(mut evicted) => {
                 let evicted_prio = priority_from_task_meta(evicted.mut_extras().metadata());
                 running_tasks[evicted_prio as usize].dec();
                 UNIFIED_READ_POOL_EVICTED_TASKS.inc();
                 drop(evicted);
-            } else {
+            }
+            None => {
+                let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
+                // The name reaches us from the client, so bound it to the
+                // configured groups before it becomes a metric label -- see
+                // `ResourceGroupManager::bounded_group_name`. Invalid UTF-8
+                // cannot name a configured group either, so it collapses the
+                // same way. `group_name()` already reports "default" for the
+                // default group, which is the label `check_busy_threshold`
+                // uses for it, so the two pre-pool counters agree there with
+                // no special case.
+                let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
+                let label = match resource_manager.as_deref() {
+                    Some(rm) => rm.bounded_group_name(name),
+                    None => DEFAULT_RESOURCE_GROUP_NAME,
+                };
                 UNIFIED_READ_POOL_FULL_REJECTED
-                    .with_label_values(&[&rejected_group])
+                    .with_label_values(&[label])
                     .inc();
                 return Err(ReadPoolError::UnifiedReadPoolFull);
             }
-        } else {
-            UNIFIED_READ_POOL_FULL_REJECTED
-                .with_label_values(&[&rejected_group])
-                .inc();
-            return Err(ReadPoolError::UnifiedReadPoolFull);
         }
     }
     gauge.inc();
@@ -476,10 +479,14 @@ impl ReadPoolHandle {
         }
     }
 
+    /// `resource_group` is bytes rather than `&str` because most requests
+    /// return at one of the two gates below without ever needing the name:
+    /// a client that does not set `busy_threshold` never gets past the first.
+    /// Validating UTF-8 in the caller spent that work on every request.
     pub fn check_busy_threshold(
         &self,
         busy_threshold: Duration,
-        resource_group: &str,
+        resource_group: &[u8],
     ) -> Result<(), errorpb::ServerIsBusy> {
         if busy_threshold.is_zero() {
             return Ok(());
@@ -494,8 +501,9 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        let group = std::str::from_utf8(resource_group).unwrap_or_default();
         UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
-            .with_label_values(&[self.bounded_group_label(resource_group)])
+            .with_label_values(&[self.bounded_group_label(group)])
             .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,
@@ -2361,15 +2369,15 @@ mod tests {
         // Zero means the client asked for no gate; 1s is above the estimate.
         // Neither is a rejection.
         handle
-            .check_busy_threshold(Duration::ZERO, "noisy")
+            .check_busy_threshold(Duration::ZERO, b"noisy")
             .expect("a zero threshold disables the gate");
         handle
-            .check_busy_threshold(Duration::from_secs(1), "noisy")
+            .check_busy_threshold(Duration::from_secs(1), b"noisy")
             .expect("1s is above the 500ms estimate");
         assert_eq!(counter("noisy"), before);
 
         let err = handle
-            .check_busy_threshold(Duration::from_millis(100), "noisy")
+            .check_busy_threshold(Duration::from_millis(100), b"noisy")
             .expect_err("the estimate is over the threshold");
         assert_eq!(err.estimated_wait_ms, 500);
         assert_eq!(counter("noisy"), before + 1, "rejection must be counted");
@@ -2383,7 +2391,7 @@ mod tests {
         // label of its own, or a caller mints a new series per request.
         let default_before = counter(DEFAULT_RESOURCE_GROUP_NAME);
         handle
-            .check_busy_threshold(Duration::from_millis(100), "../../etc/passwd\n{injected}")
+            .check_busy_threshold(Duration::from_millis(100), b"../../etc/passwd\n{injected}")
             .expect_err("the estimate is over the threshold");
         assert_eq!(
             counter("../../etc/passwd\n{injected}"),
