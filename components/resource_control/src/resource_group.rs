@@ -514,6 +514,11 @@ pub struct ResourceGroupManager {
     // fraction, since the read pool only tests it against zero to drive its
     // thread-count scale-down. Encoded via `f64::to_bits`.
     read_pool_cpu_pressure: AtomicU64,
+    // `Config::request_base_cost_micros`, mirrored out of the config lock.
+    // Read once per request on the gRPC handler path, where taking a shared
+    // RwLock read on every gRPC thread is itself the contention. Refreshed by
+    // `refresh_cached_config`.
+    request_base_cost_micros: AtomicU64,
     // Sliding-window tracker of the unified read pool's actual CPU usage (in
     // µs of CPU time per tick). Its `quiet_baseline` is the floor: the pool
     // should never be scaled below the thread count needed to sustain what it
@@ -604,6 +609,7 @@ impl ResourceGroupManager {
         // 2 buckets per minute (30s each) to match RU_BUCKET_SECS, mirroring
         // the per-group ru_trackers window sizing in `record_ru_consumption`.
         let read_pool_num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
+        let request_base_cost_micros = config.request_base_cost_micros;
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -617,6 +623,7 @@ impl ResourceGroupManager {
             start_secs,
             bg_cpu_at_floor: AtomicBool::new(false),
             read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
+            request_base_cost_micros: AtomicU64::new(request_base_cost_micros),
             read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, read_pool_num_buckets)),
             read_pool_scale_up_allowed: AtomicBool::new(false),
             noisy_groups: RwLock::new(HashSet::new()),
@@ -831,22 +838,49 @@ impl ResourceGroupManager {
     /// Charge `group` the fixed cost of a request arriving, whether or not it
     /// goes on to run. See `Config::request_base_cost_micros`.
     fn charge_request_base_cost(&self, group: &str) {
-        let micros = self.config.value().request_base_cost_micros;
+        let micros = self.request_base_cost_micros.load(Ordering::Relaxed);
         if micros == 0 {
             return;
         }
         self.record_ru_consumption(self.bounded_group_name(group), micros);
     }
 
+    /// Re-read the config values the per-request path keeps cached outside the
+    /// config lock. Called from the config dispatcher so a change applies at
+    /// once, and again each tick so a config written straight through
+    /// `VersionTrack` -- tests, and any future path that bypasses the
+    /// dispatcher -- cannot leave the cache stale.
+    /// The cached arrival cost, for asserting the cache tracks the config.
+    #[cfg(test)]
+    pub fn cached_request_base_cost_micros(&self) -> u64 {
+        self.request_base_cost_micros.load(Ordering::Relaxed)
+    }
+
+    pub fn refresh_cached_config(&self) {
+        self.request_base_cost_micros.store(
+            self.config.value().request_base_cost_micros,
+            Ordering::Relaxed,
+        );
+    }
+
     /// Record `ru` units consumed by `group` into the sliding-window tracker
     /// and consume tokens from the group's rate limiter.
     pub fn record_ru_consumption(&self, group: &str, ru: u64) {
-        let now = RuTracker::now_secs();
-        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
-        let num_buckets = (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
+        // Fast path: a shared shard read, no allocation, no config lock.
+        // `entry()` below takes the shard exclusively even when the key is
+        // already there, and needs an owned key to do it, so on the hot
+        // default group -- one key, every gRPC thread -- it would serialize
+        // what is otherwise a single atomic add.
+        if let Some(entry) = self.ru_trackers.get(group) {
+            entry.lock().unwrap().0.record(ru);
+            return;
+        }
         let entry = self.ru_trackers.entry(group.to_owned()).or_insert_with(|| {
+            // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
+            let num_buckets =
+                (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
             Mutex::new((
-                RuTracker::new(now, num_buckets),
+                RuTracker::new(RuTracker::now_secs(), num_buckets),
                 Arc::new(ResourceLimiter::new(
                     group.to_owned(),
                     f64::INFINITY,
@@ -933,6 +967,7 @@ impl ResourceGroupManager {
     /// than inside either actuator, so it runs exactly once per tick against
     /// one set of measurements, and both actuators act on the same verdict.
     fn online_adjust_resource_quota_at(&self, cpu_score: f64, now: u64) {
+        self.refresh_cached_config();
         // Three bands of the same score. Above the threshold is evidence,
         // below the leeway threshold clears it, and between them the candidacy
         // counter holds.
@@ -4689,5 +4724,77 @@ pub(crate) mod tests {
         // = 4 cores → floor = 4.0.
         let floor = mgr.read_pool_cpu_floor_at(4.0, 30.0, t0 + 150);
         assert_eq!(floor, 4.0);
+    }
+
+    /// RU sitting in the still-open bucket, which is where an arrival charge
+    /// lands before any tick closes the bucket.
+    fn open_bucket(mgr: &ResourceGroupManager, name: &str) -> u64 {
+        mgr.ru_trackers
+            .get(name)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .0
+            .current_bucket
+            .load(Ordering::Relaxed)
+    }
+
+    /// The arrival cost is read from an `AtomicU64` cache rather than the
+    /// config lock, so the cache has to actually track the config.
+    #[test]
+    fn test_request_base_cost_follows_config() {
+        let mut cfg = Config::default();
+        cfg.request_base_cost_micros = 70;
+        let mgr = ResourceGroupManager::new(cfg);
+
+        let mut ctx = ResourceControlContext::default();
+        ctx.resource_group_name = DEFAULT_RESOURCE_GROUP_NAME.to_owned();
+        mgr.consume_penalty(&ctx);
+        assert_eq!(open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME), 70);
+
+        mgr.get_config()
+            .update::<_, _, ()>(|c| {
+                c.request_base_cost_micros = 0;
+                Ok(())
+            })
+            .unwrap();
+        mgr.refresh_cached_config();
+        mgr.consume_penalty(&ctx);
+        assert_eq!(
+            open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME),
+            70,
+            "0 disables the charge"
+        );
+    }
+
+    /// A name that is not a configured group must not open a tracker of its
+    /// own, or every request can mint one.
+    #[test]
+    fn test_request_base_cost_of_unknown_group_lands_on_default() {
+        let mut cfg = Config::default();
+        cfg.request_base_cost_micros = 40;
+        let mgr = ResourceGroupManager::new(cfg);
+
+        let mut ctx = ResourceControlContext::default();
+        ctx.resource_group_name = "never-configured".to_owned();
+        mgr.consume_penalty(&ctx);
+
+        assert!(mgr.ru_trackers.get("never-configured").is_none());
+        assert_eq!(open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME), 40);
+    }
+
+    /// `record_ru_consumption` takes a shared-read fast path when the group is
+    /// already there and falls back to `entry()` only to create one. Both
+    /// paths must accumulate into the same bucket.
+    #[test]
+    fn test_record_ru_consumption_creates_then_reuses_tracker() {
+        let mgr = ResourceGroupManager::default();
+        assert!(mgr.ru_trackers.get("g").is_none());
+
+        mgr.record_ru_consumption("g", 5);
+        assert_eq!(open_bucket(&mgr, "g"), 5);
+
+        mgr.record_ru_consumption("g", 7);
+        assert_eq!(open_bucket(&mgr, "g"), 12);
     }
 }
