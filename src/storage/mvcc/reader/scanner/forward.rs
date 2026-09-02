@@ -1242,7 +1242,11 @@ mod latest_kv_tests {
         let key = b"scan-flow";
         let value = vec![b'x'; 300];
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        for (start_ts, commit_ts) in [(10, 20), (30, 40), (50, 60)] {
+        must_prewrite_put(&mut engine, key, &value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+        for version in 0..SEEK_BOUND + 2 {
+            let start_ts = 30 + version * 20;
+            let commit_ts = start_ts + 10;
             must_prewrite_put(&mut engine, key, &value, key, start_ts);
             must_commit(&mut engine, key, start_ts, commit_ts);
         }
@@ -1258,9 +1262,12 @@ mod latest_kv_tests {
         );
 
         let statistics = scanner.take_statistics();
-        // The scanner visits the two versions newer than the read timestamp
-        // before returning the visible version. Those cursor operations must
-        // be visible even though only one row is returned.
+        // The scanner crosses SEEK_BOUND while skipping newer versions and
+        // falls back from `next` to `seek`. Both kinds of cursor operations
+        // must be visible even though only one row is returned.
+        assert_eq!(statistics.write.seek, 2);
+        assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.write.over_seek_bound, 1);
         assert_eq!(
             statistics.write.flow_stats.read_keys,
             statistics.write.total_op_count()

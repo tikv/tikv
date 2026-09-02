@@ -830,9 +830,12 @@ mod tests {
         must_prewrite_put(&mut engine, key, &value, key, 10);
         must_commit(&mut engine, key, 10, 20);
 
-        // Newer versions force the stale read to move through Write CF before it
+        // Add enough newer versions to cross SEEK_BOUND. The stale read first
+        // advances with `next` and then falls back to a direct `seek` before it
         // reaches the visible version at commit_ts 20.
-        for (start_ts, commit_ts) in [(30, 40), (50, 60)] {
+        for version in 0..SEEK_BOUND + 2 {
+            let start_ts = 30 + version * 20;
+            let commit_ts = start_ts + 10;
             must_prewrite_put(&mut engine, key, &value, key, start_ts);
             must_commit(&mut engine, key, start_ts, commit_ts);
         }
@@ -848,8 +851,9 @@ mod tests {
         );
 
         let statistics = getter.take_statistics();
-        assert_eq!(statistics.write.seek, 1);
-        assert_eq!(statistics.write.next, 2);
+        assert_eq!(statistics.write.seek, 2);
+        assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.write.over_seek_bound, 1);
         assert_eq!(
             statistics.write.flow_stats.read_keys,
             statistics.write.total_op_count()
