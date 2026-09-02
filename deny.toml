@@ -107,6 +107,20 @@ ignore = [
     #
     # TODO: Remove after the legacy clients move off h2 0.3.
     "RUSTSEC-2026-0258",
+    # Ignore RUSTSEC-2026-0275 (legacy azure_core writes the `authorization`
+    # header value to logs). The disclosure is azure_core 0.18's
+    # `policies/transport.rs`, which `log::debug!`s the whole `Request` -- and
+    # `Request`'s `Debug` includes its headers. It emits through the `log` crate
+    # facade, and TiKV installs no `log` logger at all (no `set_boxed_logger`,
+    # `slog_stdlog::init` or `log::set_max_level` anywhere in the tree), so those
+    # records are discarded rather than written anywhere.
+    #
+    # No version resolves it: the fix is azure_core >= 0.22, but azure_storage,
+    # azure_storage_blobs and azure_security_keyvault are all abandoned at
+    # 0.21.0, still inside the affected range, and pin azure_core ^0.18.
+    #
+    # TODO: Remove after migrating to the renamed Azure 1.x crates.
+    "RUSTSEC-2026-0275",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

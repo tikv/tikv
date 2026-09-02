@@ -3385,7 +3385,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Fut: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
+        if let Err(busy_err) = self
+            .read_pool
+            .check_busy_threshold(busy_threshold, metadata.group_name())
+        {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
             return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));

@@ -26,7 +26,7 @@ use tikv_util::{
 
 use crate::{
     metrics::*,
-    resource_group::ResourceGroupManager,
+    resource_group::{LEEWAY_FACTOR, ResourceGroupManager, THROTTLE_INCREASE_FACTOR},
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
     score::{
         ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
@@ -34,22 +34,11 @@ use crate::{
     },
 };
 
-pub const QUOTA_ADJUST_DURATION: Duration = Duration::from_secs(10);
-
 const MICROS_PER_SEC: f64 = 1_000_000.0;
 // the minimal schedule wait duration due to the overhead of queue.
 // We should exclude this cause when calculate the estimated total wait
 // duration.
 const MINIMAL_SCHEDULE_WAIT_SECS: f64 = 0.000_005; //5us
-
-/// Per-tick multiplicative step used to ramp a limit back up once the system is
-/// no longer under pressure: +10% per tick rather than jumping straight to the
-/// ceiling.
-const RAMP_UP_FACTOR: f64 = 1.1;
-/// Fraction of the target below which a limit counts as "not yet recovered",
-/// and fraction of `bg_scale_start` below which the system counts as idle. A
-/// dead zone, so ramp-up doesn't fight the throttle branch tick by tick.
-const IDLE_LEEWAY_RATIO: f64 = 0.9;
 
 /// Bundles the two scale-range thresholds so they can be passed as a single
 /// argument to `background_adjust_resource_quota`.
@@ -467,11 +456,11 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         } else if current_limit_score > target_score {
             // Background limit exceeds its allowed share; reset to target.
             target_score
-        } else if current_limit_score < IDLE_LEEWAY_RATIO * target_score
-            && resource_score < IDLE_LEEWAY_RATIO * bg_scale_start
+        } else if current_limit_score < LEEWAY_FACTOR * target_score
+            && resource_score < LEEWAY_FACTOR * bg_scale_start
         {
             // System is idle; increase limit incrementally from current limit.
-            current_limit_score * RAMP_UP_FACTOR
+            current_limit_score * THROTTLE_INCREASE_FACTOR
         } else {
             target_score
         }
@@ -493,7 +482,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             if current_limit.is_infinite() || current_limit >= ceiling {
                 ceiling
             } else {
-                (current_limit * RAMP_UP_FACTOR).min(ceiling)
+                (current_limit * THROTTLE_INCREASE_FACTOR).min(ceiling)
             }
         } else {
             // Linear interpolation from ceiling to floor as pressure goes from
@@ -1590,25 +1579,33 @@ mod tests {
             5.6 * MICROS_PER_SEC,
         );
 
-        // Pressure drops to 0 (< threshold): one RAMP_UP_FACTOR step from floor.
+        // Pressure = 106 (>= threshold * 1.5 = 105): pressure_ratio clamped to 1.0 →
+        // floor.
+        compaction_pending_bytes_ratio.store(106, Ordering::Relaxed);
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(limiter.get_write_io_limiter().get_rate_limit(), floor);
+
+        // Pressure drops to 0 (< threshold): one THROTTLE_INCREASE_FACTOR step from
+        // floor.
         compaction_pending_bytes_ratio.store(0, Ordering::Relaxed);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let ramp1 = floor * RAMP_UP_FACTOR;
+        let ramp1 = floor * THROTTLE_INCREASE_FACTOR;
         check(limiter.get_write_io_limiter().get_rate_limit(), ramp1);
 
         // Pressure stays at 0: another ramp-up step.
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let ramp2 = ramp1 * RAMP_UP_FACTOR;
+        let ramp2 = ramp1 * THROTTLE_INCREASE_FACTOR;
         check(limiter.get_write_io_limiter().get_rate_limit(), ramp2);
 
         // Keep ramping until we hit ceiling.
         let mut current = ramp2;
-        while current * RAMP_UP_FACTOR < ceiling {
+        while current * THROTTLE_INCREASE_FACTOR < ceiling {
             reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
             worker.adjust_quota();
-            current = (current * RAMP_UP_FACTOR).min(ceiling);
+            current = (current * THROTTLE_INCREASE_FACTOR).min(ceiling);
             check(limiter.get_write_io_limiter().get_rate_limit(), current);
         }
         // One more adjustment should cap at ceiling.
