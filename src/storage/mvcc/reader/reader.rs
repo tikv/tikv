@@ -350,30 +350,40 @@ impl<S: EngineSnapshot> MvccReader<S> {
             Ok(None)
         };
 
-        let mut locks = Vec::with_capacity(limit.min(memory_locks.len()));
+        let mut locks: Vec<(Key, Lock)> = Vec::with_capacity(limit.min(memory_locks.len()));
         let mut memory_iter = memory_locks.into_iter();
         let mut memory_pair = memory_iter.next();
         let mut storage_pair = next_pair_from_storage()?;
         let has_remain = loop {
-            match (memory_pair.as_ref(), storage_pair.as_ref()) {
+            let next_key = match (memory_pair.as_ref(), storage_pair.as_ref()) {
                 (Some((memory_key, _)), Some((storage_key, _))) => {
                     if storage_key <= memory_key {
-                        locks.push(storage_pair.take().unwrap());
+                        let next_key = storage_pair.take().unwrap();
                         storage_pair = next_pair_from_storage()?;
+                        next_key
                     } else {
-                        locks.push(memory_pair.take().unwrap());
+                        let next_key = memory_pair.take().unwrap();
                         memory_pair = memory_iter.next();
+                        next_key
                     }
                 }
                 (Some(_), None) => {
-                    locks.push(memory_pair.take().unwrap());
+                    let next_key = memory_pair.take().unwrap();
                     memory_pair = memory_iter.next();
+                    next_key
                 }
                 (None, Some(_)) => {
-                    locks.push(storage_pair.take().unwrap());
+                    let next_key = storage_pair.take().unwrap();
                     storage_pair = next_pair_from_storage()?;
+                    next_key
                 }
                 (None, None) => break memory_has_remain,
+            };
+            // The same key could exist in both memory and storage when there is ongoing
+            // leader transfer, split or merge on this region. In this case, duplicated
+            // keys should be ignored.
+            if locks.is_empty() || locks.last().unwrap().0 != next_key.0 {
+                locks.push(next_key);
             }
             if limit > 0 && locks.len() >= limit {
                 break memory_pair.is_some() || storage_pair.is_some() || memory_has_remain;
