@@ -10,15 +10,16 @@
 //! - Before writing a file `f`, we will write an intention file
 //!   `f.INTENT.{txn_id}`. Where `txn_id` is an unique ID generated in each
 //!   write.
-//! - Then, it double checks whether there are other intention files. If there
-//!   were, there must be other clients trying lock this file, we will delete
-//!   our intention file and return failure now.
+//! - Then, it cleans up stale intention files and double checks whether there
+//!   are other intention files. If there were, there must be other clients
+//!   trying to lock this file, we will delete our intention file and return
+//!   failure now.
 //!
 //! For now, there isn't internal retry when failed to locking a file. We may
 //! encounter live locks when there are too many clients racing for the same
 //! lock.
 
-use std::io;
+use std::{io, time::Duration};
 
 use chrono::Utc;
 use futures_util::{
@@ -33,6 +34,11 @@ use tikv_util::sys::{
 use uuid::Uuid;
 
 use crate::{ExternalStorage, UnpinReader};
+
+// Intent files should only live between intent write and lock commit. The
+// stale threshold assumes lock contenders have reasonably synchronized clocks.
+const LOCK_INTENT_STALE_DURATION: Duration = Duration::from_secs(60 * 60);
+const LOCK_INTENT_MAX_METADATA_LEN: usize = 16 * 1024;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LockMeta {
@@ -56,6 +62,13 @@ impl LockMeta {
 
     fn to_json(&self) -> io::Result<Vec<u8>> {
         serde_json::ser::to_vec(self).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    }
+
+    fn is_stale_intent(&self, now: &chrono::DateTime<Utc>) -> bool {
+        match now.signed_duration_since(self.locked_at).to_std() {
+            Ok(age) => age >= LOCK_INTENT_STALE_DURATION,
+            Err(_) => false,
+        }
     }
 }
 
@@ -113,6 +126,17 @@ impl ExclusiveWriteTxn for PutRLock {
         LockMeta::new(cx.txn_id(), self.hint.clone()).to_json()
     }
 
+    fn recover_stale_intents<'cx: 'ret, 's: 'ret, 'ret>(
+        &'s self,
+        cx: ExclusiveWriteCtx<'cx>,
+    ) -> LocalBoxFuture<'ret, io::Result<()>> {
+        async move {
+            let write_lock_path = format!("{}.WRIT", self.basic_path);
+            cx.clean_stale_intents(&write_lock_path).await
+        }
+        .boxed_local()
+    }
+
     fn verify<'cx: 'ret, 's: 'ret, 'ret>(
         &'s self,
         cx: ExclusiveWriteCtx<'cx>,
@@ -120,7 +144,8 @@ impl ExclusiveWriteTxn for PutRLock {
         // We need capture `cx` here, or rustc complains that we are returning a future
         // reference to a local variable. (Yes indeed.)
         async move {
-            cx.check_files_of_prefix(&format!("{}.WRIT", self.basic_path), requirements::nothing)
+            let write_lock_path = format!("{}.WRIT", self.basic_path);
+            cx.check_files_of_prefix(&write_lock_path, requirements::nothing)
                 .await
         }
         .boxed_local()
@@ -151,6 +176,13 @@ impl ExclusiveWriteTxn for PutWLock {
 
     fn content(&self, cx: ExclusiveWriteCtx<'_>) -> io::Result<Vec<u8>> {
         LockMeta::new(cx.txn_id(), self.hint.clone()).to_json()
+    }
+
+    fn recover_stale_intents<'cx: 'ret, 's: 'ret, 'ret>(
+        &'s self,
+        cx: ExclusiveWriteCtx<'cx>,
+    ) -> LocalBoxFuture<'ret, io::Result<()>> {
+        async move { cx.clean_stale_lock_intents(&self.basic_path).await }.boxed_local()
     }
 
     fn verify<'cx: 'ret, 's: 'ret, 'ret>(
@@ -254,12 +286,90 @@ impl ExclusiveWriteCtx<'_> {
     pub fn intent_file_name(&self) -> String {
         format!("{}.INTENT.{:032X}", self.file, self.txn_id)
     }
+
+    async fn clean_stale_intents(&self, file: &str) -> io::Result<()> {
+        let intent_prefix = format!("{}.INTENT.", file);
+        let intents = self
+            .storage
+            .iter_prefix(&intent_prefix)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let current_intent = self.intent_file_name();
+        let now = Utc::now();
+        for intent in intents {
+            if intent.key == current_intent {
+                continue;
+            }
+            self.delete_if_stale_intent(&intent.key, &now).await?;
+        }
+        Ok(())
+    }
+
+    async fn clean_stale_lock_intents(&self, lock_prefix: &str) -> io::Result<()> {
+        let write_intent_prefix = format!("{}.WRIT.INTENT.", lock_prefix);
+        let read_lock_prefix = format!("{}.READ.", lock_prefix);
+        let intents = self
+            .storage
+            .iter_prefix(lock_prefix)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let current_intent = self.intent_file_name();
+        let now = Utc::now();
+        for intent in intents {
+            if intent.key == current_intent {
+                continue;
+            }
+            let is_read_intent = intent
+                .key
+                .strip_prefix(&read_lock_prefix)
+                .map_or(false, |suffix| suffix.contains(".INTENT."));
+            if intent.key.starts_with(&write_intent_prefix) || is_read_intent {
+                self.delete_if_stale_intent(&intent.key, &now).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_if_stale_intent(
+        &self,
+        intent_key: &str,
+        now: &chrono::DateTime<Utc>,
+    ) -> io::Result<()> {
+        if self.is_stale_intent(intent_key, now).await {
+            self.storage.delete(intent_key).await?;
+        }
+        Ok(())
+    }
+
+    async fn is_stale_intent(&self, intent_key: &str, now: &chrono::DateTime<Utc>) -> bool {
+        let mut content = vec![];
+        let mut reader = self
+            .storage
+            .read(intent_key)
+            .take((LOCK_INTENT_MAX_METADATA_LEN + 1) as u64);
+        if reader.read_to_end(&mut content).await.is_err() {
+            return false;
+        }
+        if content.len() > LOCK_INTENT_MAX_METADATA_LEN {
+            return false;
+        }
+        match serde_json::from_slice::<LockMeta>(&content) {
+            Ok(meta) => meta.is_stale_intent(now),
+            Err(_) => false,
+        }
+    }
 }
 
 #[allow(async_fn_in_trait)]
 pub trait ExclusiveWriteTxn {
     fn path(&self) -> &str;
     fn content(&self, cx: ExclusiveWriteCtx<'_>) -> io::Result<Vec<u8>>;
+    fn recover_stale_intents<'cx: 'ret, 's: 'ret, 'ret>(
+        &'s self,
+        _cx: ExclusiveWriteCtx<'cx>,
+    ) -> LocalBoxFuture<'ret, io::Result<()>> {
+        ok(()).boxed_local()
+    }
     fn verify<'cx: 'ret, 's: 'ret, 'ret>(
         &'s self,
         _cx: ExclusiveWriteCtx<'cx>,
@@ -313,13 +423,23 @@ impl ExclusiveWriteExt for dyn ExternalStorage {
                 txn_id,
                 storage: self,
             };
-            futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
+            w.recover_stale_intents(cx).await?;
+            w.verify(cx).await?;
+            cx.verify_only_my_intent().await?;
             let target = cx.intent_file_name();
-            self.write(&target, UnpinReader(Box::new(futures::io::empty())), 0)
-                .await?;
+            let intent_content =
+                LockMeta::new(txn_id, format!("intent for {}", w.path())).to_json()?;
+            let intent_content_len = intent_content.len() as _;
+            self.write(
+                &target,
+                UnpinReader(Box::new(futures::io::Cursor::new(intent_content))),
+                intent_content_len,
+            )
+            .await?;
 
             let result = async {
-                futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
+                w.verify(cx).await?;
+                cx.verify_only_my_intent().await?;
                 let content = w.content(cx)?;
                 self.write(
                     w.path(),
@@ -340,10 +460,28 @@ impl ExclusiveWriteExt for dyn ExternalStorage {
 
 #[cfg(test)]
 mod test {
+    use chrono::{Duration, Utc};
+    use futures_util::stream::TryStreamExt;
     use uuid::Uuid;
 
-    use super::LockExt;
-    use crate::{ExternalStorage, LocalStorage};
+    use super::{LOCK_INTENT_MAX_METADATA_LEN, LockExt, LockMeta};
+    use crate::{ExternalStorage, LocalStorage, UnpinReader};
+
+    async fn write_content(storage: &dyn ExternalStorage, key: &str, content: Vec<u8>) {
+        let content_length = content.len() as _;
+        storage
+            .write(
+                key,
+                UnpinReader(Box::new(futures::io::Cursor::new(content))),
+                content_length,
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn write_lock_meta(storage: &dyn ExternalStorage, key: &str, meta: &LockMeta) {
+        write_content(storage, key, meta.to_json().unwrap()).await;
+    }
 
     #[tokio::test]
     async fn test_read_blocks_write() {
@@ -412,5 +550,223 @@ mod test {
         l1.txn_id = Uuid::new_v4();
 
         l1.unlock(ls).await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_recovers_abandoned_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let stale_txn = Uuid::new_v4();
+        let mut stale_meta = LockMeta::new(
+            stale_txn,
+            String::from("abandoned compact-log-backup migration intent"),
+        );
+        stale_meta.locked_at = Utc::now() - Duration::hours(2);
+        let stale_intent = format!("v1/APPEND_LOCK.WRIT.INTENT.{:032X}", stale_txn);
+        write_lock_meta(storage, &stale_intent, &stale_meta).await;
+
+        let lock = storage
+            .lock_for_write(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup writing a later migration"),
+            )
+            .await
+            .unwrap();
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.WRIT.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(remaining_intents.is_empty(), "{remaining_intents:?}");
+
+        lock.unlock(storage).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_lock_recovers_abandoned_write_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let stale_txn = Uuid::new_v4();
+        let mut stale_meta = LockMeta::new(stale_txn, String::from("abandoned write intent"));
+        stale_meta.locked_at = Utc::now() - Duration::hours(2);
+        let stale_intent = format!("v1/APPEND_LOCK.WRIT.INTENT.{:032X}", stale_txn);
+        write_lock_meta(storage, &stale_intent, &stale_meta).await;
+
+        let lock = storage
+            .lock_for_read(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup reading after stale write intent"),
+            )
+            .await
+            .unwrap();
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.WRIT.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(remaining_intents.is_empty(), "{remaining_intents:?}");
+
+        lock.unlock(storage).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_recovers_abandoned_read_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let stale_txn = Uuid::new_v4();
+        let mut stale_meta = LockMeta::new(stale_txn, String::from("abandoned read intent"));
+        stale_meta.locked_at = Utc::now() - Duration::hours(2);
+        let stale_intent = format!(
+            "v1/APPEND_LOCK.READ.0000000000000001.INTENT.{:032X}",
+            stale_txn
+        );
+        write_lock_meta(storage, &stale_intent, &stale_meta).await;
+
+        let lock = storage
+            .lock_for_write(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup writing after stale read intent"),
+            )
+            .await
+            .unwrap();
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.READ.0000000000000001.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(remaining_intents.is_empty(), "{remaining_intents:?}");
+
+        lock.unlock(storage).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_keeps_fresh_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let active_txn = Uuid::new_v4();
+        let active_intent = format!("v1/APPEND_LOCK.WRIT.INTENT.{:032X}", active_txn);
+        let active_meta = LockMeta::new(active_txn, String::from("active write intent"));
+        write_lock_meta(storage, &active_intent, &active_meta).await;
+
+        let err = storage
+            .lock_for_write(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup racing with active intent"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.WRIT.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(remaining_intents.len(), 1, "{remaining_intents:?}");
+        assert_eq!(remaining_intents[0].key, active_intent);
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_keeps_fresh_read_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let active_txn = Uuid::new_v4();
+        let active_intent = format!(
+            "v1/APPEND_LOCK.READ.0000000000000001.INTENT.{:032X}",
+            active_txn
+        );
+        let active_meta = LockMeta::new(active_txn, String::from("active read intent"));
+        write_lock_meta(storage, &active_intent, &active_meta).await;
+
+        let err = storage
+            .lock_for_write(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup racing with active read intent"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.READ.0000000000000001.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(remaining_intents.len(), 1, "{remaining_intents:?}");
+        assert_eq!(remaining_intents[0].key, active_intent);
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_keeps_read_lock_when_path_contains_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let lock_path = "v1/APPEND_LOCK.INTENT.segment";
+        let read_lock = format!("{lock_path}.READ.0000000000000001");
+        let stale_txn = Uuid::new_v4();
+        let mut stale_meta = LockMeta::new(stale_txn, String::from("old read lock"));
+        stale_meta.locked_at = Utc::now() - Duration::hours(2);
+        write_lock_meta(storage, &read_lock, &stale_meta).await;
+
+        let err = storage
+            .lock_for_write(lock_path, String::from("write lock should remain blocked"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let remaining_read_locks = storage
+            .iter_prefix(&format!("{lock_path}.READ."))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(remaining_read_locks.len(), 1, "{remaining_read_locks:?}");
+        assert_eq!(remaining_read_locks[0].key, read_lock);
+    }
+
+    #[tokio::test]
+    async fn test_write_lock_keeps_oversized_intent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let local = LocalStorage::new(temp_dir.path()).unwrap();
+        let storage = &local as &dyn ExternalStorage;
+
+        let intent_txn = Uuid::new_v4();
+        let intent = format!("v1/APPEND_LOCK.WRIT.INTENT.{:032X}", intent_txn);
+        write_content(
+            storage,
+            &intent,
+            vec![b'x'; LOCK_INTENT_MAX_METADATA_LEN + 1],
+        )
+        .await;
+
+        let err = storage
+            .lock_for_write(
+                "v1/APPEND_LOCK",
+                String::from("compact-log-backup blocked by oversized intent"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let remaining_intents = storage
+            .iter_prefix("v1/APPEND_LOCK.WRIT.INTENT.")
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(remaining_intents.len(), 1, "{remaining_intents:?}");
+        assert_eq!(remaining_intents[0].key, intent);
     }
 }
