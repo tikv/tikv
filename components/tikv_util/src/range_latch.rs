@@ -102,9 +102,6 @@ impl RangeLatch {
 
                 // Now acquire the latch after releasing the write guard
                 let mutex_guard = mutex.lock().unwrap();
-                // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
-                // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
-                // Then we can make sure the mutex guard doesn't point to released memory.
                 // Safety: `transmute` just change the lifetime, do not change
                 // the type.
                 // `_mutex_guard` points to the `Mutex<()>`
