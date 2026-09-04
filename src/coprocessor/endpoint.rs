@@ -18,6 +18,7 @@ use futures::{
     channel::{mpsc, oneshot},
     future::{BoxFuture, Either},
     prelude::*,
+    stream::BoxStream,
 };
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
@@ -48,7 +49,7 @@ use tokio::sync::Semaphore;
 use super::config_manager::CopConfigManager;
 use crate::{
     coprocessor::{
-        cache::CachedRequestHandler, interceptors::*, metrics::*,
+        batch::*, cache::CachedRequestHandler, interceptors::*, metrics::*,
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
     read_pool::ReadPoolHandle,
@@ -66,6 +67,13 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+
+#[derive(Clone, Copy)]
+enum UnaryOutputMode {
+    Materialize,
+    PreserveMergeable,
+}
+
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
@@ -122,6 +130,19 @@ impl<Snap> ParseCopRequestResult<Snap> {
             semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }
+    }
+}
+
+/// Maps a request type to its heavy-task admission lane before the payload is
+/// decoded. Analyze requests (every variant) are throttled by the
+/// background-limited semaphore; all other types contend on the shared one.
+/// Request parsing and the batch-merge finalizer's parse-failure fallback must
+/// agree on this mapping.
+fn semaphore_group_for_req_tp(tp: i64) -> SemaphoreGroup {
+    if tp == REQ_TYPE_ANALYZE {
+        SemaphoreGroup::BackgroundLimited
+    } else {
+        SemaphoreGroup::Shared
     }
 }
 
@@ -253,7 +274,7 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
-        let semaphore_group: SemaphoreGroup;
+        let semaphore_group = semaphore_group_for_req_tp(req.get_tp());
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -276,7 +297,6 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::index
                 };
-                semaphore_group = SemaphoreGroup::Shared;
 
                 req_ctx = ReqContext::new(
                     context,
@@ -356,17 +376,10 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
-                (req_tag, semaphore_group) = match analyze.get_tp() {
-                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
-                        (ReqTag::analyze_index, SemaphoreGroup::BackgroundLimited)
-                    }
-                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => {
-                        (ReqTag::analyze_table, SemaphoreGroup::BackgroundLimited)
-                    }
-                    AnalyzeType::TypeFullSampling => (
-                        ReqTag::analyze_full_sampling,
-                        SemaphoreGroup::BackgroundLimited,
-                    ),
+                req_tag = match analyze.get_tp() {
+                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
+                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
+                    AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
                     AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
                 req_ctx = ReqContext::new(
@@ -414,7 +427,6 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::checksum_index
                 };
-                semaphore_group = SemaphoreGroup::Shared;
                 req_ctx = ReqContext::new(
                     context,
                     ranges,
@@ -530,11 +542,16 @@ impl<E: Engine> Endpoint<E> {
     /// snapshot and the given `handler_builder`. Finally, it calls the unary
     /// request interface of the `RequestHandler` to process the request and
     /// produce a result.
+    ///
+    /// `Materialize` serializes a mergeable output inside the request's
+    /// deadline, tracking, concurrency, and resource protections.
+    /// `PreserveMergeable` defers serialization to the batch finalizer.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        output_mode: UnaryOutputMode,
     ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
@@ -588,18 +605,15 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = handler.handle_request();
         let process_future = async move {
             let output = handle_request_future.await?;
-            match output.into_response() {
-                Ok(response) => Ok(HandlerOutput {
-                    response,
-                    state: HandlerOutputState::Ready,
-                }),
-                Err(ResponseMaterializationFailure {
-                    error,
-                    partial_response,
-                }) => {
-                    drop(partial_response);
-                    Err(error)
-                }
+            match output_mode {
+                UnaryOutputMode::Materialize => match output.into_response() {
+                    Ok(response) => Ok(HandlerOutput {
+                        response,
+                        state: HandlerOutputState::Ready,
+                    }),
+                    Err(ResponseMaterializationFailure { error, .. }) => Err(error),
+                },
+                UnaryOutputMode::PreserveMergeable => Ok(output),
             }
         };
         let process_future = check_deadline(process_future, deadline);
@@ -626,12 +640,18 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let mut output = match result {
+        let mut resp: HandlerOutput = match result {
             Ok(output) => {
-                record_coprocessor_response_size(
-                    output.response.get_data().len() as u64,
-                    get_tls_tracker_token(),
-                );
+                // On the merge path nothing is recorded here: even a ready
+                // output's data is accounted only when the batched response
+                // is committed, so bytes are neither charged twice nor
+                // charged for a response that is never returned.
+                if matches!(output_mode, UnaryOutputMode::Materialize) {
+                    record_coprocessor_response_size(
+                        output.response.get_data().len() as u64,
+                        get_tls_tracker_token(),
+                    );
+                }
                 output
             }
             Err(e) => {
@@ -647,17 +667,18 @@ impl<E: Engine> Endpoint<E> {
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
-        output.response.set_exec_details(exec_details);
-        output.response.set_exec_details_v2(exec_details_v2);
-        output.response.set_latest_buckets_version(buckets_version);
-        Ok(output)
+        resp.response.set_exec_details(exec_details);
+        resp.response.set_exec_details_v2(exec_details_v2);
+        resp.response.set_latest_buckets_version(buckets_version);
+        Ok(resp)
     }
 
-    /// Schedules a unary request on the read pool and returns its handler
-    /// output.
+    /// Schedules a unary request on the read pool with the requested output
+    /// materialization policy.
     fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
+        output_mode: UnaryOutputMode,
     ) -> impl Future<Output = Result<HandlerOutput>> {
         let ParseCopRequestResult {
             req_tag,
@@ -701,6 +722,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore_group,
             tracker,
             handler_builder,
+            output_mode,
         )
         .in_resource_metering_tag(resource_tag)
         .map(move |res| {
@@ -720,19 +742,19 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    /// Handles a unary request whose response is materialized in its read pool
-    /// task.
+    /// Test adapter for callers that require a materialized response.
+    #[cfg(test)]
     fn handle_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<TracedResponse>> {
-        let future = self.schedule_unary_request(r);
+        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize);
         async move {
             let HandlerOutput { response, state } = future.await?;
             match state {
                 HandlerOutputState::Ready => Ok(response),
                 HandlerOutputState::Mergeable(_) => {
-                    unreachable!("unary response must be materialized in the read pool")
+                    unreachable!("materialize mode must return a ready response")
                 }
             }
         }
@@ -768,55 +790,147 @@ impl<E: Engine> Endpoint<E> {
             return Either::Left(async move { resp.into() });
         }
 
-        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
+        let has_batch_tasks = !req.get_tasks().is_empty();
+        // Result merging and task scheduling are independent policies. Merging
+        // controls output materialization; serial execution controls how the
+        // top task and batched child tasks are polled.
+        let merge_batch_tasks = req.get_allow_batch_task_data_merge() && has_batch_tasks;
+        let output_mode = if merge_batch_tasks {
+            UnaryOutputMode::PreserveMergeable
+        } else {
+            UnaryOutputMode::Materialize
+        };
+        let execute_batch_tasks_serially =
+            req.get_execute_batch_tasks_serially() && has_batch_tasks;
+        // Serial collection and result merging bound their waits by the top
+        // task's deadline. The fallback starts before parsing so a failure
+        // cannot reset the timeout.
+        let fallback_deadline =
+            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
+        let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
+        // Preselect the admission lane so a parse failure still runs batch
+        // finalization under the right semaphore; parse success overwrites it.
+        let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
+        // Boxed so only batched requests carry the per-task machinery.
+        let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
+            has_batch_tasks.then(|| {
+                self.process_batch_tasks(&mut req, &peer, output_mode, execute_batch_tasks_serially)
+                    .boxed()
+            });
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
+        let mut top_task_deadline = None;
+        // A parse failure creates no top read-pool ID. The finalizer then uses a
+        // random ID below so unrelated failures do not share Yatp runtime accounting.
+        let mut top_task_id = None;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| self.handle_unary_request(r));
+            .map(|r| {
+                top_task_deadline = Some(r.req_ctx.deadline);
+                top_task_id = Some(r.req_ctx.build_task_id());
+                top_task_semaphore_group = r.semaphore_group;
+                self.schedule_unary_request(r, output_mode)
+            });
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
+        });
+        let batch_deadline = top_task_deadline.unwrap_or(fallback_deadline);
+        let batch_finalizer = batch_finalizer_context.map(|request_context| {
+            self.build_batch_merge_finalizer(
+                request_context,
+                batch_deadline,
+                top_task_id.unwrap_or_else(rand::random),
+                top_task_semaphore_group,
+            )
         });
         let fut = async move {
             // Moving the guard into the future ties removal to the future's
             // lifetime, so cancellation cleans up as well as completion.
             let _tracker_guard = tracker_guard;
-            let res = match result_of_future {
-                Err(e) => {
-                    let mut res = make_error_response(e);
-                    let batch_res = result_of_batch.await;
-                    res.set_batch_responses(batch_res.into());
-                    res.into()
-                }
-                Ok(handle_fut) => {
-                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_res.into());
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        let exec_detail_v2 = res.mut_exec_details_v2();
-                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                    });
-                    res
+            let collect_top_details = result_of_future.is_ok();
+            let top_output = async move {
+                match result_of_future {
+                    Err(e) => HandlerOutput::ready(make_error_response(e)),
+                    Ok(handle_fut) => handle_fut
+                        .await
+                        .unwrap_or_else(|e| HandlerOutput::ready(make_error_response(e))),
                 }
             };
+            let (output, batch_outputs) = match batch_outputs {
+                None => (top_output.await, Vec::new()),
+                // Boxed: the collector holds the top future and the stream
+                // twice over in its layout.
+                Some(batch_outputs) => {
+                    let collect = if execute_batch_tasks_serially {
+                        collect_batch_task_outputs_sequentially(
+                            top_output,
+                            batch_outputs,
+                            batch_deadline,
+                        )
+                        .boxed()
+                    } else {
+                        collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
+                    };
+                    collect.await
+                }
+            };
+            let mut res = match batch_finalizer {
+                // Boxed like the collector future above.
+                Some(finalizer) => {
+                    finalizer
+                        .finalize(output, batch_outputs, tracker)
+                        .boxed()
+                        .await
+                }
+                // No merging can happen: every outcome was serialized inside
+                // its own read pool task (see `handle_unary_request_impl`),
+                // so the ready responses only need to be attached. A
+                // leftover mergeable result is still resolved defensively.
+                None => {
+                    debug_assert!(matches!(&output.state, HandlerOutputState::Ready));
+                    let batch_responses = batch_outputs
+                        .into_iter()
+                        .map(BatchTaskOutput::into_response)
+                        .collect();
+                    let response = match output.into_response() {
+                        Ok(response) => response,
+                        Err(ResponseMaterializationFailure {
+                            error,
+                            partial_response,
+                        }) => (*partial_response).map(|_| make_error_response(error)),
+                    };
+                    attach_batch_responses(response, batch_responses)
+                }
+            };
+            if collect_top_details {
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    let exec_detail_v2 = res.mut_exec_details_v2();
+                    tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                    tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                });
+            }
             res
         };
         Either::Right(fut)
     }
 
-    // process_batch_tasks process the input batched coprocessor tasks if any,
-    // prepare all the requests and schedule them into the read pool, then
-    // collect all the responses and convert them into the `StoreBatchResponse`
-    // type.
-    pub fn process_batch_tasks(
+    // All batched coprocessor tasks are prepared up front. Serial execution
+    // streams them lazily so `ReadPoolHandle::spawn` enqueues only one child at
+    // a time; otherwise `FuturesOrdered` preserves the legacy concurrent
+    // scheduling behavior. Output materialization is controlled independently.
+    fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+        output_mode: UnaryOutputMode,
+        execute_serially: bool,
+    ) -> impl Stream<Item = BatchTaskOutput> {
+        // Without merging, every task serializes its result inside its own
+        // read pool task; with it, results stay unserialized for
+        // `merge_batch_task_responses`.
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -849,44 +963,72 @@ impl<E: Engine> Endpoint<E> {
                         GLOBAL_TRACKERS.remove(cur_tracker);
                     });
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.handle_unary_request(r);
+                    let fut = self.schedule_unary_request(r, output_mode);
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
                         let res = fut.await;
-                        match res {
-                            Ok(mut resp) => {
-                                response.set_data(resp.take_data());
-                                if let Some(err) = resp.region_error.take() {
-                                    response.set_region_error(err);
-                                }
-                                if let Some(lock_info) = resp.locked.take() {
-                                    response.set_locked(lock_info);
-                                }
-                                response.set_other_error(resp.take_other_error());
-                                // keep the exec details already generated.
-                                response.set_exec_details_v2(resp.take_exec_details_v2());
+                        let mut mergeable_result = None;
+                        let response = match res {
+                            Ok(output) => {
+                                let HandlerOutput {
+                                    response: traced_response,
+                                    state,
+                                } = output;
+                                mergeable_result = match state {
+                                    HandlerOutputState::Ready => None,
+                                    HandlerOutputState::Mergeable(result) => Some(result),
+                                };
+                                // Carry the trace guard along so the moved data
+                                // stays accounted until attachment.
+                                let mut response = traced_response.map(|mut resp| {
+                                    response.set_data(resp.take_data());
+                                    if let Some(err) = resp.region_error.take() {
+                                        response.set_region_error(err);
+                                    }
+                                    if let Some(lock_info) = resp.locked.take() {
+                                        response.set_locked(lock_info);
+                                    }
+                                    response.set_other_error(resp.take_other_error());
+                                    // Keep the execution details the handler
+                                    // collected; the client reads this task's
+                                    // stats from them.
+                                    response.set_exec_details_v2(resp.take_exec_details_v2());
+                                    response
+                                });
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
                                     );
                                 });
+                                response
                             }
                             Err(e) => {
                                 make_error_batch_response(&mut response, e);
+                                response.into()
                             }
+                        };
+                        BatchTaskOutput {
+                            response,
+                            mergeable_result,
                         }
-                        response
                     };
 
                     batch_futs.push(future::Either::Left(fut));
                 }
                 Err(e) => batch_futs.push(future::Either::Right(async move {
                     make_error_batch_response(&mut response, e);
-                    response
+                    BatchTaskOutput {
+                        response: response.into(),
+                        mergeable_result: None,
+                    }
                 })),
             }
         }
-        stream::FuturesOrdered::from_iter(batch_futs).collect()
+        if execute_serially {
+            Either::Left(stream::iter(batch_futs).then(|task| task))
+        } else {
+            Either::Right(stream::FuturesOrdered::from_iter(batch_futs))
+        }
     }
 
     /// The real implementation of handling a stream request.
@@ -1115,6 +1257,34 @@ impl<E: Engine> Endpoint<E> {
             .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
             .boxed())
     }
+
+    /// Builds a batch merge finalizer using the top request's execution
+    /// context and semaphore group.
+    fn build_batch_merge_finalizer(
+        &self,
+        ctx: kvrpcpb::Context,
+        deadline: Deadline,
+        task_id: u64,
+        semaphore_group: SemaphoreGroup,
+    ) -> BatchMergeFinalizer {
+        BatchMergeFinalizer {
+            read_pool: self.read_pool.clone(),
+            semaphore: self.request_semaphore(semaphore_group),
+            merge_execution_tag: self.resource_tag_factory.new_tag(&ctx),
+            returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
+            priority: ctx.get_priority(),
+            metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
+            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
+                r.get_resource_limiter(
+                    ctx.get_resource_control_context().get_resource_group_name(),
+                    ctx.get_request_source(),
+                    ctx.get_resource_control_context().get_override_priority(),
+                )
+            }),
+            deadline,
+            task_id,
+        }
+    }
 }
 
 fn check_memory_locks_for_ranges(
@@ -1213,7 +1383,7 @@ macro_rules! make_error_response_common {
     }};
 }
 
-fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
+pub(super) fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
     debug!(
         "batch cop task error-response";
         "err" => %e
@@ -1222,7 +1392,7 @@ fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: 
     make_error_response_common!(batch_resp, tag, e);
 }
 
-fn make_error_response(e: Error) -> coppb::Response {
+pub(super) fn make_error_response(e: Error) -> coppb::Response {
     debug!(
         "error-response";
         "err" => %e
@@ -1408,14 +1578,14 @@ mod tests {
     };
     use tidb_query_common::storage::Storage;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
-    use tikv_util::yatp_pool::CleanupMethod;
+    use tikv_util::{deadline::Deadline, yatp_pool::CleanupMethod};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
     use super::*;
     use crate::{
         config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
-        coprocessor::readpool_impl::build_read_pool_for_test,
+        coprocessor::{batch::ConcatMergeable, readpool_impl::build_read_pool_for_test},
         read_pool::{ReadPool, build_yatp_read_pool},
         storage::{FlowStatsReporter, Store, TestEngineBuilder, kv::RocksEngine},
     };
@@ -1515,6 +1685,30 @@ mod tests {
             }
 
             self.result.take().unwrap().map(HandlerOutput::ready)
+        }
+    }
+
+    /// A unary handler whose result can be preserved for batch merging.
+    struct MergeableFixture {
+        values: Vec<u8>,
+        fail_serialize: bool,
+    }
+
+    #[async_trait]
+    impl RequestHandler for MergeableFixture {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
+            let values = std::mem::take(&mut self.values);
+            let result = if self.fail_serialize {
+                ConcatMergeable::failing(values)
+            } else {
+                ConcatMergeable::new(values)
+            };
+            let trace = tikv_alloc::mem_trace!(endpoint_mergeable_fixture);
+            Ok(HandlerOutput::mergeable_with_trace(
+                coppb::Response::default(),
+                Box::new(result),
+                &trace,
+            ))
         }
     }
 
@@ -1629,6 +1823,24 @@ mod tests {
         let cm = ConcurrencyManager::new_for_test(1.into());
         let endpoint = Endpoint::<RocksEngine>::new(
             &config,
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        (endpoint, read_pool)
+    }
+
+    fn build_future_pool_copr() -> (Endpoint<RocksEngine>, ReadPool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let endpoint = Endpoint::<RocksEngine>::new(
+            &Config::default(),
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
@@ -1990,6 +2202,40 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_finalizer_parse_error_uses_analyze_semaphore() {
+        use tikv_util::config::ReadableDuration;
+
+        let config = Config {
+            end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(1),
+            end_point_request_max_handle_duration: Some(ReadableDuration(Duration::from_secs(1))),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+        let shared = copr.shared_semaphore.as_ref().unwrap().clone();
+        let shared_permit = block_on(shared.acquire_owned()).unwrap();
+
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(vec![0x0a]); // Truncated protobuf field.
+        req.set_allow_batch_task_data_merge(true);
+        let mut child = coppb::StoreBatchTask::default();
+        child.set_task_id(1);
+        req.mut_tasks().push(child);
+
+        let response = block_on(copr.parse_and_handle_unary_request(req, None));
+        drop(shared_permit);
+
+        assert!(!response.get_other_error().is_empty());
+        assert_eq!(response.get_batch_responses().len(), 1);
+        assert!(
+            !response.get_batch_responses()[0]
+                .get_other_error()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn test_background_limited_requests_progress_when_shared_semaphore_is_full() {
         let config = Config {
             end_point_max_concurrency: 4,
@@ -2036,6 +2282,7 @@ mod tests {
                     slow_log_threshold,
                 )),
                 background_handler,
+                UnaryOutputMode::Materialize,
             );
             background_tx.send(block_on(background_future)).unwrap();
         });
@@ -2062,6 +2309,7 @@ mod tests {
                     slow_log_threshold,
                 )),
                 shared_handler,
+                UnaryOutputMode::Materialize,
             );
             shared_tx.send(block_on(shared_future)).unwrap();
         });
@@ -2134,6 +2382,111 @@ mod tests {
             }
         });
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn test_handle_unary_request_materialization_modes() {
+        let (copr, _read_pool) = build_future_pool_copr();
+
+        // Ordinary unary requests materialize mergeable results in their read
+        // pool task.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![3, 1, 2],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+
+        // The batch-merge path preserves the unserialized result.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+        ))
+        .unwrap();
+        assert!(matches!(&output.state, HandlerOutputState::Mergeable(_)));
+
+        // Materialization failures follow the ordinary unary error path.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: true,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_merge_path_ready_bytes_committed_once() {
+        let (copr, _read_pool) = build_future_pool_copr();
+        let context = kvrpcpb::Context::default();
+        let previous_tracker = get_tls_tracker_token();
+        let token = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::Unknown,
+            0,
+        )));
+        set_tls_tracker_token(token);
+        let tracked_response_bytes = || {
+            let mut response_bytes = 0;
+            GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+                response_bytes = tracker.metrics.coprocessor_response_bytes;
+            });
+            response_bytes
+        };
+
+        let mut ready = coppb::Response::default();
+        ready.set_data(vec![1, 2, 3]);
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(ready)).into_boxed()));
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+        ))
+        .unwrap();
+
+        // Preserve mode defers accounting even when the handler returns ready data.
+        assert_eq!(tracked_response_bytes(), 0);
+        let finalizer = copr.build_batch_merge_finalizer(
+            context,
+            Deadline::from_now(Duration::from_secs(60)),
+            0,
+            SemaphoreGroup::Shared,
+        );
+        let batch_output = BatchTaskOutput {
+            response: coppb::StoreBatchTaskResponse::default().into(),
+            mergeable_result: Some(Box::new(ConcatMergeable::new(vec![9]))),
+        };
+        let resp = block_on(finalizer.finalize(output, vec![batch_output], token));
+        let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
+        set_tls_tracker_token(previous_tracker);
+
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        assert_eq!(resp.get_batch_responses()[0].get_data(), &[9]);
+        assert_eq!(tracker.metrics.coprocessor_response_bytes, 4);
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_coprocessor_response_bytes(),
+            4
+        );
     }
 
     #[test]
