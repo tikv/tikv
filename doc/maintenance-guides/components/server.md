@@ -101,6 +101,9 @@ High-risk config contracts:
   dependents drain.
 - Config validation must remain backward-compatible with persisted data layout
   and engine selection.
+- Forwarded third-party logs must not expose credentials. TiKV filters
+  Debug/Trace records from the affected legacy `azure_core` transport until
+  an SDK upgrade, patch, or logging fix replaces that temporary mitigation.
 - Service pause/resume must stay consistent with the small control plane in
   `components/service`.
 
@@ -147,6 +150,8 @@ Start triage with:
   reverse?
 - Does it alter graceful shutdown semantics?
 - Does it add expensive initialization to the critical startup path?
+- Does a change to third-party log forwarding expose credentials or remove
+  diagnostics needed for failure triage?
 
 ## Observability And Tests
 
