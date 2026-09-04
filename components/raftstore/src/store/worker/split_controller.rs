@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ordering, min},
-    collections::{BinaryHeap, HashSet},
-    slice::{Iter, IterMut},
+    cmp::Ordering,
+    collections::{BinaryHeap, HashSet, VecDeque},
+    convert::TryFrom,
+    slice::Iter,
     sync::{Arc, mpsc::Receiver},
     time::{Duration, SystemTime},
 };
@@ -26,7 +27,6 @@ use tikv_util::{
         GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
     },
     time::Instant,
-    warn,
 };
 
 use crate::store::{
@@ -34,11 +34,10 @@ use crate::store::{
     util::build_key_range,
     worker::{
         FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
-        split_config::get_sample_num,
+        split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
     },
 };
 
-const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
 
 // It will return prefix sum of the given iter,
@@ -48,30 +47,16 @@ fn prefix_sum<F, T>(iter: Iter<'_, T>, read: F) -> Vec<usize>
 where
     F: Fn(&T) -> usize,
 {
-    let mut sum = 0;
+    let mut sum: usize = 0;
     iter.map(|item| {
-        sum += read(item);
+        sum = sum.saturating_add(read(item));
         sum
     })
     .collect()
 }
 
-#[inline(always)]
-fn prefix_sum_mut<F, T>(iter: IterMut<'_, T>, read: F) -> Vec<usize>
-where
-    F: Fn(&mut T) -> usize,
-{
-    let mut sum = 0;
-    iter.map(|item| {
-        sum += read(item);
-        sum
-    })
-    .collect()
-}
-
-// This function uses the distributed/parallel reservoir sampling algorithm.
-// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple
-// `key_ranges_provider` with the same possibility.
+// It samples min(sample_num, all_key_ranges_num) key ranges uniformly without
+// replacement from multiple providers while keeping only the output reservoir.
 fn sample<F, T>(
     sample_num: usize,
     mut key_ranges_providers: Vec<T>,
@@ -80,64 +65,37 @@ fn sample<F, T>(
 where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
-    let mut sampled_key_ranges = vec![];
-    // Retain the non-empty key ranges.
-    // `key_ranges_provider` may return an empty key ranges vector, which will cause
-    // the later sampling to fall into a dead loop. So we need to filter it out
-    // here.
-    key_ranges_providers
-        .retain_mut(|key_ranges_provider| !key_ranges_getter(key_ranges_provider).is_empty());
-    if key_ranges_providers.is_empty() {
-        return sampled_key_ranges;
+    if sample_num == 0 {
+        return Vec::new();
     }
-    let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges_provider| {
-        key_ranges_getter(key_ranges_provider).len()
-    });
-    // The last sum is the number of all the key ranges.
-    let all_key_ranges_num = *prefix_sum.last().unwrap();
-    if all_key_ranges_num == 0 {
-        return sampled_key_ranges;
-    }
-    // If the number of key ranges is less than the sample number,
-    // we will return them directly without sampling.
-    if all_key_ranges_num <= sample_num {
-        key_ranges_providers
-            .iter_mut()
-            .for_each(|key_ranges_provider| {
-                sampled_key_ranges.append(key_ranges_getter(key_ranges_provider));
-            });
-        return sampled_key_ranges;
-    }
-    // To prevent the sampling from falling into a dead loop.
-    let mut sample_loop_count = min(
-        sample_num.saturating_mul(100),
-        DEFAULT_MAX_SAMPLE_LOOP_COUNT,
-    );
+    let mut sampled_key_ranges = Vec::with_capacity(sample_num.min(DEFAULT_SAMPLE_NUM));
+    let mut seen = 0_u64;
     let mut rng = rand::thread_rng();
-    // If the number of key ranges is greater than the sample number,
-    // we will randomly sample the key ranges.
-    while sampled_key_ranges.len() < sample_num && sample_loop_count > 0 {
-        sample_loop_count -= 1;
-        // Generate a random number in [1, all_key_ranges_num].
-        // Starting from 1 is to achieve equal probability.
-        // For example, for a `prefix_sum` like [1, 2, 3, 4],
-        // if we generate a random number in [0, 4], the probability of choosing the
-        // first index is 0.4 rather than 0.25 due to that 0 and 1 will both
-        // make `binary_search` get the same result.
-        let i = prefix_sum
-            .binary_search(&rng.gen_range(1..=all_key_ranges_num))
-            .unwrap_or_else(|i| i);
-        let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
-        if !key_ranges.is_empty() {
-            let j = rng.gen_range(0..key_ranges.len());
-            sampled_key_ranges.push(key_ranges.remove(j)); // Sampling without replacement
+    let sample_num_u64 = u64::try_from(sample_num).unwrap_or(u64::MAX);
+
+    for key_ranges_provider in &mut key_ranges_providers {
+        // Taking each provider's vector lets the consumed ranges be released as
+        // soon as they have been considered instead of building an aggregate
+        // vector proportional to the request volume.
+        for key_range in std::mem::take(key_ranges_getter(key_ranges_provider)) {
+            if sampled_key_ranges.len() < sample_num {
+                sampled_key_ranges.push(key_range);
+            } else {
+                // `seen` is the zero-based index of the current observation.
+                // Draw from [0, seen] to keep Algorithm R uniform.
+                let index = if seen == u64::MAX {
+                    rng.gen::<u64>()
+                } else {
+                    rng.gen_range(0..=seen)
+                };
+                if index < sample_num_u64 {
+                    // An index below sample_num is representable as usize on
+                    // every supported target because sample_num is a usize.
+                    sampled_key_ranges[usize::try_from(index).unwrap()] = key_range;
+                }
+            }
+            seen = seen.saturating_add(1);
         }
-    }
-    if sample_loop_count == 0 {
-        warn!("the number of sampled key ranges could be less than the sample_num, the sampling may fall into a dead loop before";
-            "sampled_key_ranges_length" => sampled_key_ranges.len(),
-            "sample_num" => sample_num,
-        );
     }
     sampled_key_ranges
 }
@@ -269,27 +227,56 @@ impl Samples {
 // sample and split them according to the split config appropriately.
 pub struct Recorder {
     pub detect_times: usize,
+    sample_num: usize,
     pub peer: Peer,
-    pub key_ranges: Vec<Vec<KeyRange>>,
+    // Keep only the latest observation rounds. A failed split-key selection
+    // must not make this history grow without bound.
+    pub key_ranges: VecDeque<Vec<KeyRange>>,
     pub create_time: SystemTime,
     pub cpu_usage: f64,
     pub hottest_key_range: Option<KeyRange>,
 }
 
 impl Recorder {
-    fn new(detect_times: u64) -> Recorder {
+    fn new(detect_times: u64, sample_num: usize) -> Recorder {
         Recorder {
             detect_times: detect_times as usize,
+            sample_num,
             peer: Peer::default(),
-            key_ranges: vec![],
+            key_ranges: VecDeque::new(),
             create_time: SystemTime::now(),
             cpu_usage: 0.0,
             hottest_key_range: None,
         }
     }
 
-    fn record(&mut self, key_ranges: Vec<KeyRange>) {
-        self.key_ranges.push(key_ranges);
+    fn record(&mut self, mut key_ranges: Vec<KeyRange>, detect_times: u64, sample_num: usize) {
+        let detect_times = match usize::try_from(detect_times) {
+            Ok(detect_times) => detect_times,
+            Err(_) => {
+                self.key_ranges.clear();
+                return;
+            }
+        };
+        // Do not mix rounds sampled with different parameters. Start a fresh
+        // observation window when either parameter changes.
+        if self.detect_times != detect_times || self.sample_num != sample_num {
+            self.detect_times = detect_times;
+            self.sample_num = sample_num;
+            self.key_ranges.clear();
+            self.create_time = SystemTime::now();
+        }
+        if detect_times == 0 || sample_num == 0 {
+            self.key_ranges.clear();
+            return;
+        }
+        // The producer already applies the current sample limit. Keep this
+        // bound here as a defensive invariant for direct callers.
+        key_ranges.truncate(sample_num);
+        while self.key_ranges.len() >= detect_times {
+            let _ = self.key_ranges.pop_front();
+        }
+        self.key_ranges.push_back(key_ranges);
     }
 
     fn update_peer(&mut self, peer: &Peer) {
@@ -307,7 +294,7 @@ impl Recorder {
     }
 
     fn is_ready(&self) -> bool {
-        self.key_ranges.len() >= self.detect_times
+        self.detect_times > 0 && self.key_ranges.len() >= self.detect_times
     }
 
     // collect the split keys from the recorded key_ranges.
@@ -315,7 +302,8 @@ impl Recorder {
     // evaluate the samples according to the given key range, and compute the split
     // keys finally.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
+        let recorded_rounds: Vec<_> = self.key_ranges.iter().cloned().collect();
+        let sampled_key_ranges = sample(config.sample_num, recorded_rounds, |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual
@@ -351,14 +339,24 @@ impl RegionInfo {
             sample_num,
             query_stats: QueryStats::default(),
             cop_detail: RegionWriteCfCopDetail::default(),
-            key_ranges: Vec::with_capacity(sample_num),
+            // Most Regions only report flow or query counts. Allocate the
+            // reservoir when the first sampled range is observed.
+            key_ranges: Vec::new(),
             peer: Peer::default(),
             flow: FlowStatistics::default(),
         }
     }
 
+    fn read_query_num(&self) -> u64 {
+        self.query_stats
+            .0
+            .get_get()
+            .saturating_add(self.query_stats.0.get_coprocessor())
+            .saturating_add(self.query_stats.0.get_scan())
+    }
+
     fn get_read_qps(&self) -> usize {
-        self.query_stats.get_read_query_num() as usize
+        usize::try_from(self.read_query_num()).unwrap_or(usize::MAX)
     }
 
     fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
@@ -366,14 +364,38 @@ impl RegionInfo {
     }
 
     fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
+        self.add_key_ranges_with_rng(key_ranges, &mut rand::thread_rng());
+    }
+
+    fn add_key_ranges_with_rng<R: Rng + ?Sized>(&mut self, key_ranges: Vec<KeyRange>, rng: &mut R) {
+        if !key_ranges.is_empty() && self.key_ranges.capacity() == 0 {
+            self.key_ranges
+                .reserve(self.sample_num.min(DEFAULT_SAMPLE_NUM));
+        }
         for (i, key_range) in key_ranges.into_iter().enumerate() {
-            let n = self.get_read_qps() + i;
-            if n == 0 || self.key_ranges.len() < self.sample_num {
+            // Keep the Algorithm R observation index in u64 so large query
+            // counters do not truncate on 32-bit targets or wrap on addition.
+            let n = self
+                .read_query_num()
+                .saturating_add(u64::try_from(i).unwrap_or(u64::MAX));
+            if self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let j = rand::thread_rng().gen_range(0..n);
-                if j < self.sample_num {
-                    self.key_ranges[j] = key_range;
+                // This is the (n + 1)th observation, so it must be selected with
+                // probability sample_num / (n + 1).
+                // `gen_range` cannot represent an inclusive range ending at
+                // `u64::MAX` on every rand backend, so use the full-width draw
+                // for that one boundary case.
+                let j = if n == u64::MAX {
+                    rng.gen::<u64>()
+                } else {
+                    rng.gen_range(0..=n)
+                };
+                let sample_num = u64::try_from(self.sample_num).unwrap_or(u64::MAX);
+                if j < sample_num {
+                    if let Ok(index) = usize::try_from(j) {
+                        self.key_ranges[index] = key_range;
+                    }
                 }
             }
         }
@@ -612,7 +634,7 @@ impl AutoSplitController {
     fn update_grpc_thread_usage(&mut self, grpc_thread_usage: f64) {
         self.grpc_thread_usage_vec.push(grpc_thread_usage);
         let length = self.grpc_thread_usage_vec.len();
-        let detect_times = self.cfg.detect_times as usize;
+        let detect_times = usize::try_from(self.cfg.detect_times).unwrap_or(usize::MAX);
         // Only keep the last `self.cfg.detect_times` elements.
         if length > detect_times {
             self.grpc_thread_usage_vec.drain(..length - detect_times);
@@ -749,12 +771,11 @@ impl AutoSplitController {
         let read_stats_vec = ctx.batch_recv_read_stats(read_stats_receiver);
         // RegionID -> Vec<RegionInfo>, collect the RegionInfo from different threads.
         let mut region_infos_map = HashMap::default();
-        let capacity = read_stats_vec.len();
         for read_stats in read_stats_vec.drain(..) {
             for (region_id, region_info) in read_stats.region_infos {
                 let region_infos = region_infos_map
                     .entry(region_id)
-                    .or_insert_with(|| Vec::with_capacity(capacity));
+                    .or_insert_with(|| Vec::with_capacity(1));
                 region_infos.push(region_info);
             }
         }
@@ -919,12 +940,12 @@ impl AutoSplitController {
                 .with_label_values(&["read"])
                 .observe(qps as f64);
 
-            // 1. If the QPS or the byte does not meet the threshold, skip.
-            // 2. If the Unified Read Pool or the region is not hot enough, skip.
-            if qps < self.cfg.qps_threshold()
-                && byte < self.cfg.byte_threshold()
-                && (!is_unified_read_pool_busy || !is_region_busy)
-            {
+            // Load fit if QPS or bytes meet a positive threshold, or both the
+            // unified-read pool and the region are hot. A threshold of 0
+            // disables that gate instead of making every Region load-fit.
+            let qps_exceeded = self.cfg.qps_threshold() > 0 && qps >= self.cfg.qps_threshold();
+            let byte_exceeded = self.cfg.byte_threshold() > 0 && byte >= self.cfg.byte_threshold();
+            if !qps_exceeded && !byte_exceeded && (!is_unified_read_pool_busy || !is_region_busy) {
                 self.recorders.remove_entry(&region_id);
                 self.cpu_top_fallback_suppressions.remove(&region_id);
                 continue;
@@ -933,26 +954,23 @@ impl AutoSplitController {
             LOAD_BASE_SPLIT_EVENT.load_fit.inc();
 
             let detect_times = self.cfg.detect_times;
+            let sample_num = self.cfg.sample_num;
             let recorder = self
                 .recorders
                 .entry(region_id)
-                .or_insert_with(|| Recorder::new(detect_times));
+                .or_insert_with(|| Recorder::new(detect_times, sample_num));
             recorder.update_peer(&region_infos[0].peer);
             recorder.update_cpu_usage(cpu_usage);
             if let Some(hottest_key_range) = hottest_key_range {
                 recorder.update_hottest_key_range(hottest_key_range);
             }
 
-            let key_ranges = sample(
-                self.cfg.sample_num,
-                region_infos,
-                RegionInfo::get_key_ranges_mut,
-            );
+            let key_ranges = sample(sample_num, region_infos, RegionInfo::get_key_ranges_mut);
             if key_ranges.is_empty() {
                 LOAD_BASE_SPLIT_EVENT.empty_statistical_key.inc();
                 continue;
             }
-            recorder.record(key_ranges);
+            recorder.record(key_ranges, detect_times, sample_num);
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
@@ -1188,6 +1206,7 @@ mod tests {
     use std::sync::mpsc::{self, TryRecvError};
 
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
+    use rand::rngs::mock::StepRng;
     use resource_metering::{RawRecord, TagInfos};
     use tikv_util::config::{ReadableSize, VersionTrack};
     use txn_types::Key;
@@ -1287,17 +1306,96 @@ mod tests {
         config.detect_times = 10;
         config.sample_threshold = 20;
 
-        let mut recorder = Recorder::new(config.detect_times);
+        let mut recorder = Recorder::new(config.detect_times, config.sample_num);
         for _ in 0..config.detect_times {
             assert!(!recorder.is_ready());
-            recorder.record(vec![
-                build_key_range(b"a", b"b", false),
-                build_key_range(b"b", b"c", false),
-            ]);
+            recorder.record(
+                vec![
+                    build_key_range(b"a", b"b", false),
+                    build_key_range(b"b", b"c", false),
+                ],
+                config.detect_times,
+                config.sample_num,
+            );
         }
         assert!(recorder.is_ready());
         let key = recorder.collect(&config);
         assert_eq!(key, b"b");
+    }
+
+    #[test]
+    fn test_recorder_failed_collection_keeps_latest_bounded_window() {
+        let config = SplitConfig {
+            detect_times: 3,
+            sample_num: 2,
+            sample_threshold: 6,
+            split_balance_score: 0.0,
+            ..Default::default()
+        };
+        let mut recorder = Recorder::new(config.detect_times, config.sample_num);
+
+        for round in 0..6_u8 {
+            let ranges = (0..3_u8)
+                .map(|sample| build_key_range(&[round, sample], &[round, sample], false))
+                .collect();
+            recorder.record(ranges, config.detect_times, config.sample_num);
+
+            assert!(recorder.key_ranges.len() <= config.detect_times as usize);
+            assert!(
+                recorder.key_ranges.iter().map(Vec::len).sum::<usize>()
+                    <= config.sample_num * config.detect_times as usize
+            );
+            if round + 1 >= config.detect_times as u8 {
+                assert!(recorder.is_ready());
+                assert!(recorder.collect(&config).is_empty());
+            }
+        }
+
+        let retained_rounds: Vec<_> = recorder
+            .key_ranges
+            .iter()
+            .map(|ranges| ranges[0].start_key[0])
+            .collect();
+        assert_eq!(retained_rounds, vec![3, 4, 5]);
+        assert!(
+            recorder
+                .key_ranges
+                .iter()
+                .all(|ranges| ranges.len() == config.sample_num)
+        );
+    }
+
+    #[test]
+    fn test_recorder_resets_window_on_sampling_config_change() {
+        let mut recorder = Recorder::new(3, 4);
+        for round in 0..2_u8 {
+            let ranges = (0..4_u8)
+                .map(|sample| build_key_range(&[round, sample], &[round, sample], false))
+                .collect();
+            recorder.record(ranges, 3, 4);
+        }
+        recorder.create_time = SystemTime::UNIX_EPOCH;
+
+        let ranges = (0..3_u8)
+            .map(|sample| build_key_range(&[2, sample], &[2, sample], false))
+            .collect();
+        recorder.record(ranges, 3, 1);
+
+        assert_eq!(recorder.detect_times, 3);
+        assert_eq!(recorder.sample_num, 1);
+        assert_eq!(recorder.key_ranges.len(), 1);
+        assert_eq!(recorder.key_ranges[0][0].start_key, vec![2, 0]);
+        assert!(recorder.key_ranges.iter().all(|ranges| ranges.len() == 1));
+        assert_ne!(recorder.create_time, SystemTime::UNIX_EPOCH);
+        assert!(!recorder.is_ready());
+
+        let ranges = vec![build_key_range(&[3, 0], &[3, 0], false)];
+        recorder.record(ranges, 2, 1);
+
+        assert_eq!(recorder.detect_times, 2);
+        assert_eq!(recorder.key_ranges.len(), 1);
+        assert_eq!(recorder.key_ranges[0][0].start_key, vec![3, 0]);
+        assert!(!recorder.is_ready());
     }
 
     #[test]
@@ -1458,6 +1556,63 @@ mod tests {
             read_stats_receiver,
             cpu_stats_receiver,
         )
+    }
+
+    #[test]
+    fn test_collect_read_stats_uses_sparse_region_capacity() {
+        const REPORT_COUNT: usize = 128;
+
+        let read_stats = (1..=REPORT_COUNT)
+            .map(|region_id| gen_read_stats(region_id as u64, vec![KeyRange::default()]))
+            .collect();
+        let (mut ctx, read_stats_receiver, _) = new_auto_split_controller_ctx(read_stats, vec![]);
+
+        let region_infos = AutoSplitController::collect_read_stats(&mut ctx, &read_stats_receiver);
+
+        assert_eq!(region_infos.len(), REPORT_COUNT);
+        for infos in region_infos.values() {
+            assert_eq!(infos.len(), 1);
+            assert!(infos.capacity() < REPORT_COUNT);
+        }
+    }
+
+    #[test]
+    fn test_zero_threshold_disables_only_that_load_fit_gate() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.qps_threshold = Some(0);
+        hub.cfg.byte_threshold = Some(50);
+
+        let mut cold_stats = gen_read_stats(1, vec![build_key_range(b"a", b"b", false)]);
+        cold_stats.region_infos.get_mut(&1).unwrap().flow.read_bytes = 1;
+        let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(vec![cold_stats], vec![]);
+        hub.flush(
+            &mut ctx,
+            &read_stats_receiver,
+            &cpu_stats_receiver,
+            &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
+        );
+        assert!(
+            hub.recorders.is_empty(),
+            "qps_threshold = 0 must not make a cold Region load-fit"
+        );
+
+        let mut hot_bytes = gen_read_stats(2, vec![build_key_range(b"c", b"d", false)]);
+        hot_bytes.region_infos.get_mut(&2).unwrap().flow.read_bytes = 100;
+        let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(vec![hot_bytes], vec![]);
+        hub.flush(
+            &mut ctx,
+            &read_stats_receiver,
+            &cpu_stats_receiver,
+            &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
+        );
+        assert!(
+            hub.recorders.contains_key(&2),
+            "disabling the QPS gate must still load-fit when bytes exceed the byte threshold"
+        );
     }
 
     fn check_split_key(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
@@ -1667,7 +1822,7 @@ mod tests {
     fn test_sample_key_num() {
         let mut hub = AutoSplitController::default();
         hub.cfg.qps_threshold = Some(2000);
-        hub.cfg.sample_num = 2000;
+        hub.cfg.sample_num = 64;
         hub.cfg.sample_threshold = 0;
 
         for _ in 0..100 {
@@ -1738,6 +1893,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_sample_length_when_request_nearly_all_ranges() {
+        let key_ranges = (0..10_000)
+            .map(|_| vec![build_key_range(b"a", b"b", false)])
+            .collect();
+        let sampled_key_ranges = sample(9_999, key_ranges, |x| x);
+        assert_eq!(sampled_key_ranges.len(), 9_999);
     }
 
     #[test]
@@ -1979,6 +2143,65 @@ mod tests {
             .filter(|key_range| key_range.start_key == b"b")
             .count();
         assert!(num >= r.sample_num - 1);
+    }
+
+    #[test]
+    fn test_region_info_reservoir_replacement_boundary() {
+        let first = build_key_range(b"first", b"first", false);
+        let second = build_key_range(b"second", b"second", false);
+
+        let mut region_info = RegionInfo::new(1);
+        let mut rng = StepRng::new(0, 0);
+        region_info.add_key_ranges_with_rng(vec![first.clone(), second.clone()], &mut rng);
+        assert_eq!(
+            region_info.key_ranges.iter().collect::<Vec<_>>(),
+            vec![&second]
+        );
+
+        let mut region_info = RegionInfo::new(1);
+        let mut rng = StepRng::new(0x8000_0000_8000_0000, 0);
+        region_info.add_key_ranges_with_rng(vec![first.clone(), second], &mut rng);
+        assert_eq!(
+            region_info.key_ranges.iter().collect::<Vec<_>>(),
+            vec![&first]
+        );
+    }
+
+    #[test]
+    fn test_region_info_zero_sample_reservoir_stays_empty() {
+        let mut region_info = RegionInfo::new(0);
+        region_info.add_key_ranges(vec![build_key_range(b"a", b"b", false)]);
+
+        assert!(region_info.key_ranges.is_empty());
+    }
+
+    #[test]
+    fn test_region_info_allocates_reservoir_lazily() {
+        let mut region_info = RegionInfo::new(usize::MAX);
+
+        assert_eq!(region_info.sample_num, usize::MAX);
+        assert_eq!(region_info.key_ranges.capacity(), 0);
+
+        region_info.add_key_ranges(vec![build_key_range(b"a", b"b", false)]);
+
+        assert_eq!(region_info.key_ranges.capacity(), DEFAULT_SAMPLE_NUM);
+    }
+
+    #[test]
+    fn test_region_info_handles_large_query_count_without_index_overflow() {
+        let mut region_info = RegionInfo::new(1);
+        region_info.query_stats.0.set_get(u64::MAX);
+        let mut rng = StepRng::new(0, 0);
+
+        region_info.add_key_ranges_with_rng(
+            vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ],
+            &mut rng,
+        );
+
+        assert_eq!(region_info.key_ranges.len(), 1);
     }
 
     const REGION_NUM: u64 = 1000;
