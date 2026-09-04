@@ -219,6 +219,10 @@ impl ResourceTagFactory {
     }
 
     /// Creates a tag with raw key ranges for a read request.
+    ///
+    /// Transactional storage and coprocessor pass forward raw `[start, end)`
+    /// ranges. RawKV callers may pass request bytes as-is and are not a
+    /// reliable CPU hottest-range input.
     pub fn new_tag_with_key_ranges(
         &self,
         context: &kvproto::kvrpcpb::Context,
@@ -324,7 +328,9 @@ pub struct TagInfos {
     pub region_id: u64,
     pub peer_id: u64,
     /// Forward `[start, end)` ranges in raw key form. An empty end is
-    /// unbounded. Only read requests contain ranges.
+    /// unbounded. Transactional storage and coprocessor producers guarantee
+    /// this contract; RawKV producers are best-effort and are not a reliable
+    /// input for CPU hottest-range split. Only read requests contain ranges.
     pub raw_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     pub extra_attachment: Arc<Vec<u8>>,
 }

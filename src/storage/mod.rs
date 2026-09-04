@@ -169,17 +169,38 @@ macro_rules! check_key_size {
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
 
+// Converts a transactional point key to the raw range used by load-split
+// attribution. An empty raw key is omitted so it is not treated as an
+// unbounded `[start, end)` by CPU hottest-range fallback.
+fn txn_raw_point_range_bytes(raw: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
+    if raw.is_empty() {
+        None
+    } else {
+        Some((raw.clone(), raw))
+    }
+}
+
+fn txn_raw_point_range(key: &Key) -> Option<(Vec<u8>, Vec<u8>)> {
+    txn_raw_point_range_bytes(key.to_raw().ok()?)
+}
+
 // Converts transactional scan bounds to the forward raw range used by load
 // split attribution. A malformed bound drops attribution for this request;
-// it must not be treated as an unbounded end.
+// it must not be treated as an unbounded end. Missing start and end together
+// are omitted so `("", "")` is not expanded to the whole Region. A missing
+// start with a present end is recorded as `("", end)`.
 fn txn_raw_key_range(
     start_key: Option<&Key>,
     end_key: Option<&Key>,
     reverse_scan: bool,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
-    // Keep the existing scan-lock behavior: without a start bound there is no
-    // concrete range to attribute to a hottest-key split.
-    let start_key = start_key?.to_raw().ok()?;
+    if start_key.is_none() && end_key.is_none() {
+        return None;
+    }
+    let start_key = match start_key {
+        Some(key) => key.to_raw().ok()?,
+        None => Vec::new(),
+    };
     let end_key = match end_key {
         Some(key) => key.to_raw().ok()?,
         None => Vec::new(),
@@ -666,12 +687,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
-            &ctx,
-            key.to_raw()
-                .map(|raw| vec![(raw.clone(), raw)])
-                .unwrap_or_default(),
-        );
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, txn_raw_point_range(&key).into_iter().collect());
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
@@ -887,9 +905,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
         let rand_ctx = requests[rand_index].get_context();
         let raw_rand_key = requests[rand_index].get_key().to_vec();
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(rand_ctx, vec![(raw_rand_key.clone(), raw_rand_key)]);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            rand_ctx,
+            txn_raw_point_range_bytes(raw_rand_key)
+                .into_iter()
+                .collect(),
+        );
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
@@ -1096,10 +1117,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         keys.sort();
         keys.dedup();
-        let raw_key_ranges = keys
-            .iter()
-            .filter_map(|key| key.to_raw().ok().map(|raw| (raw.clone(), raw)))
-            .collect();
+        let raw_key_ranges = keys.iter().filter_map(txn_raw_point_range).collect();
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, raw_key_ranges);
@@ -1310,10 +1328,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
-        let raw_key_ranges = keys
-            .iter()
-            .filter_map(|key| key.to_raw().ok().map(|raw| (raw.clone(), raw)))
-            .collect();
+        let raw_key_ranges = keys.iter().filter_map(txn_raw_point_range).collect();
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&ctx, raw_key_ranges);
@@ -1540,10 +1555,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let raw_key_ranges = txn_raw_key_range(Some(&start_key), end_key.as_ref(), reverse_scan)
             .into_iter()
             .collect();
-        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
-            &ctx,
-            raw_key_ranges,
-        );
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, raw_key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
@@ -1729,10 +1743,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let raw_key_ranges = txn_raw_key_range(start_key.as_ref(), end_key.as_ref(), false)
             .into_iter()
             .collect();
-        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
-            &ctx,
-            raw_key_ranges,
-        );
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, raw_key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
@@ -7592,12 +7605,35 @@ mod tests {
             Some((Vec::new(), b"z".to_vec()))
         );
         assert_eq!(txn_raw_key_range(None, None, false), None);
+        assert_eq!(
+            txn_raw_key_range(None, Some(&end_key), false),
+            Some((Vec::new(), b"z".to_vec())),
+            "scan_lock without a start bound must still record [region_start, end)"
+        );
 
         let malformed_start_key = Key::from_encoded(vec![0xff]);
         assert_eq!(
             txn_raw_key_range(Some(&malformed_start_key), Some(&end_key), false),
             None
         );
+    }
+
+    #[test]
+    fn test_txn_raw_point_range_omits_empty_key() {
+        assert_eq!(
+            txn_raw_point_range(&Key::from_raw(b"a")),
+            Some((b"a".to_vec(), b"a".to_vec()))
+        );
+        assert_eq!(
+            txn_raw_point_range(&Key::from_raw(b"")),
+            None,
+            "an empty point key must not be recorded as an unbounded range"
+        );
+        assert_eq!(
+            txn_raw_point_range_bytes(b"a".to_vec()),
+            Some((b"a".to_vec(), b"a".to_vec()))
+        );
+        assert_eq!(txn_raw_point_range_bytes(Vec::new()), None);
     }
 
     #[test]

@@ -60,7 +60,8 @@ High-risk contracts:
 - raw KV API version and TTL rules from `config.rs`
 - transactional resource-metering ranges use raw keys normalized to forward
   `[lower, upper)` bounds; malformed encoded bounds omit range attribution
-  instead of widening the range
+  instead of widening the range. Empty point keys omit the range. RawKV
+  ranges are best-effort and are not a reliable CPU hottest-range input
 
 ## Start Here
 
