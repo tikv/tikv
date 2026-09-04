@@ -135,12 +135,12 @@ impl SplitConfig {
             )
             .into());
         }
-        let max_recorded_samples = u128::from(self.sample_num)
+        let max_recorded_samples = (self.sample_num as u128)
             .checked_mul(u128::from(self.detect_times))
             .ok_or_else(|| {
                 "sample_num * detect_times overflowed for load-base-split.".to_owned()
             })?;
-        if max_recorded_samples > u128::from(MAX_RECORDED_SAMPLES_PER_REGION) {
+        if max_recorded_samples > MAX_RECORDED_SAMPLES_PER_REGION as u128 {
             return Err(format!(
                 "sample_num * detect_times should not exceed {} for load-base-split.",
                 MAX_RECORDED_SAMPLES_PER_REGION
@@ -363,8 +363,10 @@ mod tests {
         let err = cfg_manager.dispatch(config_change).unwrap_err().to_string();
         assert!(err.contains("sample_num should be less than qps_threshold"));
 
-        let current = cfg_manager.value();
-        assert_eq!(&*current, &before_rejected_update);
+        {
+            let current = cfg_manager.value();
+            assert_eq!(&*current, &before_rejected_update);
+        }
 
         // Zero disables the QPS gate and must not reject every positive sample
         // size.

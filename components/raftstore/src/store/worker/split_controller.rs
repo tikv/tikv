@@ -47,7 +47,7 @@ fn prefix_sum<F, T>(iter: Iter<'_, T>, read: F) -> Vec<usize>
 where
     F: Fn(&T) -> usize,
 {
-    let mut sum = 0;
+    let mut sum: usize = 0;
     iter.map(|item| {
         sum = sum.saturating_add(read(item));
         sum
@@ -940,12 +940,12 @@ impl AutoSplitController {
                 .with_label_values(&["read"])
                 .observe(qps as f64);
 
-            // 1. If the QPS or the byte does not meet the threshold, skip.
-            // 2. If the Unified Read Pool or the region is not hot enough, skip.
-            if qps < self.cfg.qps_threshold()
-                && byte < self.cfg.byte_threshold()
-                && (!is_unified_read_pool_busy || !is_region_busy)
-            {
+            // Load fit if QPS or bytes meet a positive threshold, or both the
+            // unified-read pool and the region are hot. A threshold of 0
+            // disables that gate instead of making every Region load-fit.
+            let qps_exceeded = self.cfg.qps_threshold() > 0 && qps >= self.cfg.qps_threshold();
+            let byte_exceeded = self.cfg.byte_threshold() > 0 && byte >= self.cfg.byte_threshold();
+            if !qps_exceeded && !byte_exceeded && (!is_unified_read_pool_busy || !is_region_busy) {
                 self.recorders.remove_entry(&region_id);
                 self.cpu_top_fallback_suppressions.remove(&region_id);
                 continue;
@@ -1576,6 +1576,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_zero_threshold_disables_only_that_load_fit_gate() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.qps_threshold = Some(0);
+        hub.cfg.byte_threshold = Some(50);
+
+        let mut cold_stats = gen_read_stats(1, vec![build_key_range(b"a", b"b", false)]);
+        cold_stats.region_infos.get_mut(&1).unwrap().flow.read_bytes = 1;
+        let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(vec![cold_stats], vec![]);
+        hub.flush(
+            &mut ctx,
+            &read_stats_receiver,
+            &cpu_stats_receiver,
+            &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
+        );
+        assert!(
+            hub.recorders.is_empty(),
+            "qps_threshold = 0 must not make a cold Region load-fit"
+        );
+
+        let mut hot_bytes = gen_read_stats(2, vec![build_key_range(b"c", b"d", false)]);
+        hot_bytes.region_infos.get_mut(&2).unwrap().flow.read_bytes = 100;
+        let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(vec![hot_bytes], vec![]);
+        hub.flush(
+            &mut ctx,
+            &read_stats_receiver,
+            &cpu_stats_receiver,
+            &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
+        );
+        assert!(
+            hub.recorders.contains_key(&2),
+            "disabling the QPS gate must still load-fit when bytes exceed the byte threshold"
+        );
+    }
+
     fn check_split_key(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
         let mode = String::from_utf8(Vec::from(mode)).unwrap();
         let mut hub = AutoSplitController::default();
@@ -2114,12 +2153,18 @@ mod tests {
         let mut region_info = RegionInfo::new(1);
         let mut rng = StepRng::new(0, 0);
         region_info.add_key_ranges_with_rng(vec![first.clone(), second.clone()], &mut rng);
-        assert_eq!(region_info.key_ranges.iter().collect::<Vec<_>>(), vec![&second]);
+        assert_eq!(
+            region_info.key_ranges.iter().collect::<Vec<_>>(),
+            vec![&second]
+        );
 
         let mut region_info = RegionInfo::new(1);
         let mut rng = StepRng::new(0x8000_0000_8000_0000, 0);
         region_info.add_key_ranges_with_rng(vec![first.clone(), second], &mut rng);
-        assert_eq!(region_info.key_ranges.iter().collect::<Vec<_>>(), vec![&first]);
+        assert_eq!(
+            region_info.key_ranges.iter().collect::<Vec<_>>(),
+            vec![&first]
+        );
     }
 
     #[test]
@@ -2149,7 +2194,10 @@ mod tests {
         let mut rng = StepRng::new(0, 0);
 
         region_info.add_key_ranges_with_rng(
-            vec![build_key_range(b"a", b"b", false), build_key_range(b"b", b"c", false)],
+            vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ],
             &mut rng,
         );
 
