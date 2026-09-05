@@ -32,10 +32,9 @@ fn check_txn_status_from_pessimistic_primary_lock(
         // regarded as valid, and the transaction status is determined by it.
         if let Some(txn_status) = check_determined_txn_status(reader, &primary_key)? {
             info!("unlock stale pessimistic primary lock";
-                "primary_key" => ?&primary_key,
-                "lock" => ?&lock,
+                "lock_ts" => lock.ts,
                 "current_ts" => current_ts,
-                "resolving_pessimistic_lock" => ?resolving_pessimistic_lock,
+                "resolving_pessimistic_lock" => resolving_pessimistic_lock,
             );
             let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
@@ -109,10 +108,9 @@ pub fn check_txn_status_lock_exists(
         return match (resolving_pessimistic_lock, lock.is_pessimistic_lock()) {
             (false, true) => {
                 info!("unlock invalid pessimistic primary lock";
-                    "primary_key" => ?&primary_key,
-                    "lock" => ?&lock,
+                    "lock_ts" => lock.ts,
                     "current_ts" => current_ts,
-                    "resolving_pessimistic_lock" => ?resolving_pessimistic_lock,
+                    "resolving_pessimistic_lock" => resolving_pessimistic_lock,
                 );
                 let txn_status = check_txn_status_missing_lock(
                     txn,
@@ -147,13 +145,7 @@ pub fn check_txn_status_lock_exists(
     // using async commit. Rollback of async-commit locks are done during
     // ResolveLock.
     if lock.use_async_commit {
-        if force_sync_commit {
-            info!(
-                "fallback is set, check_txn_status treats it as a non-async-commit txn";
-                "start_ts" => reader.start_ts,
-                "primary_key" => ?primary_key,
-            );
-        } else {
+        if !force_sync_commit {
             return Ok((TxnStatus::uncommitted(lock, false), None));
         }
     }
