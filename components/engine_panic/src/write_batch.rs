@@ -52,6 +52,9 @@ impl WriteBatch for PanicWriteBatch {
     fn merge(&mut self, src: Self) -> Result<()> {
         panic!()
     }
+    fn data(&self) -> Option<&[u8]> {
+        panic!()
+    }
 }
 
 impl Mutable for PanicWriteBatch {

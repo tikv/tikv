@@ -544,6 +544,40 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref APPLY_SNAPSHOT_COUNTER: IntCounter =
+        register_int_counter!(
+            "tikv_raftstore_apply_snapshot_total",
+            "Total number of apply snapshot"
+        ).unwrap();
+
+    pub static ref APPLY_COMMIT_COUNTER: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_commit_total",
+            "Total number of apply commit in one poll",
+            linear_buckets(0.0, 1.0, 100).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_COMMIT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_apply_commit_total_vec",
+            "Total number of apply commit",
+            &["reason"]
+        ).unwrap();
+
+    pub static ref APPLY_YIELD_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_apply_yield_total",
+            "Total number of apply yield",
+            &["reason"]
+        ).unwrap();
+
+    pub static ref APPLY_KV_MUT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_apply_kv_mut_total",
+            "Total number of apply kv mut",
+            &["reason"]
+        ).unwrap();
+
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
