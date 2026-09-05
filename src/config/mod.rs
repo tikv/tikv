@@ -6988,7 +6988,6 @@ mod tests {
         default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
-        default_cfg.raft_store.region_compact_check_step = Some(100);
         default_cfg.rocksdb.titan.enabled = Some(true);
 
         // Other special cases.
@@ -7453,6 +7452,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_compact_check_default() {
         let content = r#"
             [raftstore]
@@ -7513,5 +7513,145 @@ mod tests {
                 .unwrap(),
             50
         );
+=======
+    fn test_in_memory_engine_and_api_version() {
+        let tests = [
+            (
+                true,
+                vec![
+                    r#"
+                        [in-memory-engine]
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                    "#,
+                    // Ok if in-memory engine is off.
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+            (
+                false,
+                vec![
+                    // Error for incompatiable API version.
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+        ];
+
+        for t in tests {
+            for content in t.1 {
+                let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+                if t.0 {
+                    cfg.validate().unwrap();
+                } else {
+                    cfg.validate().unwrap_err();
+                }
+                must_no_unknown_key(content);
+            }
+        }
+    }
+
+    #[test]
+    fn test_in_memory_engine_change_config() {
+        let content = r#"
+            [in-memory-engine]
+            enable = true
+            evict-threshold = "1GB"
+            capacity = "2GB"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let version_tracker = Arc::new(VersionTrack::new(cfg.in_memory_engine.clone()));
+        cfg_controller.register(
+            Module::InMemoryEngine,
+            Box::new(InMemoryEngineConfigManager::new(version_tracker.clone())),
+        );
+
+        let check_cfg = |cfg: &TikvConfig| {
+            assert_eq_debug(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.in_memory_engine);
+        };
+
+        cfg_controller
+            .update_config("in-memory-engine.capacity", "3GB")
+            .unwrap();
+        cfg.in_memory_engine.capacity = Some(ReadableSize::gb(3));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.evict-threshold", "2GB")
+            .unwrap();
+        cfg.in_memory_engine.evict_threshold = Some(ReadableSize::gb(2));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.stop-load-threshold", "1GB")
+            .unwrap();
+        cfg.in_memory_engine.stop_load_threshold = Some(ReadableSize::gb(1));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.mvcc-amplification-threshold", "777")
+            .unwrap();
+        cfg.in_memory_engine.mvcc_amplification_threshold = 777;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.gc-run-interval", "7m")
+            .unwrap();
+        cfg.in_memory_engine.gc_run_interval = ReadableDuration::minutes(7);
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.enable", "false")
+            .unwrap();
+        cfg.in_memory_engine.enable = false;
+        check_cfg(&cfg);
+
+        // Test snake case.
+        cfg_controller
+            .update_config("in_memory_engine.enable", "true")
+            .unwrap();
+        cfg.in_memory_engine.enable = true;
+        check_cfg(&cfg);
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     }
 }

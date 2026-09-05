@@ -88,6 +88,7 @@ pub use self::{
     worker::{
         metrics as worker_metrics, need_compact, AutoSplitController, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
+<<<<<<< HEAD
         CompactThreshold, DiskCheckRunner, FlowStatistics, FlowStatsReporter,
         FullCompactController, KeyEntry, LocalReadContext, LocalReader, LocalReaderCore,
         PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
@@ -97,5 +98,15 @@ pub use self::{
         DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
         DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+=======
+        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, DiskCheckRunner, FlowStatistics,
+        FlowStatsReporter, FullCompactController, KeyEntry, LocalReadContext, LocalReader,
+        LocalReaderCore, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, PdStatsMonitor, PdTask,
+        REGION_CPU_OVERLOAD_THRESHOLD_RATIO, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner,
+        SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate,
+        StoreStatsReporter, TrackVer, WriteStats, WriterContoller, metrics as worker_metrics,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     },
 };
