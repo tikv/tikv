@@ -52,6 +52,10 @@ impl CompactExt for PanicEngine {
 pub struct PanicCompactedEvent;
 
 impl CompactedEvent for PanicCompactedEvent {
+    fn get_key_range(&self) -> (Vec<u8>, Vec<u8>) {
+        panic!()
+    }
+
     fn total_bytes_declined(&self) -> u64 {
         panic!()
     }

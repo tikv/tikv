@@ -42,6 +42,7 @@ pub trait StoreHandle: Clone + Send {
         context: Vec<u8>,
         hash: Vec<u8>,
     );
+    fn update_compaction_declined_bytes(&self, region_id: u64, bytes: u64);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +74,10 @@ pub enum SchedTask {
         index: u64,
         hash: Vec<u8>,
         context: Vec<u8>,
+    },
+    UpdateCompactionDeclinedBytes {
+        region_id: u64,
+        bytes: u64,
     },
 }
 
@@ -136,6 +141,10 @@ impl StoreHandle for std::sync::mpsc::SyncSender<SchedTask> {
             context,
             hash,
         });
+    }
+
+    fn update_compaction_declined_bytes(&self, region_id: u64, bytes: u64) {
+        let _ = self.try_send(SchedTask::UpdateCompactionDeclinedBytes { region_id, bytes });
     }
 }
 
