@@ -106,10 +106,12 @@ impl AdvanceTsWorker {
 
         let last_pd_tso = self.last_pd_tso.clone();
         let fut = async move {
-            // Ignore get tso errors since we will retry every `advdance_ts_interval`.
+            // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
             if let Ok(mut last_pd_tso) = last_pd_tso.try_lock() {
-                *last_pd_tso = Some((min_ts, Instant::now()));
+                if !min_ts.is_zero() {
+                    *last_pd_tso = Some((min_ts, Instant::now()));
+                }
             }
             let mut ts_source = TsSource::PdTso;
 
