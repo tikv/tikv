@@ -10,9 +10,18 @@
 # generates. Unfortunately Docker is limited to only 125 layers:
 # https://github.com/moby/moby/blob/a9507c6f76627fdc092edc542d5a7ef4a6df5eec/layer/layer.go#L50-L53
 
+<<<<<<< HEAD
 # We require epel packages, so enable the fedora EPEL repo then install dependencies.
 # Install the system dependencies
 # Attempt to clean and rebuild the cache to avoid 404s
+=======
+# install packages.
+RUN --mount=type=cache,target=/var/cache/dnf \
+    dnf upgrade-minimal -y && \
+    dnf --enablerepo=powertools install -y \
+    dwz make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
+    libstdc++-static go
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 
 # To avoid rebuilds we first install all Cargo dependencies
 

@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 
 use azure::STORAGE_VENDOR_NAME_AZURE;
+use cloud::STORAGE_VENDOR_NAME_GCP;
 pub use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 use encryption_export::{create_cloud_backend, KmsConfig};
