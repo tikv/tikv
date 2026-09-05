@@ -3878,6 +3878,32 @@ impl TikvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
+    fn kv_read_pool_concurrency(&self) -> usize {
+        if self.readpool.storage.use_unified_pool() {
+            self.readpool.unified.max_thread_count
+        } else {
+            self.readpool.storage.normal_concurrency
+        }
+    }
+
+    fn min_grpc_concurrency_for_mixed_workload(&self) -> usize {
+        // Keep enough gRPC worker threads to avoid bottlenecking mixed read/write
+        // traffic at the service edge.
+        let write_path_floor = self.storage.scheduler_worker_pool_size.saturating_add(2);
+        cmp::max(write_path_floor, self.kv_read_pool_concurrency())
+    }
+
+    fn adjust_grpc_concurrency_for_mixed_workload(&mut self) {
+        let min_grpc_concurrency = self.min_grpc_concurrency_for_mixed_workload();
+        if self.server.grpc_concurrency < min_grpc_concurrency {
+            warn!(
+                "server.grpc-concurrency {} is too small for current storage/readpool settings, set to {} instead",
+                self.server.grpc_concurrency, min_grpc_concurrency
+            );
+            self.server.grpc_concurrency = min_grpc_concurrency;
+        }
+    }
+
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
         if self.cfg_path.is_empty() {
@@ -4195,6 +4221,7 @@ impl TikvConfig {
         self.log.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
+        self.adjust_grpc_concurrency_for_mixed_workload();
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
@@ -7187,6 +7214,32 @@ mod tests {
             invalid_cfg.validate().unwrap_err().to_string(),
             "Titan is unavailable for feature TTL"
         );
+    }
+
+    #[test]
+    fn test_adjust_grpc_concurrency_for_mixed_workload() {
+        let mut cfg = TikvConfig::default();
+        cfg.readpool.storage.use_unified_pool = Some(false);
+        cfg.readpool.coprocessor.use_unified_pool = Some(false);
+        cfg.readpool.storage.normal_concurrency = 8;
+        cfg.storage.scheduler_worker_pool_size = 8;
+        cfg.server.grpc_concurrency = 4;
+
+        cfg.validate().unwrap();
+        assert_eq!(cfg.server.grpc_concurrency, 10);
+    }
+
+    #[test]
+    fn test_keep_grpc_concurrency_if_enough_for_mixed_workload() {
+        let mut cfg = TikvConfig::default();
+        cfg.readpool.storage.use_unified_pool = Some(false);
+        cfg.readpool.coprocessor.use_unified_pool = Some(false);
+        cfg.readpool.storage.normal_concurrency = 8;
+        cfg.storage.scheduler_worker_pool_size = 8;
+        cfg.server.grpc_concurrency = 12;
+
+        cfg.validate().unwrap();
+        assert_eq!(cfg.server.grpc_concurrency, 12);
     }
 
     #[test]
