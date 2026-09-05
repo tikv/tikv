@@ -215,6 +215,105 @@ impl S3Storage {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn maybe_assume_role<Creds, Http>(
+        config: Config,
+        client: Http,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        if config.role_arn.is_some() {
+            let duration_since_epoch = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
+            let timestamp_secs = duration_since_epoch.as_secs();
+
+            let mut builder = AssumeRoleProvider::builder(config.role_arn.as_deref().unwrap())
+                .session_name(format!("{}", timestamp_secs));
+
+            if let Some(external_id) = &config.external_id {
+                builder = builder.external_id(external_id.as_str());
+            }
+
+            if let Some(region) = &config.bucket.region {
+                builder = builder.region(Region::new(region.to_string()));
+            }
+
+            let credentials_provider: io::Result<AssumeRoleProvider> = block_on(async {
+                let sdk_config =
+                    Self::load_sdk_config(&config, util::new_http_client(), credentials_provider)
+                        .await?;
+                builder = builder.configure(&sdk_config);
+                Ok(builder.build().await)
+            });
+            Self::new_with_creds_client(config, client, credentials_provider?)
+        } else {
+            // or just use original cred_provider to access s3.
+            Self::new_with_creds_client(config, client, credentials_provider)
+        }
+    }
+
+    async fn load_sdk_config<Http, Creds>(
+        config: &Config,
+        client: Http,
+        creds: Creds,
+    ) -> io::Result<SdkConfig>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        let bucket_region = none_to_empty(config.bucket.region.clone());
+        let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
+
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
+
+        loader = util::configure_region(loader, &bucket_region)?;
+        loader = util::configure_endpoint(loader, &bucket_endpoint);
+        loader = loader.http_client(client);
+        Ok(loader.load().await)
+    }
+
+    fn new_with_creds_client<Creds, Http>(
+        config: Config,
+        client: Http,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        block_on(Self::new_with_creds_client_async(
+            config,
+            client,
+            credentials_provider,
+        ))
+    }
+
+    async fn new_with_creds_client_async<Creds, Http>(
+        config: Config,
+        client: Http,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        let sdk_config = Self::load_sdk_config(&config, client, credentials_provider).await?;
+
+        let mut builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        builder.set_force_path_style(Some(config.force_path_style));
+
+        let client = Client::from_conf(builder.build());
+
+        Ok(S3Storage { config, client })
+    }
+
+>>>>>>> 3c4cd29dd6 (aws: remove region check when create s3 storage (#18158))
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
             return format!("{}/{}", *prefix, key);
@@ -653,7 +752,8 @@ mod tests {
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
 
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert!(S3Storage::new(config).is_err());
+        // should not panic even if region is invalid
+        S3Storage::new(config).unwrap();
     }
 
     #[tokio::test]
