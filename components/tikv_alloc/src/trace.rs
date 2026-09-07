@@ -263,6 +263,27 @@ impl<T: Default> MemoryTraceGuard<T> {
         }
         std::mem::take(&mut self.item)
     }
+<<<<<<< HEAD
+=======
+
+    /// Returns the node this guard traces memory against, if any.
+    pub fn trace_node(&self) -> Option<Arc<MemoryTrace>> {
+        self.node.clone()
+    }
+
+    /// Adjusts the traced size to `size`, e.g. after replacing the item with
+    /// one of a different size. Does nothing if the guard traces no memory.
+    pub fn retrace(&mut self, size: usize) {
+        if let Some(node) = &self.node {
+            if size > self.size {
+                node.trace(TraceEvent::Add(size - self.size));
+            } else if size < self.size {
+                node.trace(TraceEvent::Sub(self.size - size));
+            }
+            self.size = size;
+        }
+    }
+>>>>>>> 39c62c85bb (*: batching analyze requests (#19854))
 }
 
 impl<T: Default> Drop for MemoryTraceGuard<T> {
