@@ -275,6 +275,8 @@ make_static_metric! {
         cpu_fallback_region_not_busy,
         // CPU fallback is blocked because gRPC poll threads are busy.
         cpu_fallback_grpc_busy,
+        // CPU-top fallback for the same key range is suppressed within cooldown.
+        cpu_top_fallback_suppressed_repeat,
         // Load-base split admin command succeeds.
         split_success,
         // Load-base split admin command fails.

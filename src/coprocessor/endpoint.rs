@@ -6,7 +6,8 @@ use std::{
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, get_tls_tracker_token, set_tls_tracker_token, track,
+    with_tls_tracker,
 };
 use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
@@ -31,9 +32,9 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
-use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
+    DeferContext,
     deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
@@ -209,6 +210,12 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<ParseCopRequestResult<E::IMSnap>> {
+        // Reject unsupported API versions before dispatching, so that a
+        // request-provided `ApiVersion::V3` gets a graceful error instead of
+        // hitting the panic branch in `dispatch_api_version!`.
+        if req.get_context().get_api_version() == kvrpcpb::ApiVersion::V3 {
+            return Err(box_err!("API V3 is not supported by this TiKV build"));
+        }
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
@@ -528,7 +535,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
-    ) -> Result<MemoryTraceGuard<coppb::Response>> {
+    ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
         });
@@ -578,19 +585,36 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future = check_deadline(handler.handle_request(), deadline);
-        let handle_request_future = track(handle_request_future, tracker.as_mut());
+        let handle_request_future = handler.handle_request();
+        let process_future = async move {
+            let output = handle_request_future.await?;
+            match output.into_response() {
+                Ok(response) => Ok(HandlerOutput {
+                    response,
+                    state: HandlerOutputState::Ready,
+                }),
+                Err(ResponseMaterializationFailure {
+                    error,
+                    partial_response,
+                }) => {
+                    drop(partial_response);
+                    Err(error)
+                }
+            }
+        };
+        let process_future = check_deadline(process_future, deadline);
+        let process_future = track(process_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(
-                handle_request_future,
+                process_future,
                 semaphore,
                 semaphore_group,
                 LIGHT_TASK_THRESHOLD,
             )
             .await
         } else {
-            handle_request_future.await
+            process_future.await
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
@@ -602,18 +626,13 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let mut resp = match result {
-            Ok(resp) => {
-                let resp_size = resp.data.len() as u64;
-                COPR_RESP_SIZE.inc_by(resp_size);
-                record_network_out_bytes(resp_size);
-                with_tls_tracker(|tracker| {
-                    tracker.metrics.coprocessor_response_bytes = tracker
-                        .metrics
-                        .coprocessor_response_bytes
-                        .saturating_add(resp_size);
-                });
-                resp
+        let mut output = match result {
+            Ok(output) => {
+                record_coprocessor_response_size(
+                    output.response.get_data().len() as u64,
+                    get_tls_tracker_token(),
+                );
+                output
             }
             Err(e) => {
                 if let Error::DefaultNotFound(errmsg) = &e {
@@ -622,26 +641,24 @@ impl<E: Engine> Endpoint<E> {
                         "reqCtx" => ?&tracker.req_ctx,
                     );
                 }
-                make_error_response(e).into()
+                HandlerOutput::ready(make_error_response(e))
             }
         };
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
-        resp.set_exec_details(exec_details);
-        resp.set_exec_details_v2(exec_details_v2);
-        resp.set_latest_buckets_version(buckets_version);
-        Ok(resp)
+        output.response.set_exec_details(exec_details);
+        output.response.set_exec_details_v2(exec_details_v2);
+        output.response.set_latest_buckets_version(buckets_version);
+        Ok(output)
     }
 
-    /// Handle a unary request and run on the read pool.
-    ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
-    /// other cases. The future inside may be an error however.
-    fn handle_unary_request(
+    /// Schedules a unary request on the read pool and returns its handler
+    /// output.
+    fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+    ) -> impl Future<Output = Result<HandlerOutput>> {
         let ParseCopRequestResult {
             req_tag,
             req_ctx,
@@ -703,6 +720,24 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    /// Handles a unary request whose response is materialized in its read pool
+    /// task.
+    fn handle_unary_request(
+        &self,
+        r: ParseCopRequestResult<E::IMSnap>,
+    ) -> impl Future<Output = Result<TracedResponse>> {
+        let future = self.schedule_unary_request(r);
+        async move {
+            let HandlerOutput { response, state } = future.await?;
+            match state {
+                HandlerOutputState::Ready => Ok(response),
+                HandlerOutputState::Mergeable(_) => {
+                    unreachable!("unary response must be materialized in the read pool")
+                }
+            }
+        }
+    }
+
     /// Parses and handles a unary request. Returns a future that will never
     /// fail. If there are errors during parsing or handling, they will be
     /// converted into a `Response` as the success result of the future.
@@ -711,12 +746,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+    ) -> impl Future<Output = TracedResponse> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
             req.start_ts,
         )));
+        // Registered before the server-busy early return below, which is one of
+        // the paths that never reaches the future holding the removal.
+        let tracker_guard = DeferContext::new(move || {
+            GLOBAL_TRACKERS.remove(tracker);
+        });
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
@@ -741,6 +781,9 @@ impl<E: Engine> Endpoint<E> {
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
         let fut = async move {
+            // Moving the guard into the future ties removal to the future's
+            // lifetime, so cancellation cleans up as well as completion.
+            let _tracker_guard = tracker_guard;
             let res = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
@@ -760,7 +803,6 @@ impl<E: Engine> Endpoint<E> {
                     res
                 }
             };
-            GLOBAL_TRACKERS.remove(tracker);
             res
         };
         Either::Right(fut)
@@ -803,9 +845,13 @@ impl<E: Engine> Endpoint<E> {
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+                    let tracker_guard = DeferContext::new(move || {
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                    });
                     set_tls_tracker_token(cur_tracker);
                     let fut = self.handle_unary_request(r);
                     let fut = async move {
+                        let _tracker_guard = tracker_guard;
                         let res = fut.await;
                         match res {
                             Ok(mut resp) => {
@@ -829,7 +875,6 @@ impl<E: Engine> Endpoint<E> {
                                 make_error_batch_response(&mut response, e);
                             }
                         }
-                        GLOBAL_TRACKERS.remove(cur_tracker);
                         response
                     };
 
@@ -885,7 +930,11 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request().await;
+                    let result = track(
+                        handler.handle_streaming_request(),
+                        tracker.poll_perf_context_tracker(),
+                    )
+                    .await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -1412,7 +1461,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
             if self.yieldable {
                 // We split the task into small executions of 100 milliseconds.
                 for _ in 0..self.handle_duration.as_millis() as u64 / 100 {
@@ -1426,7 +1475,7 @@ mod tests {
                 thread::sleep(self.handle_duration);
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result.take().unwrap().map(HandlerOutput::ready)
         }
     }
 
@@ -1448,7 +1497,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for HeavyYieldingUnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
             for _ in 0..self.yields {
                 let poll_duration = self.poll_duration;
                 let mut first_poll = true;
@@ -1465,7 +1514,7 @@ mod tests {
                 .await;
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result.take().unwrap().map(HandlerOutput::ready)
         }
     }
 
@@ -2021,14 +2070,70 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
-        shared_rx
-            .recv_timeout(Duration::from_millis(250))
-            .unwrap_err();
+        assert!(matches!(
+            shared_rx.recv_timeout(Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
         drop(shared_permits);
         shared_rx
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn test_dropped_batch_request_trackers() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // `GLOBAL_TRACKERS` is a process-wide slab shared by every test in this
+        // binary, so this test counts only the trackers carrying its own
+        // `start_ts`. The value is arbitrary: `u64::MAX` minus the date this
+        // test was written, chosen so no realistic timestamp collides with it.
+        const DROPPED_START_TS: u64 = u64::MAX - 20260819;
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        req.set_start_ts(DROPPED_START_TS);
+        for task_id in 1..=2 {
+            let mut task = coppb::StoreBatchTask::default();
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+
+        // `parse_and_handle_unary_request` is not an `async fn`: it registers
+        // the top tracker, and `process_batch_tasks` registers one tracker per
+        // batched task, all while building the future rather than while
+        // polling it. Dropping the future therefore exercises the window in
+        // which the trackers are registered but nothing has run.
+        let previous_tracker = ::tracker::get_tls_tracker_token();
+        let future = copr.parse_and_handle_unary_request(req, None);
+        drop(future);
+        // Building the request also overwrote this thread's tracker token.
+        // Restore it so the count below is the only state this test observes.
+        set_tls_tracker_token(previous_tracker);
+
+        let mut remaining = 0;
+        GLOBAL_TRACKERS.for_each(|tracker| {
+            if tracker.req_info.start_ts == DROPPED_START_TS {
+                remaining += 1;
+            }
+        });
+        assert_eq!(remaining, 0);
     }
 
     #[test]

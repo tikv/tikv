@@ -406,6 +406,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 }
                 Err(Error::from(ErrorInner::CfDeprecated(cf.to_owned())))
             }
+            ApiVersion::V3 => Err(Error::from(ErrorInner::Other(box_err!(
+                "API V3 is not supported by this TiKV build"
+            )))),
         }
     }
 

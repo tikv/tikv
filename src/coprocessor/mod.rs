@@ -35,7 +35,7 @@ pub mod readpool_impl;
 mod statistics;
 mod tracker;
 
-use std::{ops::Deref, sync::Arc};
+use std::{any::Any, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
@@ -62,11 +62,106 @@ pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
+/// A task result that a `RequestHandler` returns unserialized, so that the
+/// endpoint can merge the results of a batched request's tasks (one per region)
+/// and serialize the merged result only once.
+pub trait MergeableResult: Any + Send {
+    /// Merges another result of the same concrete type. Callers may choose any
+    /// merge order, so implementations must produce the same logical result
+    /// independent of that order.
+    fn merge(&mut self, other: Box<dyn MergeableResult>);
+
+    /// Serializes the result into response data. The result must keep any
+    /// memory it holds tracked until it is merged away or serialized.
+    fn into_data(self: Box<Self>) -> Result<Vec<u8>>;
+}
+
+/// A coprocessor response together with its response-data memory trace.
+pub type TracedResponse = MemoryTraceGuard<coppb::Response>;
+
+/// The output of handling a unary request. It always owns the response and
+/// records separately whether its data is ready or still mergeable.
+pub struct HandlerOutput {
+    response: TracedResponse,
+    state: HandlerOutputState,
+}
+
+/// Whether the response data is ready or still mergeable and unserialized.
+enum HandlerOutputState {
+    Ready,
+    Mergeable(Box<dyn MergeableResult>),
+}
+
+/// A serialization failure that retains the partial response's trace guard so
+/// batch finalization can reuse it when constructing an error response.
+struct ResponseMaterializationFailure {
+    error: Error,
+    partial_response: Box<TracedResponse>,
+}
+
+impl HandlerOutput {
+    /// Creates an untraced ready response.
+    pub fn ready(response: coppb::Response) -> Self {
+        Self {
+            response: response.into(),
+            state: HandlerOutputState::Ready,
+        }
+    }
+
+    /// Creates a ready response whose data is attributed to `trace`.
+    pub fn ready_with_trace(mut response: coppb::Response, trace: &Arc<MemoryTrace>) -> Self {
+        // Trace the capacity: it is what the allocation holds, and the data
+        // buffer may carry spare capacity beyond its length.
+        let data_capacity = response.mut_data().capacity();
+        Self {
+            response: trace.trace_guard(response, data_capacity),
+            state: HandlerOutputState::Ready,
+        }
+    }
+
+    /// Creates a mergeable output whose eventual response data is attributed
+    /// to `trace`.
+    pub fn mergeable_with_trace(
+        partial_response: coppb::Response,
+        result: Box<dyn MergeableResult>,
+        trace: &Arc<MemoryTrace>,
+    ) -> Self {
+        debug_assert!(partial_response.get_data().is_empty());
+        Self {
+            response: trace.trace_guard(partial_response, 0),
+            state: HandlerOutputState::Mergeable(result),
+        }
+    }
+
+    fn into_response(self) -> std::result::Result<TracedResponse, ResponseMaterializationFailure> {
+        let Self {
+            mut response,
+            state,
+        } = self;
+        match state {
+            HandlerOutputState::Ready => Ok(response),
+            HandlerOutputState::Mergeable(result) => match result.into_data() {
+                Ok(data) => {
+                    let data_capacity = data.capacity();
+                    response.set_data(data);
+                    response.retrace(data_capacity);
+                    Ok(response)
+                }
+                Err(error) => Err(ResponseMaterializationFailure {
+                    error,
+                    partial_response: Box::new(response),
+                }),
+            },
+        }
+    }
+}
+
 /// An interface for all kind of Coprocessor request handlers.
 #[async_trait]
 pub trait RequestHandler: Send {
-    /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+    /// Processes current request and produces either a ready response or a
+    /// result kept unserialized for merging.
+    async fn handle_request(&mut self) -> Result<HandlerOutput> {
         panic!("unary request is not supported for this handler");
     }
 
@@ -146,6 +241,19 @@ pub struct ReqContextInner {
     pub allowed_in_flashback: bool,
 }
 
+#[inline]
+fn deadline_from_request_context(
+    context: &kvrpcpb::Context,
+    default_max_handle_duration: Duration,
+) -> Deadline {
+    let duration = if context.max_execution_duration_ms > 0 {
+        Duration::from_millis(context.max_execution_duration_ms)
+    } else {
+        default_max_handle_duration
+    };
+    Deadline::from_now(duration)
+}
+
 impl ReqContextInner {
     #[inline]
     pub fn new(
@@ -159,11 +267,7 @@ impl ReqContextInner {
         perf_level: PerfLevel,
         allowed_in_flashback: bool,
     ) -> Self {
-        let mut deadline_duration = max_handle_duration;
-        if context.max_execution_duration_ms > 0 {
-            deadline_duration = Duration::from_millis(context.max_execution_duration_ms);
-        }
-        let deadline = Deadline::from_now(deadline_duration);
+        let deadline = deadline_from_request_context(&context, max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {

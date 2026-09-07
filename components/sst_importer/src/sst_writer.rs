@@ -262,6 +262,7 @@ impl<E: KvEngine> RawSstWriter<E> {
                         }
                     }
                 }
+                ApiVersion::V3 => return Err(crate::Error::IncompatibleApiVersion),
             }
         );
 

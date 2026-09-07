@@ -111,6 +111,9 @@ High-risk config contracts:
   runs on TiKV's standard thread wrapper with a bounded per-endpoint wait; the
   wait timeout cannot cancel libc, NSS, or system DNS resolution, so at most two
   one-shot resolver threads may outlive the startup wait.
+- Forwarded third-party logs must not expose credentials. TiKV filters
+  Debug/Trace records from the affected legacy `azure_core` transport until
+  an SDK upgrade, patch, or logging fix replaces that temporary mitigation.
 - Service pause/resume must stay consistent with the small control plane in
   `components/service`.
 
@@ -162,6 +165,8 @@ Start triage with:
 - Does it add expensive initialization to the critical startup path?
 - Does every store-bootstrap path, including snapshot recovery, run the
   advertised-address probe before engine access and PD metadata publication?
+- Does a change to third-party log forwarding expose credentials or remove
+  diagnostics needed for failure triage?
 
 ## Observability And Tests
 
