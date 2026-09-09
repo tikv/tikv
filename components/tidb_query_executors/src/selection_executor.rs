@@ -270,6 +270,8 @@ mod tests {
     use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{FieldTypeTp, codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
+    use tipb::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
     use super::*;
     use crate::util::mock_executor::MockExecutor;
@@ -709,6 +711,41 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
+    }
+
+    #[test]
+    fn test_json_u64_overflow_in_selection() {
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Json.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Json(
+                    vec![Some(Json::from_u64(i64::MAX as u64 + 1).unwrap())].into(),
+                )]),
+                logical_rows: vec![0],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let mut cast =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastJsonAsInt, FieldTypeTp::LongLong)
+                .build();
+        cast.mut_children()
+            .push(ExprDefBuilder::column_ref(0, FieldTypeTp::Json).build());
+
+        let mut predicate =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::LtInt, FieldTypeTp::LongLong).build();
+        predicate.mut_children().push(cast);
+        predicate
+            .mut_children()
+            .push(ExprDefBuilder::constant_int(0).build());
+
+        let mut exec =
+            BatchSelectionExecutor::new(Arc::new(EvalConfig::new()), src_exec, vec![predicate])
+                .unwrap();
+
+        let result = block_on(exec.next_batch(1));
+        assert!(result.is_drained.is_err());
     }
 
     #[test]
