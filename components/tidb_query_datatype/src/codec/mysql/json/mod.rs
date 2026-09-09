@@ -339,6 +339,19 @@ impl Json {
         Ok(Self::new(JsonType::String, value))
     }
 
+    /// Creates a `string` JSON from raw bytes.
+    ///
+    /// Unlike `from_string`/`from_str_val`, this does not require valid UTF-8.
+    /// TiDB (Go) treats strings as raw byte sequences; the JSON binary string
+    /// format (varint(len) + bytes) is byte-identical regardless of UTF-8
+    /// validity. This avoids creating an invalid Rust `String` via
+    /// `from_utf8_unchecked`.
+    pub fn from_str_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_str_bytes(bytes)?;
+        Ok(Self::new(JsonType::String, value))
+    }
+
     pub fn from_opaque(typ: FieldTypeTp, bytes: BytesRef<'_>) -> Result<Self> {
         let mut value = vec![];
         value.write_json_opaque(typ, bytes)?;
