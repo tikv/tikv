@@ -569,6 +569,10 @@ pub struct ResourceGroupManager {
     // RwLock read on every gRPC thread is itself the contention. Refreshed by
     // `refresh_cached_config`.
     request_base_cost_micros: AtomicU64,
+    // Bucket count for a new per-group tracker. `historical_usage_window_mins`
+    // is not hot-reloadable, so it is resolved once here rather than read off
+    // the config lock on the tracker-creation path.
+    ru_num_buckets: usize,
     // Sliding-window tracker of the unified read pool's actual CPU usage (in
     // µs of CPU time per tick). Its `quiet_baseline` is the floor: the pool
     // should never be scaled below the thread count needed to sustain what it
@@ -656,9 +660,9 @@ impl ResourceGroupManager {
             true,
         ));
         let start_secs = RuTracker::now_secs();
-        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS, mirroring
-        // the per-group ru_trackers window sizing in `record_ru_consumption`.
-        let read_pool_num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
+        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS. Shared with
+        // the per-group ru_trackers, which size their window the same way.
+        let num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
         let request_base_cost_micros = config.request_base_cost_micros;
         let manager = Self {
             resource_groups: Default::default(),
@@ -670,11 +674,12 @@ impl ResourceGroupManager {
             has_background: AtomicBool::new(false),
             config: Arc::new(VersionTrack::new(config)),
             ru_trackers: Default::default(),
+            ru_num_buckets: num_buckets,
             start_secs,
             bg_cpu_at_floor: AtomicBool::new(false),
             read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
             request_base_cost_micros: AtomicU64::new(request_base_cost_micros),
-            read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, read_pool_num_buckets)),
+            read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, num_buckets)),
             read_pool_scale_up_allowed: AtomicBool::new(false),
             noisy_groups: RwLock::new(HashSet::new()),
         };
@@ -931,11 +936,8 @@ impl ResourceGroupManager {
             return;
         }
         let entry = self.ru_trackers.entry(group.to_owned()).or_insert_with(|| {
-            // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
-            let num_buckets =
-                (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
             RuTrackerSlot::new(
-                RuTracker::new(RuTracker::now_secs(), num_buckets),
+                RuTracker::new(RuTracker::now_secs(), self.ru_num_buckets),
                 Arc::new(ResourceLimiter::new(
                     group.to_owned(),
                     f64::INFINITY,
@@ -1504,13 +1506,11 @@ impl ResourceGroupManager {
     /// build token-bucket debt for pre-pool `admission_decision`.
     pub fn get_foreground_group_limiter(&self, group: &str) -> Arc<ResourceLimiter> {
         let now = RuTracker::now_secs();
-        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
-        let num_buckets = (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
         self.ru_trackers
             .entry(group.to_owned())
             .or_insert_with(|| {
                 RuTrackerSlot::new(
-                    RuTracker::new(now, num_buckets),
+                    RuTracker::new(now, self.ru_num_buckets),
                     Arc::new(ResourceLimiter::new(
                         group.to_owned(),
                         f64::INFINITY,
