@@ -63,6 +63,7 @@ Concrete runtime anchors:
 High-risk service contracts:
 
 - metadata-derived store-id checks
+- advertised store and status addresses published through PD store metadata
 - request batching and stream callback completion
 - region-error and timeout mapping from storage/raftstore to RPCs
 
@@ -151,6 +152,9 @@ High-risk service contracts:
 - raft address-resolution success, failure, tombstone, and not-found counters;
   retryable not-found warnings are emitted immediately and then rate limited
   per store while the counters continue to record every attempt
+- startup-time advertised-address probe warnings and
+  `tikv_server_advertise_addr_probe_failure_total`; the probe is advisory and
+  uses bounded endpoint/reason labels
 - status-server endpoints for config, metrics, health, and profiles
 - GC and diagnostics metrics and logs
 
@@ -190,6 +194,8 @@ Start triage with:
 - Does it change request batching, stream behavior, or backpressure?
 - Does it alter memory-pressure rejection or raft append filtering?
 - Does it change bootstrap or store-registration ordering in `raft_server.rs`?
+- Does snapshot recovery probe the validated effective advertised addresses
+  before opening its local engines and calling PD `bootstrap_cluster`?
 - Does it add new status-server behavior without security or readiness review?
 - Does it alter dynamic config behavior in `config.rs` or config managers?
 

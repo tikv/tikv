@@ -659,6 +659,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_config_validate_does_not_record_addr_probe_failures() {
+        use crate::server::metrics::ADVERTISE_ADDR_PROBE_FAILURE_COUNTER;
+
+        let labels = [["store", "unresolved"], ["status", "unresolved"]];
+        let before = labels.map(|labels| {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&labels)
+                .get()
+        });
+
+        let mut cfg = Config::default();
+        cfg.advertise_addr = "store.invalid:20160".to_owned();
+        cfg.advertise_status_addr = "status.invalid:20180".to_owned();
+        cfg.validate().unwrap();
+
+        for (labels, before) in labels.iter().zip(before) {
+            assert_eq!(
+                ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                    .with_label_values(labels)
+                    .get(),
+                before
+            );
+        }
+    }
+
+    #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
         assert!(cfg.advertise_addr.is_empty());
