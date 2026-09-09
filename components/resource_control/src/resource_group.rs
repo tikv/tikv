@@ -842,7 +842,7 @@ impl ResourceGroupManager {
         }
     }
 
-    pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
+    pub fn consume_penalty(&self, ctx: &ResourceControlContext, request_source: &str) {
         for controller in self.registry.read().iter() {
             // FIXME: Should consume CPU time for read controller and write bytes for write
             // controller, once CPU process time of scheduler worker is tracked. Currently,
@@ -866,7 +866,13 @@ impl ResourceGroupManager {
         // The fixed arrival cost is charged here because this is the one place
         // that runs exactly once per request, at gRPC handler entry -- before
         // admission control, so a request that gets rejected still pays it.
-        self.charge_request_base_cost(&ctx.resource_group_name);
+        //
+        // A request routed to a background limiter is metered there, so it
+        // must not pay into the group's foreground tracker -- the same rule as
+        // the `!is_background()` guard in `future.rs`.
+        if !self.is_background_request(ctx.get_resource_group_name(), request_source) {
+            self.charge_request_base_cost(&ctx.resource_group_name);
+        }
     }
 
     /// Map a client-supplied group name onto the bounded set of configured
@@ -1553,6 +1559,25 @@ impl ResourceGroupManager {
             .0
     }
 
+    /// Whether a request from `rg` with `request_source` is routed to a
+    /// background limiter, without building one. Resolves the group the same
+    /// way `get_background_resource_limiter_with_priority` does, and returns
+    /// on the atomic before touching the map when no group configures
+    /// background job types at all.
+    pub fn is_background_request(&self, rg: &str, request_source: &str) -> bool {
+        if request_source.is_empty() || !self.has_background_groups() {
+            return false;
+        }
+        if let Some(group) = self.resource_groups.get(rg) {
+            if !group.fallback_default {
+                return group.is_background_source(request_source);
+            }
+        }
+        self.resource_groups
+            .get(DEFAULT_RESOURCE_GROUP_NAME)
+            .is_some_and(|g| g.is_background_source(request_source))
+    }
+
     fn get_background_resource_limiter_with_priority(
         &self,
         rg: &str,
@@ -1630,23 +1655,28 @@ impl ResourceGroup {
             .get_fill_rate()
     }
 
+    /// Whether `request_source` routes to this group's background limiter.
+    /// The one copy of the rule: `is_background_request` needs the verdict
+    /// without materializing the limiter.
+    fn is_background_source(&self, request_source: &str) -> bool {
+        // the source task name is the last part of `request_source` separated by "_"
+        // the request_source is
+        // {extrenal|internal}_{tidb_req_source}_{source_task_name}
+        self.limiter.is_some() && {
+            let source_task_name = request_source.rsplit('_').next().unwrap_or("");
+            !source_task_name.is_empty() && self.background_source_types.contains(source_task_name)
+        }
+    }
+
     fn get_background_resource_limiter(
         &self,
         request_source: &str,
     ) -> Option<Arc<ResourceLimiter>> {
-        self.limiter.as_ref().and_then(|limiter| {
-            // the source task name is the last part of `request_source` separated by "_"
-            // the request_source is
-            // {extrenal|internal}_{tidb_req_source}_{source_task_name}
-            let source_task_name = request_source.rsplit('_').next().unwrap_or("");
-            if !source_task_name.is_empty()
-                && self.background_source_types.contains(source_task_name)
-            {
-                Some(limiter.clone())
-            } else {
-                None
-            }
-        })
+        if self.is_background_source(request_source) {
+            self.limiter.clone()
+        } else {
+            None
+        }
     }
 }
 
@@ -4782,7 +4812,7 @@ pub(crate) mod tests {
 
         let mut ctx = ResourceControlContext::default();
         ctx.resource_group_name = DEFAULT_RESOURCE_GROUP_NAME.to_owned();
-        mgr.consume_penalty(&ctx);
+        mgr.consume_penalty(&ctx, "");
         assert_eq!(open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME), 70);
 
         mgr.get_config()
@@ -4792,12 +4822,43 @@ pub(crate) mod tests {
             })
             .unwrap();
         mgr.refresh_cached_config();
-        mgr.consume_penalty(&ctx);
+        mgr.consume_penalty(&ctx, "");
         assert_eq!(
             open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME),
             70,
             "0 disables the charge"
         );
+    }
+
+    /// A background-routed request is metered by its background limiter, so
+    /// it must not also pay the arrival cost into the group's foreground
+    /// tracker -- the same rule `future.rs` applies to measured CPU.
+    #[test]
+    fn test_request_base_cost_skips_background_requests() {
+        let mut cfg = Config::default();
+        cfg.request_base_cost_micros = 50;
+        let mgr = ResourceGroupManager::new(cfg);
+        mgr.add_resource_group(new_background_resource_group_ru(
+            "bg".into(),
+            1000,
+            LOW_PRIORITY,
+            vec!["br".into()],
+        ));
+
+        let mut ctx = ResourceControlContext::default();
+        ctx.resource_group_name = "bg".to_owned();
+
+        // The source task name is the last `_`-separated segment, so this
+        // routes to the group's background limiter.
+        mgr.consume_penalty(&ctx, "external_Br_br");
+        assert!(
+            mgr.ru_trackers.get("bg").is_none(),
+            "a background request must not open a foreground tracker"
+        );
+
+        // Same group, a source that matches no configured job type.
+        mgr.consume_penalty(&ctx, "external_Select_stmt");
+        assert_eq!(open_bucket(&mgr, "bg"), 50);
     }
 
     /// A name that is not a configured group must not open a tracker of its
@@ -4810,7 +4871,7 @@ pub(crate) mod tests {
 
         let mut ctx = ResourceControlContext::default();
         ctx.resource_group_name = "never-configured".to_owned();
-        mgr.consume_penalty(&ctx);
+        mgr.consume_penalty(&ctx, "");
 
         assert!(mgr.ru_trackers.get("never-configured").is_none());
         assert_eq!(open_bucket(&mgr, DEFAULT_RESOURCE_GROUP_NAME), 40);
