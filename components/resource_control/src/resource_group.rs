@@ -1568,10 +1568,10 @@ impl ResourceGroupManager {
         if request_source.is_empty() || !self.has_background_groups() {
             return false;
         }
-        if let Some(group) = self.resource_groups.get(rg) {
-            if !group.fallback_default {
-                return group.is_background_source(request_source);
-            }
+        if let Some(group) = self.resource_groups.get(rg)
+            && !group.fallback_default
+        {
+            return group.is_background_source(request_source);
         }
         self.resource_groups
             .get(DEFAULT_RESOURCE_GROUP_NAME)
