@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-f8fae05a62643c8a743d46b5be621ff61be38749ce5f5780e19e100ba3240d9b  ./metrics/grafana/tikv_details.json
-=======
-7165b26e13b060d49ee89568a15bd08488411c9238b8f628ce76f9fc694d956e  ./metrics/grafana/tikv_details.json
->>>>>>> 2a4427ef64 (resource_control, read_pool: unify background/foreground CPU pressure scoring (#19788))
+bd0b323003f4b72a125cd7fa8a62a06a8e461292ff7ab3f9ad0ca14fffed6488  ./metrics/grafana/tikv_details.json

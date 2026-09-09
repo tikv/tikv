@@ -16,12 +16,6 @@ use strum::EnumCount;
 use tikv_util::{
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
-<<<<<<< HEAD
-=======
-    thread_name_prefix::{
-        GRPC_SERVER_THREAD, SCHEDULE_WORKER_PRIORITY_THREAD, UNIFIED_READ_POOL_THREAD,
-    },
->>>>>>> 2a4427ef64 (resource_control, read_pool: unify background/foreground CPU pressure scoring (#19788))
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
@@ -184,7 +178,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             bg_limiter,
             prev_stats: array::from_fn(|_| GroupStatistics::default()),
             prev_had_background: false,
-            grpc_cpu_tracker: ThreadGroupCpuTracker::new(GRPC_SERVER_THREAD),
+            grpc_cpu_tracker: ThreadGroupCpuTracker::new("grpc-server"),
             caps: ResourceCapacities {
                 total_cpu_cores: SysQuota::cpu_cores_quota(),
                 grpc_concurrency: grpc_concurrency as f64,

@@ -774,14 +774,6 @@ impl Runnable for ReadPoolConfigRunner {
             }
             Task::AutoAdjust(s) => {
                 self.auto_adjust = s;
-<<<<<<< HEAD
-                // when auto adjust is disabled, reset to the config pool size.
-                if !s && self.cur_thread_count != self.core_thread_count {
-                    self.handle.scale_pool_size(self.core_thread_count);
-                    self.cur_thread_count = self.core_thread_count;
-                }
-=======
->>>>>>> 2a4427ef64 (resource_control, read_pool: unify background/foreground CPU pressure scoring (#19788))
             }
             Task::MaxTasksPerWorker(s) => {
                 self.handle.set_max_tasks_per_worker(s);
@@ -2109,8 +2101,6 @@ mod tests {
         let _ = block_tx.send(());
         thread::sleep(Duration::from_millis(300));
     }
-<<<<<<< HEAD
-=======
 
     #[test]
     fn test_auto_adjust_disable_notifies_pool_size_change() {
@@ -2182,5 +2172,4 @@ mod tests {
 
         assert_eq!(runner.cur_thread_count, core_thread_count);
     }
->>>>>>> 2a4427ef64 (resource_control, read_pool: unify background/foreground CPU pressure scoring (#19788))
 }
