@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker_token, with_tls_tracker};
+use ::tracker::{FutureTrack, get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -477,8 +477,6 @@ impl<E: Engine> Tracker<E> {
     }
 }
 
-<<<<<<< HEAD
-=======
 impl<E: Engine> FutureTrack for &mut Tracker<E> {
     fn on_poll_begin(&mut self) {
         self.on_begin_item();
@@ -505,7 +503,6 @@ impl<E: Engine> FutureTrack for PollPerfContextTracker<'_, E> {
     }
 }
 
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
 impl<E: Engine> Drop for Tracker<E> {
     /// `Tracker` may be dropped without even calling `on_begin_all_items`. For
     /// example, if get snapshot failed. So we fast-forward if some steps
