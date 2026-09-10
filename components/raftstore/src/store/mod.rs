@@ -19,6 +19,8 @@ pub mod util;
 mod async_io;
 mod bootstrap;
 mod compaction_guard;
+mod disk_probe;
+mod fail_fast;
 mod hibernate_state;
 mod peer_storage;
 mod region_snapshot;
@@ -47,6 +49,7 @@ pub use self::{
     compaction_guard::{CompactionGuardGeneratorFactory, ForcePartitionRangeManager},
     config::Config,
     entry_storage::{EntryStorage, RaftlogFetchResult, MAX_INIT_ENTRY_COUNT},
+    fail_fast::FailFastMonitor,
     fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter},
     hibernate_state::{GroupState, HibernateState},
     memory::*,

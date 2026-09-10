@@ -1383,7 +1383,7 @@ def ThreadCPU() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"sst_.*"'],
+                            label_selectors=['name=~"(sst_|impwkr_).*"'],
                         ),
                     ),
                 ],
@@ -10163,6 +10163,21 @@ def SlowTrendStatistics() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Disk Probe Duration",
+                description="The fail-fast disk probe duration by disk and outcome.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_disk_probe_duration_seconds",
+                            by_labels=["instance", "disk", "outcome"],
+                        ),
+                        legend_format="{{instance}}-{{disk}}-{{outcome}}-0.99",
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -10278,18 +10293,6 @@ def ResourceControl() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Background Task Total Wait Duration",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_resource_control_background_task_wait_duration",
-                            by_labels=["instance", "resource_group"],
-                        ),
-                    ),
-                ],
-            ),
-            graph_panel(
                 title="Priority Quota Limit",
                 description="The memory usage of the resource control module.",
                 yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
@@ -10298,6 +10301,339 @@ def ResourceControl() -> RowPanel:
                         expr=expr_sum(
                             "tikv_resource_control_priority_quota_limit",
                             by_labels=["instance", "priority"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Analyze read ops per second (total vs block read)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_total_op_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="total-op/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_iops"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="block-read/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'req="analyze_full_sampling"',
+                                'metric="block_read_count"',
+                            ],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="copr-block-read/{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze next batch count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="next_batch_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def LoadShedding() -> RowPanel:
+    layout = Layout(title="Load Shedding")
+    # Row 1: RU rates per group
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Utilization % per Resource Group",
+                description="Historical (live sliding average), baseline (frozen while the group is selected as noisy) and current CPU utilization % per resource group (100% = 1 core).",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_historical_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="historical-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_baseline",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="baseline-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_current_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="current-{{resource_group}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Resource Utilization",
+                description="Total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_bg_resource_utilization",
+                            by_labels=["type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Unified Read Pool CPU",
+                description="Historical (live sliding average), baseline (floor frozen at overload onset), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, as a percentage of one core (100 = 1 core).",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_read_pool_cpu_percent",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Resource Pressure Scores",
+                description="Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_resource_score",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 2: Quota limits
+    layout.row(
+        [
+            graph_panel(
+                title="Resource Group Quota Limit",
+                description="Current rate limit per resource group (0 = unlimited, hidden).",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_quota_limit",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Quota Limit",
+                description="Current quota limit for background resource groups, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_background_quota_limiter",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 3: Deprioritized/delayed/rejected + currently delayed
+    layout.row(
+        [
+            graph_panel(
+                title="Deprioritized / Delayed / Rejected Requests",
+                description="Rate of deprioritized (phase 1), delayed, and rejected requests.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_two_phase_throttled_requests_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="deprioritized-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_delayed_requests_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="delayed-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_rejected_requests_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="rejected-{{resource_group}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Currently Delayed Requests",
+                description="Number of requests currently sitting in admission control delay.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_admission_currently_delayed",
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 4: Delay duration
+    layout.row(
+        [
+            graph_panel(
+                title="Admission Delay Duration",
+                description="Delay duration imposed by foreground admission control.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_resource_control_admission_delay_duration_seconds",
+                            by_labels=["resource_group"],
+                        ),
+                        legend_format="99.99%-{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_resource_control_admission_delay_duration_seconds",
+                            by_labels=["resource_group"],
+                        ),
+                        legend_format="99%-{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_resource_control_admission_delay_duration_seconds",
+                            by_labels=["resource_group"],
+                        ),
+                        legend_format="avg-{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Read Pool Rejections",
+                description="Requests rejected before they enter the unified read pool, per resource group. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the queue capacity gate and has no such fallback -- the client sees a retry against the same leader.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_unified_read_pool_busy_threshold_rejected_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="busy-threshold-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_unified_read_pool_full_rejected_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="pool-full-{{resource_group}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def TikvConfig() -> RowPanel:
+    layout = Layout(title="Config")
+    # RocksDB DB Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB DB Config",
+                description="TiKV RocksDB DB Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_db",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # RocksDB CF Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB CF Config",
+                description="TiKV RocksDB CF Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_cf",
+                        ).extra(
+                            " or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)"
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Flow Control Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Flow Control Config",
+                description="TiKV Flow Control Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_flow_control",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Raftstore Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Raftstore Config",
+                description="TiKV Raftstore Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_raftstore",
                         ),
                     ),
                 ],
@@ -10371,6 +10707,7 @@ dashboard = Dashboard(
         Memory(),
         # Infrequently Used
         ResourceControl(),
+        LoadShedding(),
         StatusServer(),
         Encryption(),
         TTL(),

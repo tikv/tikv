@@ -142,7 +142,9 @@ where
         let cpu_usage = {
             // Take out the region CPU record.
             let cpu_time_duration = Duration::from_millis(
-                self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
+                self.region_cpu_records_since_region_heartbeat
+                    .remove(&region_id)
+                    .unwrap_or(0) as u64,
             );
             let interval_second = unix_secs_now.into_inner() - last_report_ts.into_inner();
             // Keep consistent with the calculation of cpu_usages in a store heartbeat.
@@ -153,6 +155,8 @@ where
                 0
             }
         };
+        let mut cpu_stats = pdpb::CpuStats::default();
+        cpu_stats.set_unified_read(cpu_usage);
 
         let region_stat = RegionStat {
             down_peers: task.down_peers,
@@ -167,6 +171,7 @@ where
             approximate_keys,
             last_report_ts,
             cpu_usage,
+            cpu_stats,
         };
         self.store_stat
             .region_bytes_written
@@ -406,15 +411,27 @@ where
     pub fn handle_update_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
-        Self::calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
+        Self::calculate_region_cpu_records(
+            self.store_id,
+            records.clone(),
+            &mut self.region_cpu_records_since_region_heartbeat,
+        );
+        Self::calculate_region_cpu_records(
+            self.store_id,
+            records,
+            &mut self.region_cpu_records_since_store_heartbeat,
+        );
     }
 
     pub fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.remove(&region_id) {
-            None => {}
-            Some(_) => {
-                info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id)
-            }
+        let removed = remove_peer_stat_from_maps(
+            region_id,
+            &mut self.region_peers,
+            &mut self.region_cpu_records_since_region_heartbeat,
+            &mut self.region_cpu_records_since_store_heartbeat,
+        );
+        if removed {
+            info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id);
         }
     }
 
@@ -445,5 +462,42 @@ where
             // Reporting a region heartbeat later will clear the corresponding record.
             *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
         }
+    }
+}
+
+fn remove_peer_stat_from_maps(
+    region_id: u64,
+    region_peers: &mut HashMap<u64, PeerStat>,
+    region_cpu_records_since_region_heartbeat: &mut HashMap<u64, u32>,
+    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
+) -> bool {
+    let removed = region_peers.remove(&region_id).is_some();
+    region_cpu_records_since_region_heartbeat.remove(&region_id);
+    region_cpu_records_since_store_heartbeat.remove(&region_id);
+    removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_peer_stat_from_maps() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records_since_region_heartbeat = HashMap::default();
+        region_cpu_records_since_region_heartbeat.insert(1, 10);
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(1, 12);
+
+        assert!(remove_peer_stat_from_maps(
+            1,
+            &mut region_peers,
+            &mut region_cpu_records_since_region_heartbeat,
+            &mut region_cpu_records_since_store_heartbeat,
+        ));
+        assert!(region_peers.is_empty());
+        assert!(region_cpu_records_since_region_heartbeat.is_empty());
+        assert!(region_cpu_records_since_store_heartbeat.is_empty());
     }
 }

@@ -682,6 +682,8 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    // this test verifies that memory quota matches /proc/meminfo which is not true for docker
+    #[cfg(not(feature = "docker_test"))]
     fn test_memory() {
         let mut mem_total_kb: u64 = 0;
         {

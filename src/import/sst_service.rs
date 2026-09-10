@@ -710,7 +710,7 @@ macro_rules! impl_write {
                                     writer.write(batch)?;
                                     Ok(writer)
                                 };
-                                with_resource_limiter(f, limiter.clone())
+                                with_resource_limiter(f, limiter.clone(), true, false, None, 0)
                                     .await
                                     .map(|w| (w, limiter))
                             },
@@ -727,7 +727,9 @@ macro_rules! impl_write {
                         Ok(metas)
                     };
 
-                    let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
+                    let metas: Result<_> =
+                        with_resource_limiter(finish_fn, resource_limiter, true, false, None, 0)
+                            .await;
                     let metas = match metas {
                         Ok(r) => r,
                         Err(e) => return (Err(e), None),
@@ -1050,6 +1052,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
+                true,
+                false,
+                None,
+                0,
             )
             .await;
             let mut resp = DownloadResponse::default();
@@ -1175,6 +1181,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
+                true,
+                false,
+                None,
+                0,
             )
             .await;
 

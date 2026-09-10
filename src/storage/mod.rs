@@ -1908,7 +1908,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched
             .get_sched_pool()
             // NOTE: we don't support background resource control for raw api.
-            .spawn("", metadata, pri, future)
+            .spawn("", metadata, pri, future, 0)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -3327,17 +3327,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Fut: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
+        if let Err(busy_err) = self
+            .read_pool
+            .check_busy_threshold(busy_threshold, metadata.group_name())
+        {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
             return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
         }
-        FuturesEither::Right(
-            self.read_pool
+
+        let metadata = metadata.deep_clone();
+        let read_pool = self.read_pool.clone();
+        FuturesEither::Right(async move {
+            read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
-        )
+                .await?
+        })
     }
 
     pub fn update_txn_status_cache(

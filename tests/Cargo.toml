@@ -69,6 +69,7 @@ snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
+docker_test = []  # Feature flag for Docker-specific tests
 
 [dependencies]
 api_version = { workspace = true }
