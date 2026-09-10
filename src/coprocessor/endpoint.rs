@@ -6,7 +6,7 @@ use std::{
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
 };
 use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
@@ -562,7 +562,7 @@ impl<E: Engine> Endpoint<E> {
 
         let deadline = tracker.req_ctx.deadline;
         let handle_request_future = check_deadline(handler.handle_request(), deadline);
-        let handle_request_future = track(handle_request_future, &mut tracker);
+        let handle_request_future = track(handle_request_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(
@@ -854,7 +854,11 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request().await;
+                    let result = track(
+                        handler.handle_streaming_request(),
+                        tracker.poll_perf_context_tracker(),
+                    )
+                    .await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
