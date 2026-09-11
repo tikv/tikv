@@ -92,13 +92,17 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression> {
         let mut expr_nodes = Vec::new();
-        append_rpn_nodes_recursively(
-            tree_node,
-            &mut expr_nodes,
+        let mut build_ctx = RpnBuildContext::new(
             ctx,
             super::super::map_expr_node_to_rpn_func,
             super::super::map_expr_node_to_sc_func,
             max_columns,
+        );
+        build_ctx.append_rpn_nodes_recursively(
+            tree_node,
+            ScalarFuncSig::Unspecified,
+            0,
+            &mut expr_nodes,
         )?;
         Ok(RpnExpression::from(expr_nodes))
     }
@@ -134,13 +138,17 @@ impl RpnExpressionBuilder {
         F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
     {
         let mut expr_nodes = Vec::new();
-        append_rpn_nodes_recursively(
-            tree_node,
-            &mut expr_nodes,
+        let mut build_ctx = RpnBuildContext::new(
             ctx,
             fn_mapper,
             super::super::map_expr_node_to_sc_func,
             max_columns,
+        );
+        build_ctx.append_rpn_nodes_recursively(
+            tree_node,
+            ScalarFuncSig::Unspecified,
+            0,
+            &mut expr_nodes,
         )?;
         Ok(RpnExpression::from(expr_nodes))
     }
@@ -274,126 +282,115 @@ impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
 /// B E F G C D A
 /// ```
 ///
-/// The transform process is very much like a post-order traversal. This
-/// function does it recursively.
-fn append_rpn_nodes_recursively<F, SCF>(
-    tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-    ctx: &mut EvalContext,
+/// The transform process is mostly a post-order traversal. When short-circuit
+/// evaluation is enabled, logical calls are converted with each argument in a
+/// separate RPN expression; adjacent associative `AND`/`OR` calls may be
+/// flattened to avoid recursive evaluation.
+///
+/// This context carries the dependencies shared by every recursive call.
+struct RpnBuildContext<'a, F, SCF> {
+    ctx: &'a mut EvalContext,
     fn_mapper: F,
     sc_fn_mapper: SCF,
     max_columns: usize,
     // TODO: Passing `max_columns` is only a workaround solution that works when we only check
     // column offset. To totally check whether or not the expression is valid, we need to pass in
     // the full schema instead.
-) -> Result<usize>
+}
+
+impl<'a, F, SCF> RpnBuildContext<'a, F, SCF>
 where
-    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
-    SCF: Fn(&Expr) -> Option<ShortCircuitFnMeta> + Copy,
+    F: Fn(&Expr) -> Result<RpnFnMeta>,
+    SCF: Fn(&Expr) -> Option<ShortCircuitFnMeta>,
 {
-    match tree_node.get_tp() {
-        ExprType::ScalarFunc => handle_node_fn_call(
-            tree_node,
-            rpn_nodes,
+    fn new(ctx: &'a mut EvalContext, fn_mapper: F, sc_fn_mapper: SCF, max_columns: usize) -> Self {
+        Self {
             ctx,
             fn_mapper,
             sc_fn_mapper,
             max_columns,
-        ),
-        ExprType::ColumnRef => {
-            handle_node_column_ref(tree_node, rpn_nodes, max_columns)?;
-            Ok(0)
-        }
-        _ => {
-            handle_node_constant(tree_node, rpn_nodes, ctx)?;
-            Ok(0)
         }
     }
-}
 
-#[inline]
-fn handle_node_column_ref(
-    tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-    max_columns: usize,
-) -> Result<()> {
-    let offset = tree_node
-        .get_val()
-        .read_i64()
-        .map_err(|_| other_err!("Unable to decode column reference offset from the request"))?
-        as usize;
-    if offset >= max_columns {
-        return Err(other_err!(
-            "Invalid column offset (schema has {} columns, access index {})",
-            max_columns,
-            offset
-        ));
+    fn append_rpn_nodes_recursively(
+        &mut self,
+        tree_node: Expr,
+        parent_sig: ScalarFuncSig,
+        depth: usize,
+        rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ) -> Result<()> {
+        match tree_node.get_tp() {
+            ExprType::ScalarFunc => {
+                self.handle_node_fn_call(tree_node, parent_sig, depth, rpn_nodes)
+            }
+            ExprType::ColumnRef => {
+                self.handle_node_column_ref(tree_node, rpn_nodes)?;
+                Ok(())
+            }
+            _ => {
+                self.handle_node_constant(tree_node, rpn_nodes)?;
+                Ok(())
+            }
+        }
     }
-    rpn_nodes.push(RpnExpressionNode::ColumnRef { offset });
-    Ok(())
-}
 
-#[inline]
-fn handle_node_fn_call<F, SCF>(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-    ctx: &mut EvalContext,
-    fn_mapper: F,
-    sc_fn_mapper: SCF,
-    max_columns: usize,
-) -> Result<usize>
-where
-    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
-    SCF: Fn(&Expr) -> Option<ShortCircuitFnMeta> + Copy,
-{
-    let short_circuit_func_meta = sc_fn_mapper(&tree_node);
+    #[inline]
+    fn handle_node_fn_call(
+        &mut self,
+        mut tree_node: Expr,
+        parent_sig: ScalarFuncSig,
+        depth: usize,
+        rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ) -> Result<()> {
+        let short_circuit_func_meta = (self.sc_fn_mapper)(&tree_node);
 
-    // Map, validate, and initialize metadata before taking the children because
-    // each of these operations may inspect the original expression tree.
-    let func_meta = fn_mapper(&tree_node)?;
-    (func_meta.validator_ptr)(&tree_node).map_err(|e| {
-        other_err!(
-            "Invalid {} (sig = {:?}) signature: {}",
-            func_meta.name,
-            tree_node.get_sig(),
-            e
-        )
-    })?;
+        // Map, validate, and initialize metadata before taking the children because
+        // each of these operations may inspect the original expression tree.
+        let func_meta = (self.fn_mapper)(&tree_node)?;
+        (func_meta.validator_ptr)(&tree_node).map_err(|e| {
+            other_err!(
+                "Invalid {} (sig = {:?}) signature: {}",
+                func_meta.name,
+                tree_node.get_sig(),
+                e
+            )
+        })?;
 
-    let metadata = (func_meta.metadata_expr_ptr)(&mut tree_node)?;
-    let args: Vec<_> = tree_node.take_children().into();
-    let args_len = args.len();
+        let metadata = (func_meta.metadata_expr_ptr)(&mut tree_node)?;
+        let args: Vec<_> = tree_node.take_children().into();
+        let args_len = args.len();
 
-    let mut max_argument_depth = 0;
+        let short_circuit_depth = short_circuit_func_meta.map_or(depth, |func_meta| {
+            if can_flatten(parent_sig, func_meta.sig) {
+                depth
+            } else {
+                depth.saturating_add(1)
+            }
+        });
+        let can_short_circuit = short_circuit_func_meta.is_some()
+            && self
+                .ctx
+                .cfg
+                .flag
+                .contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION)
+            && short_circuit_depth <= MAX_SHORT_CIRCUIT_NESTING_DEPTH;
 
-    match short_circuit_func_meta {
-        Some(short_circuit_func_meta)
-            if ctx.cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION) =>
-        {
+        if can_short_circuit {
+            let short_circuit_func_meta = short_circuit_func_meta.unwrap();
             let mut parsed_args = Vec::with_capacity(args_len);
             let mut is_short_circuit_worthwhile = false;
-            let mut max_sc_depth = 0;
             for arg in args {
                 let mut arg_nodes = Vec::new();
-                let short_circuit_depth = append_rpn_nodes_recursively(
+
+                self.append_rpn_nodes_recursively(
                     arg,
+                    short_circuit_func_meta.sig,
+                    short_circuit_depth,
                     &mut arg_nodes,
-                    ctx,
-                    fn_mapper,
-                    sc_fn_mapper,
-                    max_columns,
                 )?;
 
-                let should_flatten = should_flatten(short_circuit_func_meta, &arg_nodes);
-                max_argument_depth = max_argument_depth.max(short_circuit_depth);
-                max_sc_depth = max_sc_depth.max(if should_flatten {
-                    short_circuit_depth.saturating_sub(1)
-                } else {
-                    short_circuit_depth
-                });
-                is_short_circuit_worthwhile |= should_flatten || !is_simple_expr(&arg_nodes);
-                is_short_circuit_worthwhile &=
-                    max_sc_depth.saturating_add(1) <= MAX_SHORT_CIRCUIT_NESTING_DEPTH;
+                is_short_circuit_worthwhile |= should_flatten(short_circuit_func_meta, &arg_nodes)
+                    || !is_simple_expr(&arg_nodes);
 
                 parsed_args.push(arg_nodes);
             }
@@ -413,7 +410,7 @@ where
                     args: short_circuit_args.into_boxed_slice(),
                     field_type: tree_node.take_field_type(),
                 });
-                return Ok(max_sc_depth + 1);
+                return Ok(());
             }
 
             // The children have already been converted to RPN while deciding whether
@@ -422,30 +419,116 @@ where
             for mut arg_nodes in parsed_args {
                 rpn_nodes.append(&mut arg_nodes);
             }
-        }
-        _ => {
+        } else {
             // Visit children first, then push current node, so that it is a post-order
             // traversal.
             for arg in args {
-                max_argument_depth = max_argument_depth.max(append_rpn_nodes_recursively(
+                self.append_rpn_nodes_recursively(
                     arg,
+                    tree_node.get_sig(),
+                    short_circuit_depth,
                     rpn_nodes,
-                    ctx,
-                    fn_mapper,
-                    sc_fn_mapper,
-                    max_columns,
-                )?)
+                )?
             }
         }
-    };
+        rpn_nodes.push(RpnExpressionNode::FnCall {
+            func_meta,
+            args_len,
+            field_type: tree_node.take_field_type(),
+            metadata,
+        });
+        Ok(())
+    }
 
-    rpn_nodes.push(RpnExpressionNode::FnCall {
-        func_meta,
-        args_len,
-        field_type: tree_node.take_field_type(),
-        metadata,
-    });
-    Ok(max_argument_depth)
+    #[inline]
+    fn handle_node_column_ref(
+        &self,
+        tree_node: Expr,
+        rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ) -> Result<()> {
+        let offset =
+            tree_node.get_val().read_i64().map_err(|_| {
+                other_err!("Unable to decode column reference offset from the request")
+            })? as usize;
+        if offset >= self.max_columns {
+            return Err(other_err!(
+                "Invalid column offset (schema has {} columns, access index {})",
+                self.max_columns,
+                offset
+            ));
+        }
+        rpn_nodes.push(RpnExpressionNode::ColumnRef { offset });
+        Ok(())
+    }
+
+    #[inline]
+    fn handle_node_constant(
+        &mut self,
+        mut tree_node: Expr,
+        rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ) -> Result<()> {
+        let eval_type = box_try!(EvalType::try_from(
+            tree_node.get_field_type().as_accessor().tp()
+        ));
+
+        let scalar_value = match tree_node.get_tp() {
+            ExprType::Null => get_scalar_value_null(eval_type),
+            ExprType::Int64 if eval_type == EvalType::Int => {
+                extract_scalar_value_int64(tree_node.take_val())?
+            }
+            ExprType::Uint64 if eval_type == EvalType::Int => {
+                extract_scalar_value_uint64(tree_node.take_val())?
+            }
+            ExprType::String | ExprType::Bytes if eval_type == EvalType::Bytes => {
+                extract_scalar_value_bytes(tree_node.take_val())?
+            }
+            ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
+                extract_scalar_value_float(tree_node.take_val())?
+            }
+            ExprType::MysqlTime if eval_type == EvalType::DateTime => {
+                extract_scalar_value_date_time(
+                    tree_node.take_val(),
+                    tree_node.get_field_type(),
+                    self.ctx,
+                )?
+            }
+            ExprType::MysqlDuration if eval_type == EvalType::Duration => {
+                extract_scalar_value_duration(tree_node.take_val())?
+            }
+            ExprType::MysqlDecimal if eval_type == EvalType::Decimal => {
+                extract_scalar_value_decimal(tree_node.take_val())?
+            }
+            ExprType::MysqlJson if eval_type == EvalType::Json => {
+                extract_scalar_value_json(tree_node.take_val())?
+            }
+            ExprType::MysqlEnum if eval_type == EvalType::Enum => {
+                extract_scalar_value_enum(tree_node.take_val(), tree_node.get_field_type())?
+            }
+            ExprType::MysqlBit if eval_type == EvalType::Int => {
+                extract_scalar_value_uint64_from_bits(tree_node.take_val())?
+            }
+            ExprType::TiDbVectorFloat32 if eval_type == EvalType::VectorFloat32 => {
+                extract_scalar_value_vector_float32(tree_node.take_val())?
+            }
+            expr_type => {
+                return Err(other_err!(
+                    "Unexpected ExprType {:?} and EvalType {:?}",
+                    expr_type,
+                    eval_type
+                ));
+            }
+        };
+        rpn_nodes.push(RpnExpressionNode::Constant {
+            value: scalar_value,
+            field_type: tree_node.take_field_type(),
+        });
+        Ok(())
+    }
+}
+
+#[inline]
+fn can_flatten(father: ScalarFuncSig, son: ScalarFuncSig) -> bool {
+    father == son && (father == ScalarFuncSig::LogicalOr || father == ScalarFuncSig::LogicalAnd)
 }
 
 #[inline]
@@ -460,9 +543,7 @@ fn should_flatten(father_func: ShortCircuitFnMeta, arg: &[RpnExpressionNode]) ->
         RpnExpressionNode::ShortCircuitFnCall {
             func_meta: son_func,
             ..
-        } if son_func.sig == father_func.sig
-            && (son_func.sig == ScalarFuncSig::LogicalOr
-                || son_func.sig == ScalarFuncSig::LogicalAnd)
+        } if can_flatten(father_func.sig, son_func.sig)
     )
 }
 
@@ -490,66 +571,6 @@ fn append_short_circuit_arg(
     } else {
         output.push(RpnExpression::from(arg));
     }
-}
-
-#[inline]
-fn handle_node_constant(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-    ctx: &mut EvalContext,
-) -> Result<()> {
-    let eval_type = box_try!(EvalType::try_from(
-        tree_node.get_field_type().as_accessor().tp()
-    ));
-
-    let scalar_value = match tree_node.get_tp() {
-        ExprType::Null => get_scalar_value_null(eval_type),
-        ExprType::Int64 if eval_type == EvalType::Int => {
-            extract_scalar_value_int64(tree_node.take_val())?
-        }
-        ExprType::Uint64 if eval_type == EvalType::Int => {
-            extract_scalar_value_uint64(tree_node.take_val())?
-        }
-        ExprType::String | ExprType::Bytes if eval_type == EvalType::Bytes => {
-            extract_scalar_value_bytes(tree_node.take_val())?
-        }
-        ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
-            extract_scalar_value_float(tree_node.take_val())?
-        }
-        ExprType::MysqlTime if eval_type == EvalType::DateTime => {
-            extract_scalar_value_date_time(tree_node.take_val(), tree_node.get_field_type(), ctx)?
-        }
-        ExprType::MysqlDuration if eval_type == EvalType::Duration => {
-            extract_scalar_value_duration(tree_node.take_val())?
-        }
-        ExprType::MysqlDecimal if eval_type == EvalType::Decimal => {
-            extract_scalar_value_decimal(tree_node.take_val())?
-        }
-        ExprType::MysqlJson if eval_type == EvalType::Json => {
-            extract_scalar_value_json(tree_node.take_val())?
-        }
-        ExprType::MysqlEnum if eval_type == EvalType::Enum => {
-            extract_scalar_value_enum(tree_node.take_val(), tree_node.get_field_type())?
-        }
-        ExprType::MysqlBit if eval_type == EvalType::Int => {
-            extract_scalar_value_uint64_from_bits(tree_node.take_val())?
-        }
-        ExprType::TiDbVectorFloat32 if eval_type == EvalType::VectorFloat32 => {
-            extract_scalar_value_vector_float32(tree_node.take_val())?
-        }
-        expr_type => {
-            return Err(other_err!(
-                "Unexpected ExprType {:?} and EvalType {:?}",
-                expr_type,
-                eval_type
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
 }
 
 #[inline]
@@ -736,6 +757,69 @@ mod tests {
             .build();
         }
         node
+    }
+
+    fn same_logical_expr(depth: usize, sig: ScalarFuncSig) -> Expr {
+        let mut node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(depth, FieldTypeTp::LongLong))
+                .build();
+        for level in (0..depth).rev() {
+            node = ExprDefBuilder::scalar_func(sig, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(level, FieldTypeTp::LongLong))
+                .push_child(node)
+                .build();
+        }
+        node
+    }
+
+    fn contains_regular_logical_call(expr: &RpnExpression) -> bool {
+        expr.iter().any(|node| match node {
+            RpnExpressionNode::FnCall { func_meta, .. } => {
+                func_meta.name == "logical_or" || func_meta.name == "logical_and"
+            }
+            RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                args.iter().any(contains_regular_logical_call)
+            }
+            _ => false,
+        })
+    }
+
+    fn assert_no_short_circuit_below_regular_logical(expr: &RpnExpression) -> bool {
+        let mut stack = Vec::with_capacity(expr.len());
+        for node in expr.iter() {
+            let contains_short_circuit = match node {
+                RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                    for arg in args {
+                        assert_no_short_circuit_below_regular_logical(arg);
+                    }
+                    true
+                }
+                RpnExpressionNode::FnCall {
+                    func_meta,
+                    args_len,
+                    ..
+                } => {
+                    assert!(stack.len() >= *args_len);
+                    let args_begin = stack.len() - *args_len;
+                    let args_contain_short_circuit = stack[args_begin..].iter().any(|&v| v);
+                    if func_meta.name == "logical_or" || func_meta.name == "logical_and" {
+                        assert!(
+                            !args_contain_short_circuit,
+                            "regular {} contains a short-circuit descendant",
+                            func_meta.name
+                        );
+                    }
+                    stack.truncate(args_begin);
+                    args_contain_short_circuit
+                }
+                _ => false,
+            };
+            stack.push(contains_short_circuit);
+        }
+
+        assert_eq!(stack.len(), 1);
+        stack[0]
     }
 
     fn nested_logical_columns(
@@ -1205,6 +1289,37 @@ mod tests {
     }
 
     #[test]
+    fn test_flattened_calls_do_not_consume_nesting_budget() {
+        let limit = MAX_SHORT_CIRCUIT_NESTING_DEPTH;
+        for depth in [limit + 1, 8 * limit] {
+            for sig in [ScalarFuncSig::LogicalOr, ScalarFuncSig::LogicalAnd] {
+                let exp = thread::Builder::new()
+                    .stack_size(16 * 1024 * 1024)
+                    .spawn_wrapper(move || {
+                        RpnExpressionBuilder::build_from_expr_tree(
+                            same_logical_expr(depth, sig),
+                            &mut short_circuit_context(),
+                            depth + 1,
+                        )
+                        .unwrap()
+                    })
+                    .unwrap()
+                    .join()
+                    .unwrap();
+
+                assert_eq!(short_circuit_depth(&exp), 1);
+                assert!(!contains_regular_logical_call(&exp));
+                match exp.last().unwrap() {
+                    RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                        assert_eq!(args.len(), depth + 1);
+                    }
+                    node => panic!("expected flattened short-circuit call, got {:?}", node),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_short_circuit_depth_limit_stress_on_small_stack() {
         let limit = MAX_SHORT_CIRCUIT_NESTING_DEPTH;
         for depth in [limit - 1, limit, limit + 1, 8 * limit] {
@@ -1239,6 +1354,14 @@ mod tests {
                                 format!("depth={depth}, root={root_sig:?}, cast={wrap_in_cast}");
                             assert_eq!(short_circuit_depth(&lazy), depth.min(limit));
                             assert_eq!(short_circuit_depth(&eager), 0);
+                            if depth > limit {
+                                assert!(matches!(
+                                    lazy.last(),
+                                    Some(RpnExpressionNode::ShortCircuitFnCall { .. })
+                                ));
+                                assert!(contains_regular_logical_call(&lazy));
+                                assert_no_short_circuit_below_regular_logical(&lazy);
+                            }
                             // Collect metadata on the constrained stack too.
                             assert_eq!(lazy.node_count(), eager.node_count());
                             assert_eq!(lazy.column_ref_count(), depth + 1);
