@@ -49,8 +49,8 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes,
+    FutureExt, ResourceTagFactory, io_collection_config, record_logical_read_bytes,
+    record_logical_write_bytes, record_network_in_bytes,
 };
 use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
@@ -1448,8 +1448,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
             let begin_instant = Instant::now();
-            let res = unsafe {
-                with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
+            // A resumed-lock command can merge requests with different tags. TopSQL
+            // intentionally attributes the batch to the command's first context as
+            // its representative, avoiding O(batch size) PerfContext work here.
+            let observe_perf_context = tag != CommandKind::acquire_pessimistic_lock_resumed
+                || io_collection_config().detailed_io_collection_enabled();
+            let res = if observe_perf_context {
+                unsafe {
+                    with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
+                }
+            } else {
+                task.process_write(snapshot, context)
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
