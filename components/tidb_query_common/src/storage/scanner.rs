@@ -25,6 +25,7 @@ pub struct RangesScanner<T, F> {
     scan_backward_in_range: bool,
     is_key_only: bool,
     load_commit_ts: bool,
+    range_versions: Option<Vec<u64>>,
 
     scanned_rows_per_range: Vec<usize>,
 
@@ -75,6 +76,10 @@ pub struct RangesScannerOptions<T> {
     pub is_key_only: bool,            // TODO: This can be const generics
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
     pub load_commit_ts: bool,
+    /// Per-range read ts aligned with `ranges`.
+    ///
+    /// When present, it is only effective for point ranges.
+    pub range_versions: Option<Vec<u64>>,
 }
 
 impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
@@ -86,6 +91,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             is_key_only,
             is_scanned_range_aware,
             load_commit_ts,
+            range_versions,
         }: RangesScannerOptions<T>,
     ) -> RangesScanner<T, F> {
         let ranges_len = ranges.len();
@@ -96,6 +102,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             scan_backward_in_range,
             is_key_only,
             load_commit_ts,
+            range_versions,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
             is_scanned_range_aware,
             current_range: IntervalRange {
@@ -133,8 +140,18 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     }
                     self.ranges_iter.notify_drained();
                     self.scanned_rows_per_range.push(0);
-                    self.storage
-                        .get_entry(self.is_key_only, self.load_commit_ts, r)?
+                    if let Some(versions) = self.range_versions.as_ref() {
+                        let idx = self.scanned_rows_per_range.len() - 1;
+                        self.storage.get_entry_at_ts(
+                            self.is_key_only,
+                            self.load_commit_ts,
+                            r,
+                            versions[idx],
+                        )?
+                    } else {
+                        self.storage
+                            .get_entry(self.is_key_only, self.load_commit_ts, r)?
+                    }
                 }
                 IterStatus::NewRange(Range::Interval(r)) => {
                     if self.is_scanned_range_aware {
@@ -331,6 +348,7 @@ mod tests {
             IntervalRange::from(("a", "c")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -368,6 +386,7 @@ mod tests {
             IntervalRange::from(("a", "bar_2")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -400,6 +419,7 @@ mod tests {
             PointRange::from("bar_3").into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: false,
@@ -441,6 +461,7 @@ mod tests {
             IntervalRange::from(("a", "z")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: false,
@@ -497,6 +518,7 @@ mod tests {
         // No range
         let ranges = vec![];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -518,6 +540,7 @@ mod tests {
         // Empty interval range
         let ranges = vec![IntervalRange::from(("x", "xb")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -535,6 +558,7 @@ mod tests {
         // Empty point range
         let ranges = vec![PointRange::from("x").into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -552,6 +576,7 @@ mod tests {
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -591,6 +616,7 @@ mod tests {
             IntervalRange::from(("bar_4", "box")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: false,
@@ -637,6 +663,7 @@ mod tests {
         // No range
         let ranges = vec![];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -658,6 +685,7 @@ mod tests {
         // Empty interval range
         let ranges = vec![IntervalRange::from(("x", "xb")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -675,6 +703,7 @@ mod tests {
         // Empty point range
         let ranges = vec![PointRange::from("x").into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -692,6 +721,7 @@ mod tests {
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -729,6 +759,7 @@ mod tests {
             IntervalRange::from(("foo", "foo_3")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: true,
@@ -769,6 +800,7 @@ mod tests {
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: false,
@@ -822,6 +854,7 @@ mod tests {
             IntervalRange::from(("bar_4", "box")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: false,
@@ -878,6 +911,7 @@ mod tests {
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage: storage.clone(),
             ranges,
             scan_backward_in_range: true,
@@ -929,6 +963,7 @@ mod tests {
             IntervalRange::from(("foo", "foo_3")).into(),
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            range_versions: None,
             storage,
             ranges,
             scan_backward_in_range: true,

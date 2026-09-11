@@ -53,6 +53,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         is_backward: bool,
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
+        range_versions: Option<Vec<u64>>,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -93,6 +94,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
 
         let load_commit_ts = column_id_index.contains_key(&EXTRA_COMMIT_TS_COL_ID);
         let no_common_handle = primary_column_ids.is_empty();
+        let accept_point_range = no_common_handle || range_versions.is_some();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -108,9 +110,10 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: no_common_handle,
+            accept_point_range,
             is_scanned_range_aware,
             load_commit_ts,
+            range_versions,
         })?;
         Ok(Self(wrapper))
     }
@@ -747,6 +750,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         )
         .unwrap();
 
@@ -771,6 +775,269 @@ mod tests {
             helper.expect_table_values(col_idxs, start_row, expect_rows, result.physical_columns);
             start_row += expect_rows;
         }
+    }
+
+    #[test]
+    fn test_point_ranges_use_range_versions() {
+        const TABLE_ID: i64 = 7;
+
+        // Use real TiDB record keys so TableScanExecutorImpl can decode.
+        let key1 = table::encode_row_key(TABLE_ID, 1);
+        let key2 = table::encode_row_key(TABLE_ID, 2);
+
+        let store = {
+            use std::collections::BTreeMap;
+            let mut tree = BTreeMap::new();
+            let mut ctx = EvalContext::default();
+            let v10 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"v10".to_vec())], &[1]).unwrap();
+            let w25 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"w25".to_vec())], &[1]).unwrap();
+            tree.insert([key1.as_slice(), b"#10"].concat(), Ok(v10));
+            tree.insert([key2.as_slice(), b"#25"].concat(), Ok(w25));
+            FixtureStorage::new(tree)
+        };
+
+        // Inject per-ts variants via the fixture's get_entry_at_ts implementation
+        // (it appends `#<ts>` to the key).
+        // key1#10 -> row(..) => v10, key2#25 -> row(..) => w25
+
+        let columns_info = vec![{
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            ci.set_column_id(1);
+            ci
+        }];
+
+        let mut r1 = KeyRange::default();
+        r1.set_start(key1.clone());
+        let mut r1_end = key1.clone();
+        convert_to_prefix_next(&mut r1_end);
+        r1.set_end(r1_end);
+
+        let mut r2 = KeyRange::default();
+        r2.set_start(key2.clone());
+        let mut r2_end = key2.clone();
+        convert_to_prefix_next(&mut r2_end);
+        r2.set_end(r2_end);
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![r1, r2],
+            vec![],
+            false,
+            false,
+            vec![],
+            Some(vec![10, 25]),
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 1);
+        assert_eq!(result.physical_columns.rows_len(), 2);
+
+        let mut col = result.physical_columns[0].clone();
+        assert!(col.is_raw());
+        col.ensure_all_decoded_for_test(&mut EvalContext::default(), &FieldTypeTp::VarChar.into())
+            .unwrap();
+
+        let d = col.decoded().to_bytes_vec();
+        assert_eq!(d, &[Some(b"v10".to_vec()), Some(b"w25".to_vec())]);
+    }
+
+    #[test]
+    fn test_point_ranges_use_range_versions_common_handle() {
+        const TABLE_ID: i64 = 7;
+
+        let handle =
+            datum::encode_key(&mut EvalContext::default(), &[Datum::Bytes(b"pk".to_vec())])
+                .unwrap();
+        let key = table::encode_common_handle(TABLE_ID, &handle);
+
+        let store = {
+            use std::collections::BTreeMap;
+            let mut tree = BTreeMap::new();
+            let mut ctx = EvalContext::default();
+            let v10 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"v10".to_vec())], &[2]).unwrap();
+            let w25 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"w25".to_vec())], &[2]).unwrap();
+            tree.insert([key.as_slice(), b"#10"].concat(), Ok(v10));
+            tree.insert([key.as_slice(), b"#25"].concat(), Ok(w25));
+            FixtureStorage::new(tree)
+        };
+
+        let columns_info = vec![{
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            ci.set_column_id(2);
+            ci
+        }];
+
+        let mut r = KeyRange::default();
+        r.set_start(key.clone());
+        let mut r_end = key.clone();
+        convert_to_prefix_next(&mut r_end);
+        r.set_end(r_end);
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![r],
+            vec![1],
+            false,
+            false,
+            vec![],
+            Some(vec![10]),
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 1);
+        assert_eq!(result.physical_columns.rows_len(), 1);
+
+        let mut col = result.physical_columns[0].clone();
+        assert!(col.is_raw());
+        col.ensure_all_decoded_for_test(&mut EvalContext::default(), &FieldTypeTp::VarChar.into())
+            .unwrap();
+
+        let d = col.decoded().to_bytes_vec();
+        assert_eq!(d, &[Some(b"v10".to_vec())]);
+    }
+
+    #[test]
+    fn test_point_ranges_use_range_versions_backward() {
+        const TABLE_ID: i64 = 7;
+
+        let key1 = table::encode_row_key(TABLE_ID, 1);
+        let key2 = table::encode_row_key(TABLE_ID, 2);
+
+        let store = {
+            use std::collections::BTreeMap;
+            let mut tree = BTreeMap::new();
+            let mut ctx = EvalContext::default();
+            let v10 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"v10".to_vec())], &[1]).unwrap();
+            let w25 =
+                table::encode_row(&mut ctx, vec![Datum::Bytes(b"w25".to_vec())], &[1]).unwrap();
+            tree.insert([key1.as_slice(), b"#10"].concat(), Ok(v10));
+            tree.insert([key2.as_slice(), b"#25"].concat(), Ok(w25));
+            FixtureStorage::new(tree)
+        };
+
+        let columns_info = vec![{
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            ci.set_column_id(1);
+            ci
+        }];
+
+        let mut r1 = KeyRange::default();
+        r1.set_start(key1.clone());
+        let mut r1_end = key1.clone();
+        convert_to_prefix_next(&mut r1_end);
+        r1.set_end(r1_end);
+
+        let mut r2 = KeyRange::default();
+        r2.set_start(key2.clone());
+        let mut r2_end = key2.clone();
+        convert_to_prefix_next(&mut r2_end);
+        r2.set_end(r2_end);
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![r1, r2],
+            vec![],
+            true, // backward
+            false,
+            vec![],
+            Some(vec![10, 25]),
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 1);
+        assert_eq!(result.physical_columns.rows_len(), 2);
+
+        let mut col = result.physical_columns[0].clone();
+        assert!(col.is_raw());
+        col.ensure_all_decoded_for_test(&mut EvalContext::default(), &FieldTypeTp::VarChar.into())
+            .unwrap();
+
+        let d = col.decoded().to_bytes_vec();
+        assert_eq!(d, &[Some(b"w25".to_vec()), Some(b"v10".to_vec())]);
+    }
+
+    #[test]
+    fn test_point_ranges_without_range_versions_use_normal_get() {
+        const TABLE_ID: i64 = 7;
+
+        let key1 = table::encode_row_key(TABLE_ID, 1);
+        let key2 = table::encode_row_key(TABLE_ID, 2);
+
+        let store = {
+            use std::collections::BTreeMap;
+            let mut tree = BTreeMap::new();
+            let mut ctx = EvalContext::default();
+            let v = table::encode_row(&mut ctx, vec![Datum::Bytes(b"v".to_vec())], &[1]).unwrap();
+            let w = table::encode_row(&mut ctx, vec![Datum::Bytes(b"w".to_vec())], &[1]).unwrap();
+            tree.insert(key1.clone(), Ok(v));
+            tree.insert(key2.clone(), Ok(w));
+            FixtureStorage::new(tree)
+        };
+
+        let columns_info = vec![{
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            ci.set_column_id(1);
+            ci
+        }];
+
+        let mut r1 = KeyRange::default();
+        r1.set_start(key1.clone());
+        let mut r1_end = key1.clone();
+        convert_to_prefix_next(&mut r1_end);
+        r1.set_end(r1_end);
+
+        let mut r2 = KeyRange::default();
+        r2.set_start(key2.clone());
+        let mut r2_end = key2.clone();
+        convert_to_prefix_next(&mut r2_end);
+        r2.set_end(r2_end);
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![r1, r2],
+            vec![],
+            false,
+            false,
+            vec![],
+            None,
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 1);
+        assert_eq!(result.physical_columns.rows_len(), 2);
+
+        let mut col = result.physical_columns[0].clone();
+        assert!(col.is_raw());
+        col.ensure_all_decoded_for_test(&mut EvalContext::default(), &FieldTypeTp::VarChar.into())
+            .unwrap();
+
+        let d = col.decoded().to_bytes_vec();
+        assert_eq!(d, &[Some(b"v".to_vec()), Some(b"w".to_vec())]);
     }
 
     #[test]
@@ -831,6 +1098,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         )
         .unwrap()
         .collect_summary(1);
@@ -974,6 +1242,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1081,6 +1350,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1119,7 +1389,7 @@ mod tests {
             let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
-                columns_info,
+                columns_info.clone(),
                 vec![
                     key_range_point[0].clone(),
                     key_range_point[1].clone(),
@@ -1129,6 +1399,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1171,6 +1442,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1210,6 +1482,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1231,6 +1504,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1265,6 +1539,7 @@ mod tests {
                 false,
                 false,
                 vec![],
+                None,
             )
             .unwrap();
 
@@ -1315,6 +1590,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         )
         .unwrap();
 
@@ -1423,6 +1699,7 @@ mod tests {
             false,
             false,
             primary_prefix_column_ids,
+            None,
         )
         .unwrap();
 
@@ -1604,6 +1881,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         )
         .unwrap();
 
