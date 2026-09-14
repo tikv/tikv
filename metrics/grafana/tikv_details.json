@@ -7023,7 +7023,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 8,
+            "w": 12,
             "x": 0,
             "y": 7
           },
@@ -7171,8 +7171,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 8,
-            "x": 8,
+            "w": 12,
+            "x": 12,
             "y": 7
           },
           "height": null,
@@ -7319,9 +7319,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 7
+            "w": 12,
+            "x": 0,
+            "y": 14
           },
           "height": null,
           "hideTimeOverride": false,
@@ -7431,6 +7431,139 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The QPS of different resource groups of gRPC request",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 57,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (name, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{name}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (name, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "gRPC resource group QPS",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The $optional_quantile of execution time of gRPC message",
           "editable": true,
           "error": false,
@@ -7454,11 +7587,11 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 21
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 57,
+          "id": 58,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -7662,11 +7795,11 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 21
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 58,
+          "id": 59,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -7810,11 +7943,11 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 21
+            "y": 28
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 59,
+          "id": 60,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -7943,11 +8076,11 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 21
+            "y": 28
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 60,
+          "id": 61,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -8027,139 +8160,6 @@
             {
               "decimals": null,
               "format": "\u00b5s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The QPS of different resource groups of gRPC request",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 28
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 61,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (name, $additional_groupby) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{name}} {{$additional_groupby}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (name, $additional_groupby) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "gRPC resource group QPS",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
               "label": null,
               "logBase": 1,
               "max": null,
