@@ -72,6 +72,8 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
+const BATCH_CONN_IDX_METADATA_KEY: &str = "tikv-batch-conn-index";
+
 pub trait RaftGrpcMessageFilter: Send + Sync {
     fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
     fn should_reject_snapshot(&self) -> bool;
@@ -1040,9 +1042,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
 
+        let peer = ctx.peer();
+        let conn = ctx.request_headers().iter().find_map(|(k, v)| {
+            (k == BATCH_CONN_IDX_METADATA_KEY)
+                .then(|| str::from_utf8(v).unwrap_or_default())
+                .filter(|conn| !conn.is_empty())
+        });
+        let counter_labels = conn.map(|conn| (peer.clone(), conn.to_owned()));
+        let (incoming_req_counter, outgoing_req_counter) =
+            counter_labels
+                .as_ref()
+                .map_or((None, None), |(peer, conn)| {
+                    (
+                        Some(
+                            GRPC_BATCH_COMMANDS_INCOMING_REQUEST_COUNTER_VEC
+                                .with_label_values(&[peer, conn]),
+                        ),
+                        Some(
+                            GRPC_BATCH_COMMANDS_OUTGOING_REQUEST_COUNTER_VEC
+                                .with_label_values(&[peer, conn]),
+                        ),
+                    )
+                });
+
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
         let ctx = Arc::new(ctx);
-        let peer = ctx.peer();
         let storage = self.storage.clone();
         let copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
@@ -1056,9 +1080,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             self.health_feedback_seq.clone(),
             self.health_feedback_interval,
         );
+        let incoming_req_counter = incoming_req_counter.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
+            if let Some(counter) = incoming_req_counter.as_ref() {
+                counter.inc_by(requests.len() as u64);
+            }
             let queue = storage.get_readpool_queue_per_worker();
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
@@ -1120,14 +1148,41 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
         });
 
+        let cleanup_counter_labels = counter_labels.clone();
         let send_task = async move {
-            if let Err(e) = sink.send_all(&mut response_retriever).await {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
-                sink.fail(e).await?;
-            } else {
+            let result = async {
+                while let Some(item) = response_retriever.next().await {
+                    match item {
+                        Ok((resp, flags)) => {
+                            let response_count = resp.get_request_ids().len() as u64;
+                            sink.send((resp, flags)).await?;
+                            if let Some(counter) = outgoing_req_counter.as_ref() {
+                                counter.inc_by(response_count);
+                            }
+                        }
+                        Err(e) => {
+                            let e = RpcStatus::with_message(
+                                RpcStatusCode::INVALID_ARGUMENT,
+                                e.to_string(),
+                            );
+                            sink.fail(e).await?;
+                            return Ok(());
+                        }
+                    }
+                }
                 sink.close().await?;
+                Ok(())
             }
-            Ok(())
+            .await;
+
+            if let Some((peer, conn)) = cleanup_counter_labels.as_ref() {
+                _ = GRPC_BATCH_COMMANDS_INCOMING_REQUEST_COUNTER_VEC
+                    .remove_label_values(&[peer, conn]);
+                _ = GRPC_BATCH_COMMANDS_OUTGOING_REQUEST_COUNTER_VEC
+                    .remove_label_values(&[peer, conn]);
+            }
+
+            result
         }
         .map_err(|e: grpcio::Error| {
             info!("kv rpc failed";
