@@ -195,8 +195,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             // status being changed, a rollback may be written and this rollback
             // needs to be protected.
             if need_rollback {
-                if let Some(l) = mismatch_lock {
-                    txn.mark_rollback_on_mismatching_lock(&key, l, true);
+                if let Some(ref lock) = mismatch_lock {
+                    txn.mark_rollback_on_mismatching_lock(&key, lock.clone(), true);
                 }
                 // We must protect this rollback in case this rollback is collapsed and a stale
                 // acquire_pessimistic_lock and prewrite succeed again.
