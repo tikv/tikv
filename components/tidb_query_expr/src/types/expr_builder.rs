@@ -360,8 +360,11 @@ where
         let args: Vec<_> = tree_node.take_children().into();
         let args_len = args.len();
 
-        let short_circuit_depth = short_circuit_func_meta.map_or(depth, |func_meta| {
-            if can_flatten(parent_sig, func_meta.sig) {
+        let can_flatten_with_parent =
+            short_circuit_func_meta.is_some_and(|func_meta| can_flatten(parent_sig, func_meta.sig));
+
+        let short_circuit_depth = short_circuit_func_meta.map_or(depth, |_| {
+            if can_flatten_with_parent {
                 depth
             } else {
                 depth.saturating_add(1)
@@ -398,11 +401,17 @@ where
             if is_short_circuit_worthwhile {
                 let mut short_circuit_args = Vec::with_capacity(args_len);
                 for arg_nodes in parsed_args {
-                    append_short_circuit_arg(
-                        short_circuit_func_meta,
-                        arg_nodes,
-                        &mut short_circuit_args,
-                    );
+                    if can_flatten_with_parent {
+                        // Defer flattening to the root of this same-operator chain so
+                        // each argument is moved only once into the final list.
+                        short_circuit_args.push(RpnExpression::from(arg_nodes));
+                    } else {
+                        append_short_circuit_arg(
+                            short_circuit_func_meta,
+                            arg_nodes,
+                            &mut short_circuit_args,
+                        );
+                    }
                 }
 
                 rpn_nodes.push(RpnExpressionNode::ShortCircuitFnCall {
@@ -557,19 +566,20 @@ fn is_simple_expr(arg: &[RpnExpressionNode]) -> bool {
 
 fn append_short_circuit_arg(
     func: ShortCircuitFnMeta,
-    mut arg: Vec<RpnExpressionNode>,
+    mut arg_nodes: Vec<RpnExpressionNode>,
     output: &mut Vec<RpnExpression>,
 ) {
-    // Flattens adjacent calls of the same associative logical operator. This
-    // avoids recursive evaluation and intermediate result vectors for long
-    // AND/OR chains while preserving left-to-right argument order.
-    if should_flatten(func, &arg) {
-        match arg.pop().unwrap() {
-            RpnExpressionNode::ShortCircuitFnCall { args, .. } => output.extend(args.into_vec()),
+    if should_flatten(func, &arg_nodes) {
+        match arg_nodes.pop().unwrap() {
+            RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                for arg in args.into_vec() {
+                    append_short_circuit_arg(func, arg.into_inner(), output);
+                }
+            }
             _ => unreachable!(),
         }
     } else {
-        output.push(RpnExpression::from(arg));
+        output.push(RpnExpression::from(arg_nodes));
     }
 }
 
@@ -1315,6 +1325,53 @@ mod tests {
                     }
                     node => panic!("expected flattened short-circuit call, got {:?}", node),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_left_deep_short_circuit_chains_build_to_one_root_call() {
+        // `same_logical_expr` constructs a left-deep chain. These widths exercise
+        // the deferred flattening path without relying on machine-dependent timing
+        // thresholds in the unit test.
+        for depth in [32, 128, 512, 1024] {
+            for sig in [ScalarFuncSig::LogicalOr, ScalarFuncSig::LogicalAnd] {
+                let exp = thread::Builder::new()
+                    .stack_size(16 * 1024 * 1024)
+                    .spawn_wrapper(move || {
+                        RpnExpressionBuilder::build_from_expr_tree(
+                            same_logical_expr(depth, sig),
+                            &mut short_circuit_context(),
+                            depth + 1,
+                        )
+                        .unwrap()
+                    })
+                    .unwrap()
+                    .join()
+                    .unwrap();
+
+                assert_eq!(exp.len(), 1, "depth={depth}, sig={sig:?}");
+                assert_eq!(short_circuit_depth(&exp), 1, "depth={depth}, sig={sig:?}");
+                assert!(
+                    !contains_regular_logical_call(&exp),
+                    "depth={depth}, sig={sig:?}"
+                );
+                match exp.last().unwrap() {
+                    RpnExpressionNode::ShortCircuitFnCall {
+                        func_meta, args, ..
+                    } => {
+                        assert_eq!(func_meta.sig, sig);
+                        assert_eq!(args.len(), depth + 1);
+                    }
+                    node => panic!(
+                        "expected root short-circuit call for depth={depth}, sig={sig:?}, got {node:?}"
+                    ),
+                }
+                assert_eq!(
+                    exp.referenced_column_offsets(),
+                    &(0..=depth).collect::<Vec<_>>(),
+                    "depth={depth}, sig={sig:?}"
+                );
             }
         }
     }
