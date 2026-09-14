@@ -55,7 +55,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
+    fn ingest_maybe_slowdown_writes(&self, cf: &str, inflight_ingest_cnt: u64) -> Result<bool> {
         panic!()
     }
 

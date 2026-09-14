@@ -32,5 +32,6 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
+rand = "0.8.5"
 serde_derive = "1.0"
 toml = "0.5"

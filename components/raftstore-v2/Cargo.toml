@@ -27,7 +27,7 @@ test-engines-panic = [
 
 [dependencies]
 batch-system = { workspace = true }
-bytes = "1.0"
+bytes = { workspace = true }
 causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }

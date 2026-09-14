@@ -7,7 +7,9 @@
 use std::{io, io::Result, sync::Mutex, thread};
 
 use collections::HashMap;
-use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
+use tikv_alloc::{
+    add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
+};
 
 /// A cross-platform CPU statistics data structure.
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
@@ -430,6 +432,7 @@ impl StdThreadBuildWrapper for std::thread::Builder {
             call_thread_start_hooks();
             // SAFETY: we will call `remove_thread_memory_accessor` at defer.
             unsafe { add_thread_memory_accessor() };
+            thread_allocate_exclusive_arena().unwrap();
             add_thread_name_to_map();
             defer! {{
                 remove_thread_name_from_map();
@@ -452,9 +455,8 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
             // SAFETY: we will call `remove_thread_memory_accessor` at
             // `before-stop_wrapper`.
             // FIXME: What if the user only calls `after_start_wrapper`?
-            unsafe {
-                add_thread_memory_accessor();
-            }
+            unsafe { add_thread_memory_accessor() };
+            thread_allocate_exclusive_arena().unwrap();
             add_thread_name_to_map();
             start();
         })
@@ -478,9 +480,8 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
             // SAFETY: we will call `remove_thread_memory_accessor` at
             // `before-stop_wrapper`.
             // FIXME: What if the user only calls `after_start_wrapper`?
-            unsafe {
-                add_thread_memory_accessor();
-            }
+            unsafe { add_thread_memory_accessor() };
+            thread_allocate_exclusive_arena().unwrap();
             add_thread_name_to_map();
             start();
         })
