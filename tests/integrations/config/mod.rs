@@ -872,6 +872,7 @@ fn test_serde_custom_tikv_config() {
             tombstones_percent_threshold: 30,
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
+            redundant_bytes_threshold: ReadableSize::mb(129),
             bottommost_level_force: false,
             mvcc_read_aware_enabled: true,
             mvcc_scan_threshold: 10000,

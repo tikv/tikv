@@ -44,7 +44,7 @@ use super::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
-    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
+    compaction_runner::{CompactionControl, CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
 };
@@ -1204,6 +1204,7 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
+    compaction_control: Arc<CompactionControl>,
     feature_gate: FeatureGate,
 }
 
@@ -1221,6 +1222,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             compaction_runner_handle: self.compaction_runner_handle.clone(),
+            compaction_control: self.compaction_control.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1307,11 +1309,12 @@ where
         use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
         init_mvcc_read_tracker(self.config_manager.clone());
 
-        let compaction_runner = CompactionRunner::new(
+        let compaction_runner = CompactionRunner::new_with_control(
             safe_point_provider,
             region_info_provider,
             kv_engine,
             self.config_manager.clone(),
+            self.compaction_control.clone(),
         );
 
         let new_handle = compaction_runner
@@ -1353,6 +1356,7 @@ impl<E: Engine> GcWorker<E> {
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             compaction_runner_handle: Arc::new(Mutex::new(None)),
+            compaction_control: Arc::new(CompactionControl::default()),
             feature_gate,
             region_info_provider,
         }
@@ -1363,6 +1367,12 @@ impl<E: Engine> GcWorker<E> {
         store_id: u64,
         coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Result<()> {
+        // Cloned coprocessor hosts share this notifier registry. The split
+        // observer only sets a coalesced wake-up bit; it never submits a
+        // compaction task to the GC or raftstore cleanup workers.
+        CompactionControl::initialize_metrics();
+        coprocessor_host.set_no_valid_split_key_notifier(self.compaction_control.clone());
+
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,
