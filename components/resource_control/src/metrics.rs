@@ -64,6 +64,13 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref GROUP_RU_BASELINE: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_group_ru_baseline",
+        "Quiet-window baseline per resource group, as CPU utilization %. 0 means no quiet window has elapsed yet, which is also what the eligibility gate compares against, so any traffic is over it",
+        &["resource_group"]
+    )
+    .unwrap();
+
     pub static ref GROUP_QUOTA_LIMIT_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_group_quota_limit",
         "Current rate limit per resource group per resource type (CPU as utilization %, 0 means unlimited)",
@@ -99,7 +106,7 @@ lazy_static! {
 
     pub static ref READ_POOL_CPU_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_read_pool_cpu_percent",
-        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
+        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (live sliding average), baseline (floor frozen at overload onset, 0 when not frozen), current (measured), and target (foreground-pressure-driven ceiling)",
         &["type"]
     )
     .unwrap();
@@ -112,11 +119,21 @@ lazy_static! {
     .unwrap();
 }
 
+/// Drops the per-tick gauges for an evicted tracker; without this they keep
+/// reporting its last value. Gauges only, so a returning group is not a reset.
+pub fn deregister_tracker_gauges(name: &str) {
+    _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_BASELINE.remove_label_values(&[name]);
+    _ = GROUP_QUOTA_LIMIT_VEC.remove_label_values(&[name, "cpu"]);
+}
+
 pub fn deregister_metrics(name: &str) {
     _ = TWO_PHASE_THROTTLED_REQUESTS.remove_label_values(&[name]);
     _ = GROUP_QUOTA_LIMIT_VEC.remove_label_values(&[name, "cpu"]);
     _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
     _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_BASELINE.remove_label_values(&[name]);
     _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&[name]);
     _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&[name]);
     _ = ADMISSION_DELAY_DURATION.remove_label_values(&[name]);

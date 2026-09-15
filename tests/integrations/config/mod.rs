@@ -24,7 +24,9 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
-use resource_control::config::{Config as ResourceControlConfig, PriorityCtlStrategy};
+use resource_control::config::{
+    Config as ResourceControlConfig, NoisyDetection, PriorityCtlStrategy,
+};
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -921,6 +923,7 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        noisy_detection: NoisyDetection::CurrentUsage,
         bg_cpu_throttle_threshold: 60.0,
         fg_cpu_throttle_threshold: 70.0,
         bg_compaction_pressure_threshold: 70.0,
@@ -932,6 +935,7 @@ fn test_serde_custom_tikv_config() {
         historical_usage_window_mins: 15,
         baseline_burst_pct: 20.0,
         admission_max_delayed_count: 10_000,
+        request_base_cost_micros: 40,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
