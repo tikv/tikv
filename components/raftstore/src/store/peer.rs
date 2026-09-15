@@ -118,6 +118,17 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
 
+#[cfg(feature = "failpoints")]
+fn should_inject_invalid_leader_on_region_update() -> bool {
+    fail_point!("raftstore_inject_invalid_leader_on_region_update", |_| true);
+    false
+}
+
+#[cfg(feature = "failpoints")]
+fn pause_after_injected_leader_region_update() {
+    fail_point!("raftstore_pause_after_injected_leader_region_update");
+}
+
 fn extra_message_type_label(msg_type: ExtraMessageType) -> &'static str {
     match msg_type {
         ExtraMessageType::MsgRegionWakeUp => "region_wake_up",
@@ -1784,7 +1795,31 @@ where
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
 
+        // Test-only fault injection: this does not drive Raft through a real
+        // PreVote. It manually exposes INVALID_ID at the metadata update point
+        // where a PreVote can transiently expose the same value.
+        #[cfg(feature = "failpoints")]
+        let previous_leader_id =
+            if self.is_follower() && should_inject_invalid_leader_on_region_update() {
+                Some(mem::replace(
+                    &mut self.raft_group.raft.leader_id,
+                    raft::INVALID_ID,
+                ))
+            } else {
+                None
+            };
+
         self.read_progress.update_region(self.region());
+
+        // Restore the raw Raft leader before Ready is collected. On the pre-fix
+        // path, this does not repair INVALID_ID already copied into
+        // RegionReadProgress. Since the final SoftState matches the last
+        // published state, on_leader_changed() is not called to repair the cache.
+        #[cfg(feature = "failpoints")]
+        if let Some(leader_id) = previous_leader_id {
+            self.raft_group.raft.leader_id = leader_id;
+            pause_after_injected_leader_region_update();
+        }
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
