@@ -1,12 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     prepare_for_stale_read_before_run(leader, None)
@@ -33,6 +37,128 @@ fn prepare_for_stale_read_before_run(
     fail::cfg("propose_readindex_from_follower", "panic").unwrap();
 
     (cluster, pd_client, leader_client)
+}
+
+#[test]
+fn test_region_update_keeps_leader_progress_after_transient_leader() {
+    const REGION_ID: u64 = 1;
+    const LEADER_ID: u64 = 1;
+    const INJECT_INVALID_LEADER_FAILPOINT: &str =
+        "raftstore_inject_invalid_leader_on_region_update";
+    const PAUSE_AFTER_INJECTION_FAILPOINT: &str =
+        "raftstore_pause_after_injected_leader_region_update";
+
+    let mut cluster = new_server_cluster(0, 4);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.cfg.resolved_ts.enable = true;
+    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(100);
+    cluster.run_conf_change();
+
+    pd_client.must_add_peer(REGION_ID, new_peer(2, 2));
+    pd_client.must_add_peer(REGION_ID, new_peer(3, 3));
+    cluster.must_transfer_leader(REGION_ID, new_peer(1, LEADER_ID));
+    cluster.must_put(b"key", b"value");
+    must_get_equal(&cluster.get_engine(2), b"key", b"value");
+    must_get_equal(&cluster.get_engine(3), b"key", b"value");
+
+    let follower_progresses = [2, 3].map(|store_id| {
+        cluster.store_metas[&store_id]
+            .lock()
+            .unwrap()
+            .region_read_progress
+            .get(&REGION_ID)
+            .unwrap()
+    });
+    let get_leader_info = |store_id: usize| follower_progresses[store_id - 2].dump_leader_info();
+    let wait_for_leader = |store_id| {
+        let start = Instant::now();
+        loop {
+            let leader_info = get_leader_info(store_id).0;
+            if leader_info.get_peer_id() == LEADER_ID {
+                return (
+                    leader_info.get_term(),
+                    leader_info.get_region_epoch().get_conf_ver(),
+                );
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "store {store_id} did not observe leader {LEADER_ID}: {leader_info:?}"
+            );
+            sleep_ms(10);
+        }
+    };
+    let follower_states = [wait_for_leader(2), wait_for_leader(3)];
+
+    let injected_leader_guard =
+        fail::FailGuard::new(INJECT_INVALID_LEADER_FAILPOINT, "return").unwrap();
+    let pause_after_injection_guard =
+        fail::FailGuard::new(PAUSE_AFTER_INJECTION_FAILPOINT, "pause").unwrap();
+
+    // This is a manual state injection, not a naturally executed PreVote.
+    // Adding learner 4 drives real metadata refreshes on both voter followers;
+    // only during each update, the failpoint makes the raw Raft leader appear as
+    // INVALID_ID and restores it before Ready is collected.
+    pd_client.add_peer(REGION_ID, new_learner_peer(4, 4));
+    let start = Instant::now();
+    while [2, 3].into_iter().any(|store_id| {
+        get_leader_info(store_id)
+            .0
+            .get_region_epoch()
+            .get_conf_ver()
+            <= follower_states[store_id - 2].1
+    }) {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "both voter followers did not apply the learner metadata"
+        );
+        sleep_ms(10);
+    }
+
+    // Remove all fault injection before starting the workload. With the old
+    // update_leader_info path, this does not repair INVALID_ID already cached in
+    // RegionReadProgress, and no later on_leader_changed callback repairs it.
+    drop(injected_leader_guard);
+    drop(pause_after_injection_guard);
+    pd_client.must_have_peer(REGION_ID, new_learner_peer(4, 4));
+
+    // Raft remains healthy after the one-shot event: a transaction can commit.
+    let leader_client = PeerClient::new(&cluster, REGION_ID, new_peer(1, LEADER_ID));
+    let start_ts = get_tso(&pd_client);
+    leader_client.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value2"[..])],
+        b"key2".to_vec(),
+        start_ts,
+    );
+    let commit_ts = get_tso(&pd_client);
+    leader_client.must_kv_commit(vec![b"key2".to_vec()], start_ts, commit_ts);
+
+    // This exercises the real resolved-ts CheckLeader RPC path. If both voter
+    // followers retained leader_id = 0, the leader could not form a quorum and
+    // resolved-ts could not advance past the committed transaction.
+    let resolved_ts = || {
+        cluster.store_metas[&1]
+            .lock()
+            .unwrap()
+            .region_read_progress
+            .get_resolved_ts(&REGION_ID)
+            .unwrap()
+    };
+    let start = Instant::now();
+    while resolved_ts() <= commit_ts {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "resolved-ts did not advance past commit {commit_ts} after the transient leader metadata refresh"
+        );
+        sleep_ms(10);
+    }
+
+    for (store_id, expected_term) in [(2, follower_states[0].0), (3, follower_states[1].0)] {
+        let (leader_info, leader_store_id) = get_leader_info(store_id);
+        assert_eq!(leader_info.get_peer_id(), LEADER_ID);
+        assert_eq!(leader_info.get_term(), expected_term);
+        assert_eq!(leader_store_id, Some(1));
+    }
 }
 
 // Testing how data replication could effect stale read service
