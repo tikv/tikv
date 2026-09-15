@@ -3729,7 +3729,7 @@ mod tests {
                             store_id: 0,
                             region_id: 1,
                             peer_id: 0,
-                            key_ranges: vec![],
+                            raw_key_ranges: vec![],
                             extra_attachment: Arc::new(b"a".to_vec()),
                         }),
                         RawRecord {
