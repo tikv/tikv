@@ -451,8 +451,6 @@ impl<E: Engine> Tracker<E> {
     }
 }
 
-<<<<<<< HEAD
-=======
 impl<E: Engine> FutureTrack for &mut Tracker<E> {
     fn on_poll_begin(&mut self) {
         self.on_begin_item();
@@ -479,7 +477,6 @@ impl<E: Engine> FutureTrack for PollPerfContextTracker<'_, E> {
     }
 }
 
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
 impl<E: Engine> Drop for Tracker<E> {
     /// `Tracker` may be dropped without even calling `on_begin_all_items`. For
     /// example, if get snapshot failed. So we fast-forward if some steps
@@ -564,10 +561,6 @@ mod tests {
     use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine};
     use tracker::track;
 
-<<<<<<< HEAD
-    use super::{PerfLevel, ReqContext, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
-    use crate::storage::Statistics;
-=======
     use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::{
         coprocessor::ReqContextInner,
@@ -628,7 +621,6 @@ mod tests {
         drop(tracker);
         unsafe { destroy_tls_engine::<RocksEngine>() };
     }
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
 
     #[test]
     fn test_track() {

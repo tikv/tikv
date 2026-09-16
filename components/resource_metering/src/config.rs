@@ -18,14 +18,10 @@ const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
-<<<<<<< HEAD
-const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = true;
-=======
 const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
 const DEFAULT_ENABLE_DETAILED_IO_COLLECTION: bool = false;
 const NETWORK_IO_COLLECTION_ENABLED: u8 = 1 << 0;
 const DETAILED_IO_COLLECTION_ENABLED: u8 = 1 << 1;
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
 
 /// An atomically published snapshot of the runtime I/O collection switches.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

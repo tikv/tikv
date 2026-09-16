@@ -522,11 +522,8 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
-<<<<<<< HEAD
-=======
                     rocksdb_block_read_count,
                     ..
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
                 },
             ) in records.others
             {
@@ -695,11 +692,8 @@ impl From<RegionRecords> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
-<<<<<<< HEAD
-=======
                     rocksdb_block_read_count,
                     ..
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
                 },
             ) in records.others
             {
@@ -1072,11 +1066,8 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
-<<<<<<< HEAD
-=======
                 rocksdb_block_read_count: 55,
                 ..Default::default()
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
             },
         );
         raw_map.insert(
@@ -1089,11 +1080,8 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
-<<<<<<< HEAD
-=======
                 rocksdb_block_read_count: 66,
                 ..Default::default()
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
             },
         );
         raw_map.insert(
@@ -1106,11 +1094,8 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
-<<<<<<< HEAD
-=======
                 rocksdb_block_read_count: 77,
                 ..Default::default()
->>>>>>> 49e7a1179d (*: extend Top SQL resource dimensions (#19953))
             },
         );
         let raw = RawRecords {
