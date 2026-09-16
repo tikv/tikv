@@ -881,6 +881,25 @@ def Server() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Advertised Address Probe Failures",
+                description=(
+                    "The count of advertised address probe failures per TiKV instance, "
+                    "grouped by loopback, unresolved, and timeout reasons"
+                ),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_server_advertise_addr_probe_failure_total"
+                        ),
+                        legend_format=r"{{instance}}-{{endpoint}}-{{reason}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Thread Pool Schedule Wait Duration" + OPTIONAL_QUANTILE_INPUT,
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
@@ -1077,6 +1096,10 @@ def gRPC() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title=r"gRPC batch commands wait duration",
                 description=r"The 99.99% wait time of gRPC batch commands",
@@ -1089,6 +1112,18 @@ def gRPC() -> RowPanel:
                             is_optional_quantile=False,
                         ),
                         legend_format="P9999",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="gRPC resource group QPS",
+                description="The QPS of different resource groups of gRPC request",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_resource_group_total", by_labels=["name"]
+                        ),
                         additional_groupby=True,
                     ),
                 ],
@@ -1207,22 +1242,6 @@ def gRPC() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_grpc_request_source_duration_vec",
                             by_labels=["source"],
-                        ),
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="gRPC resource group QPS",
-                description="The QPS of different resource groups of gRPC request",
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_grpc_resource_group_total", by_labels=["name"]
                         ),
                         additional_groupby=True,
                     ),

@@ -12,7 +12,9 @@ use kvproto::{
 use tikv_util::box_try;
 
 pub use self::{
-    half::{HalfCheckObserver, get_region_approximate_middle},
+    half::{
+        HalfCheckObserver, get_region_approximate_middle, get_region_approximate_middle_in_range,
+    },
     keys::{KeysCheckObserver, get_region_approximate_keys},
     size::{SizeCheckObserver, get_region_approximate_size},
     table::TableCheckObserver,

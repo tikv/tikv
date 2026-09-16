@@ -34,8 +34,8 @@ pub use self::{
     config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR, ServerConfigManager},
     errors::{Error, Result},
     metrics::{
-        CONFIG_FLOW_CONTROL_GAUGE, CONFIG_ROCKSDB_CF_GAUGE, CONFIG_ROCKSDB_DB_GAUGE,
-        CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE, MEMORY_LIMIT_GAUGE,
+        ADVERTISE_ADDR_PROBE_FAILURE_COUNTER, CONFIG_FLOW_CONTROL_GAUGE, CONFIG_ROCKSDB_CF_GAUGE,
+        CONFIG_ROCKSDB_DB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE, MEMORY_LIMIT_GAUGE,
     },
     proxy::{Proxy, build_forward_option, get_target_address},
     raft_client::{ConnectionBuilder, MetadataSourceStoreId, RaftClient},

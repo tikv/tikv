@@ -47,6 +47,10 @@ deny = [
     { crate = "h2:<0.3", reason = "not part of the temporary h2 0.3 exception" },
     { crate = "h2:>=0.3,<0.4", wrappers = ["aws-smithy-http-client", "hyper", "reqwest"], reason = "only the existing h2 0.3 dependency chains are temporarily accepted" },
     { crate = "h2:>=0.4,<0.4.16", reason = "upgrade h2 0.4 to at least 0.4.16" },
+    # Only the currently reviewed azure_core 0.18.0 release is covered by the
+    # temporary RUSTSEC-2026-0275 exception below.
+    { crate = "azure_core:<0.18.0", reason = "not part of the temporary azure_core 0.18.0 exception" },
+    { crate = "azure_core:>0.18.0,<0.22.0", reason = "upgrade to a patched azure_core release" },
 ]
 multiple-versions = "allow"
 
@@ -107,6 +111,14 @@ ignore = [
     #
     # TODO: Remove after the legacy clients move off h2 0.3.
     "RUSTSEC-2026-0258",
+    # Ignore RUSTSEC-2026-0275 temporarily while TiKV still uses the legacy Azure
+    # SDK. azure_core 0.18 can log live Authorization headers at Debug/Trace
+    # level. TiKV's logger blocks those records before they reach its log drains,
+    # including after an online log level change.
+    #
+    # TODO: Remove after the SDK is upgraded or patched, or another fix supersedes
+    # the temporary credential-log filter in TiKV.
+    "RUSTSEC-2026-0275",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

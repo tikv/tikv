@@ -296,6 +296,12 @@ lazy_static! {
             exponential_buckets(0.0001, 2.0, 20).unwrap()
         )
         .unwrap();
+    pub static ref ADVERTISE_ADDR_PROBE_FAILURE_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_server_advertise_addr_probe_failure_total",
+        "Total number of advertised address probe failures",
+        &["endpoint", "reason"]
+    )
+    .unwrap();
     pub static ref GRPC_REQUEST_SOURCE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
             "tikv_grpc_request_source_counter_vec",
             "Counter of different sources of RPC requests",
