@@ -37,7 +37,7 @@ futures = "0.3"
 grpcio = { workspace = true }
 health_controller = { workspace = true }
 hybrid_engine = { workspace = true }
-in_memory_engine = { workspace = true }
+in_memory_engine = { workspace = true, features = ["testexport"] }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
