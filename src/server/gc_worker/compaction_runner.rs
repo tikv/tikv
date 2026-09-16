@@ -12,8 +12,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, Range, TableProperties,
-    TablePropertiesCollection, UserCollectedProperties,
+    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, MvccProperties, Range,
+    TableProperties, TablePropertiesCollection, UserCollectedProperties,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
@@ -317,6 +317,48 @@ fn estimate_discardable_entries(
     (num_entries as f64 * portion).round() as u64
 }
 
+#[derive(Debug, PartialEq)]
+struct MvccDiscardableStats {
+    write_versions: u64,
+    default_value_versions: u64,
+}
+
+fn estimate_mvcc_discardable_stats(
+    properties: &MvccProperties,
+    gc_safe_point: u64,
+) -> MvccDiscardableStats {
+    let delete_versions = estimate_discardable_entries(
+        properties.num_deletes,
+        properties.oldest_delete_ts,
+        properties.newest_delete_ts,
+        gc_safe_point,
+    );
+    let stale_versions = estimate_discardable_entries(
+        properties.num_versions.saturating_sub(properties.num_rows),
+        properties.oldest_stale_version_ts,
+        properties.newest_stale_version_ts,
+        gc_safe_point,
+    );
+    let stale_deletes = estimate_discardable_entries(
+        properties.num_stale_deletes,
+        properties.oldest_stale_version_ts,
+        properties.newest_stale_version_ts,
+        gc_safe_point,
+    );
+    let default_value_versions = estimate_discardable_entries(
+        properties.num_stale_default_puts,
+        properties.oldest_stale_version_ts,
+        properties.newest_stale_version_ts,
+        gc_safe_point,
+    );
+
+    MvccDiscardableStats {
+        write_versions: delete_versions
+            .saturating_add(stale_versions.saturating_sub(stale_deletes)),
+        default_value_versions,
+    }
+}
+
 fn estimate_reclaimable_bytes(
     write_cf_bytes: u64,
     default_cf_bytes: u64,
@@ -324,7 +366,7 @@ fn estimate_reclaimable_bytes(
     num_discardable: u64,
     num_total_entries: u64,
     num_discardable_value_versions: u64,
-    num_total_puts: u64,
+    num_total_default_puts: u64,
     compaction_filter_enabled: bool,
 ) -> u64 {
     let write_discardable = if compaction_filter_enabled {
@@ -339,7 +381,7 @@ fn estimate_reclaimable_bytes(
         proportional_bytes(
             default_cf_bytes,
             num_discardable_value_versions,
-            num_total_puts,
+            num_total_default_puts,
         )
     } else {
         0
@@ -939,7 +981,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let mut num_tombstones = 0;
         let mut num_discardable = 0;
         let mut num_total_entries = 0;
-        let mut num_total_puts = 0;
+        let mut num_total_default_puts = 0;
         let mut num_rows = 0;
         let mut num_discardable_value_versions = 0;
         let mut write_cf_bytes: u64 = 0;
@@ -964,40 +1006,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             if let Some(mvcc_properties) = user_properties.get_mvcc_properties() {
                 // Collect MVCC stats
                 num_rows += mvcc_properties.num_rows;
-                num_total_puts += mvcc_properties.num_puts;
+                num_total_default_puts += mvcc_properties.num_default_puts;
 
                 // RocksDB tombstones are guaranteed to be discardable
                 num_tombstones += num_entries.saturating_sub(mvcc_properties.num_versions);
                 if config.enable_compaction_filter {
-                    // Estimate discardable TiKV MVCC delete versions
-                    num_discardable += estimate_discardable_entries(
-                        mvcc_properties.num_deletes,
-                        mvcc_properties.oldest_delete_ts,
-                        mvcc_properties.newest_delete_ts,
-                        gc_safe_point,
-                    );
-                    // Estimate all discardable stale MVCC versions for write CF.
-                    let discardable_versions = estimate_discardable_entries(
-                        mvcc_properties
-                            .num_versions
-                            .saturating_sub(mvcc_properties.num_rows),
-                        mvcc_properties.oldest_stale_version_ts,
-                        mvcc_properties.newest_stale_version_ts,
-                        gc_safe_point,
-                    );
-                    num_discardable += discardable_versions;
-
-                    // Only Put versions can own default-CF values. num_puts -
-                    // num_rows is a conservative lower bound because the live
-                    // version of each row may itself be a Delete.
-                    num_discardable_value_versions += estimate_discardable_entries(
-                        mvcc_properties
-                            .num_puts
-                            .saturating_sub(mvcc_properties.num_rows),
-                        mvcc_properties.oldest_stale_version_ts,
-                        mvcc_properties.newest_stale_version_ts,
-                        gc_safe_point,
-                    );
+                    let discardable =
+                        estimate_mvcc_discardable_stats(&mvcc_properties, gc_safe_point);
+                    num_discardable += discardable.write_versions;
+                    num_discardable_value_versions += discardable.default_value_versions;
                 }
             }
             true
@@ -1047,7 +1064,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             num_discardable,
             num_total_entries,
             num_discardable_value_versions,
-            num_total_puts,
+            num_total_default_puts,
             config.enable_compaction_filter,
         );
         let score = calculate_compaction_score(
@@ -1188,9 +1205,136 @@ mod tests {
     }
 
     #[test]
+    fn test_consecutive_deletes_do_not_overflow_candidate_entries() {
+        let config = GcConfig::default();
+        let mut properties = MvccProperties::default();
+        properties.num_rows = 1;
+        properties.num_versions = 2;
+        properties.num_deletes = 2;
+        properties.num_stale_deletes = 1;
+        properties.oldest_delete_ts = TimeStamp::new(10);
+        properties.newest_delete_ts = TimeStamp::new(20);
+        properties.oldest_stale_version_ts = TimeStamp::new(10);
+        properties.newest_stale_version_ts = TimeStamp::new(10);
+
+        let discardable = estimate_mvcc_discardable_stats(&properties, 20);
+        assert_eq!(
+            discardable,
+            MvccDiscardableStats {
+                write_versions: 2,
+                default_value_versions: 0,
+            }
+        );
+        let reclaimable_bytes = estimate_reclaimable_bytes(
+            1024 * 1024 * 1024,
+            0,
+            0,
+            discardable.write_versions,
+            properties.num_versions,
+            discardable.default_value_versions,
+            properties.num_default_puts,
+            true,
+        );
+        let score = calculate_compaction_score(
+            0,
+            discardable.write_versions,
+            properties.num_versions,
+            reclaimable_bytes,
+            0,
+            &config,
+        );
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn test_short_values_do_not_dilute_default_cf_estimate() {
+        let config = GcConfig::default();
+        let mut properties = MvccProperties::default();
+        // One key has 800 long-value versions and 10,000 other keys have one
+        // short-value Put each. Only the long values own default-CF entries.
+        properties.num_rows = 10_001;
+        properties.num_versions = 10_800;
+        properties.num_puts = 10_800;
+        properties.num_default_puts = 800;
+        properties.num_stale_default_puts = 799;
+        properties.oldest_stale_version_ts = TimeStamp::new(1);
+        properties.newest_stale_version_ts = TimeStamp::new(799);
+
+        let discardable = estimate_mvcc_discardable_stats(&properties, 799);
+        assert_eq!(discardable.write_versions, 799);
+        assert_eq!(discardable.default_value_versions, 799);
+        let reclaimable_bytes = estimate_reclaimable_bytes(
+            0,
+            800 * 1024 * 1024,
+            0,
+            discardable.write_versions,
+            properties.num_versions,
+            discardable.default_value_versions,
+            properties.num_default_puts,
+            true,
+        );
+        assert_eq!(reclaimable_bytes, 799 * 1024 * 1024);
+        assert!(
+            calculate_compaction_score(
+                0,
+                discardable.write_versions,
+                properties.num_versions,
+                reclaimable_bytes,
+                0,
+                &config,
+            ) > 0.0
+        );
+    }
+
+    #[test]
+    fn test_put_then_delete_keeps_old_default_value_reclaimable() {
+        let config = GcConfig::default();
+        let mut properties = MvccProperties::default();
+        // 1,000 rows contain a large Put followed by Delete, and 10,000 rows
+        // contain a single short-value Put. The old large Puts remain stale
+        // default-CF values even though num_puts == num_rows.
+        properties.num_rows = 11_000;
+        properties.num_versions = 12_000;
+        properties.num_puts = 11_000;
+        properties.num_deletes = 1_000;
+        properties.num_default_puts = 1_000;
+        properties.num_stale_default_puts = 1_000;
+        properties.oldest_delete_ts = TimeStamp::new(20);
+        properties.newest_delete_ts = TimeStamp::new(20);
+        properties.oldest_stale_version_ts = TimeStamp::new(10);
+        properties.newest_stale_version_ts = TimeStamp::new(10);
+
+        let discardable = estimate_mvcc_discardable_stats(&properties, 20);
+        assert_eq!(discardable.write_versions, 2_000);
+        assert_eq!(discardable.default_value_versions, 1_000);
+        let reclaimable_bytes = estimate_reclaimable_bytes(
+            0,
+            1_000 * 1024 * 1024,
+            0,
+            discardable.write_versions,
+            properties.num_versions,
+            discardable.default_value_versions,
+            properties.num_default_puts,
+            true,
+        );
+        assert_eq!(reclaimable_bytes, 1_000 * 1024 * 1024);
+        assert!(
+            calculate_compaction_score(
+                0,
+                discardable.write_versions,
+                properties.num_versions,
+                reclaimable_bytes,
+                0,
+                &config,
+            ) > 0.0
+        );
+    }
+
+    #[test]
     fn test_estimate_reclaimable_bytes_includes_large_values() {
-        // Ten of one hundred stale versions are below the safe point. The
-        // write-CF part is small, but default CF contains 1 GiB of values.
+        // Ten default-CF-backed versions are stale while short-value Puts are
+        // excluded from the denominator. The write-CF part is small, but
+        // default CF contains 1 GiB of values.
         let bytes = estimate_reclaimable_bytes(
             10 * 1024 * 1024,
             1024 * 1024 * 1024,
@@ -1198,10 +1342,10 @@ mod tests {
             10,
             100,
             10,
-            100,
+            10,
             true,
         );
-        assert_eq!(bytes, 1034 * 1024 * 1024 / 10);
+        assert_eq!(bytes, 1025 * 1024 * 1024);
     }
 
     #[test]
