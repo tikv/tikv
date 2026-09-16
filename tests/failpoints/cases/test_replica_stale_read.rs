@@ -210,26 +210,21 @@ fn prepare_for_stale_read_before_run(
     (cluster, pd_client, leader_client)
 }
 
-/// A region metadata refresh must not overwrite the leadership a replica
-/// observed.
+/// Regression test for the stuck resolved-ts in
+/// https://github.com/tikv/tikv/issues/19768: a region update must not drop the
+/// leadership a replica has cached for resolved-ts.
 ///
-/// `Peer::set_region` used to publish the raw Raft `leader_id` into
-/// `RegionReadProgress` on every region change. A PreVote campaign resets that
-/// raw `leader_id` to `INVALID_ID` immediately, while the campaign itself is
-/// only published at the end of the round, so a region update handled in that
-/// same round caches `leader_id = 0` although the replica keeps following its
-/// leader. Nothing repairs it: `on_leader_changed` only runs for a published
-/// `SoftState` or a term change, and the campaign and its revert cancel out
-/// inside one round. The replica then rejects the leader's `CheckLeader` probe,
-/// so once both voters are affected the region cannot collect a quorum and its
-/// resolved ts freezes while every replica is up.
+/// The fix is https://github.com/tikv/tikv/pull/20029; this test fails without it.
 ///
-/// Only scheduling is staged here: both followers campaign on their own
-/// election timers, the region update is a real split `ApplyRes`, and one
-/// follower is silenced at a time so the leader keeps its quorum throughout.
+/// The condition it reproduces: one round of a peer carries the PreVote
+/// campaign, the region update and a heartbeat in the same batch. The region
+/// update then publishes a `leader_id` the replica never lost.
 ///
-/// See https://github.com/tikv/tikv/issues/19768 and
-/// https://github.com/tikv/tikv/pull/20029 (the fix).
+/// The region used here has three replicas, and both followers are put through
+/// that condition, so on the unfixed code its resolved ts never advances again.
+/// Staging is scheduling only: both followers campaign on their own election
+/// timers, the region update is a real split `ApplyRes`, and one follower is
+/// silenced at a time so the leader keeps its quorum.
 #[test]
 fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     const REGION_ID: u64 = 1;
