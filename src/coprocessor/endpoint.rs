@@ -805,8 +805,10 @@ impl<E: Engine> Endpoint<E> {
         // Serial collection and result merging bound their waits by the top
         // task's deadline. The fallback starts before parsing so a failure
         // cannot reset the timeout.
-        let fallback_deadline =
-            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
+        let fallback_deadline = Deadline::from_now(super::max_execution_duration(
+            req.get_context(),
+            self.max_handle_duration,
+        ));
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
