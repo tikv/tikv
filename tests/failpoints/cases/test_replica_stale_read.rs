@@ -16,15 +16,6 @@ use test_pd_client::TestPdClient;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
-const LATCH_REGION_ID: u64 = 1;
-const LATCH_LEADER_STORE_ID: u64 = 1;
-const LATCH_LEADER_PEER_ID: u64 = 1;
-const LATCH_FOLLOWER_STORE_ID: u64 = 3;
-const ELECTION_GATE: &str = "pause_before_collect_peer_msg_on_election";
-const APPLY_RES_GATE_STORE_2: &str = "pause_apply_res_of_store_2";
-const APPLY_RES_GATE: &str = "pause_apply_res_of_store_3";
-const REGION_UPDATE_GATE: &str = "set_region_publishes_raw_leader_id";
-
 /// A gate the test can park a peer thread on: the producer parks in
 /// [`ParkGate::enter`], signalling its arrival first so the test knows it is
 /// parked, until the test either grants one permit or opens the gate for good.
@@ -141,12 +132,16 @@ impl Filter for DropHeartbeats {
 /// This is exactly the tuple `consume_leader_info` compares against the
 /// `LeaderInfo` the leader sends, so `leader == 0` means "this replica rejects
 /// the leader probe".
-fn cached_leader_info(cluster: &Cluster<ServerCluster>, store_id: u64) -> (u64, u64, u64) {
+fn cached_leader_info(
+    cluster: &Cluster<ServerCluster>,
+    region_id: u64,
+    store_id: u64,
+) -> (u64, u64, u64) {
     let info = cluster.store_metas[&store_id]
         .lock()
         .unwrap()
         .region_read_progress
-        .get(&LATCH_REGION_ID)
+        .get(&region_id)
         .unwrap()
         .dump_leader_info()
         .0;
@@ -157,16 +152,21 @@ fn cached_leader_info(cluster: &Cluster<ServerCluster>, store_id: u64) -> (u64, 
     )
 }
 
-fn wait_for_cached_leader(cluster: &Cluster<ServerCluster>, store_id: u64) -> (u64, u64, u64) {
+fn wait_for_cached_leader(
+    cluster: &Cluster<ServerCluster>,
+    region_id: u64,
+    store_id: u64,
+    leader_id: u64,
+) -> (u64, u64, u64) {
     let start = Instant::now();
     loop {
-        let cached = cached_leader_info(cluster, store_id);
-        if cached.0 == LATCH_LEADER_PEER_ID {
+        let cached = cached_leader_info(cluster, region_id, store_id);
+        if cached.0 == leader_id {
             return cached;
         }
         assert!(
             start.elapsed() < Duration::from_secs(5),
-            "store {store_id} never cached leader {LATCH_LEADER_PEER_ID}: {cached:?}"
+            "store {store_id} never cached leader {leader_id}: {cached:?}"
         );
         sleep_ms(10);
     }
@@ -174,12 +174,12 @@ fn wait_for_cached_leader(cluster: &Cluster<ServerCluster>, store_id: u64) -> (u
 
 /// The resolved ts this store published for the region, i.e. the value a
 /// `CheckLeader` round settles the region's `ReadState` on.
-fn region_resolved_ts(cluster: &Cluster<ServerCluster>, store_id: u64) -> u64 {
+fn region_resolved_ts(cluster: &Cluster<ServerCluster>, region_id: u64, store_id: u64) -> u64 {
     cluster.store_metas[&store_id]
         .lock()
         .unwrap()
         .region_read_progress
-        .get_resolved_ts(&LATCH_REGION_ID)
+        .get_resolved_ts(&region_id)
         .unwrap()
 }
 
@@ -210,35 +210,32 @@ fn prepare_for_stale_read_before_run(
     (cluster, pd_client, leader_client)
 }
 
-/// Reproduces the resolved-ts stall this PR's fix addresses, with scheduling
-/// stalls only: both campaigns are real PreVote elections started by the
-/// followers' own election timers, and the region update is a real `ApplyRes`.
+/// A region metadata refresh must not overwrite the leadership a replica
+/// observed.
 ///
-/// On the unfixed code `Peer::set_region` writes
-/// `read_progress.update_leader_info(self.leader_id(), self.term(),
-/// self.region())` for every region change. `become_pre_candidate()` resets the
-/// raw Raft `leader_id` to `INVALID_ID` immediately, while the `SoftState` that
-/// would publish the campaign is only reported when the round ends. A region
-/// update handled in that same round therefore latches `leader_id = 0` into the
-/// resolved-ts cache while the cache still holds the real leader, and nothing
-/// repairs it afterwards: `on_leader_changed` only runs for a *published*
-/// `SoftState` or a term change, the campaign and its revert cancel out inside
-/// one round (PreVote keeps the term unchanged), and ordinary traffic never
-/// touches the cache. Only another region change or a new leadership transition
-/// can repair the entry.
+/// `Peer::set_region` used to publish the raw Raft `leader_id` into
+/// `RegionReadProgress` on every region change. A PreVote campaign resets that
+/// raw `leader_id` to `INVALID_ID` immediately, while the campaign itself is
+/// only published at the end of the round, so a region update handled in that
+/// same round caches `leader_id = 0` although the replica keeps following its
+/// leader. Nothing repairs it: `on_leader_changed` only runs for a published
+/// `SoftState` or a term change, and the campaign and its revert cancel out
+/// inside one round. The replica then rejects the leader's `CheckLeader` probe,
+/// so once both voters are affected the region cannot collect a quorum and its
+/// resolved ts freezes while every replica is up.
 ///
-/// Both voter followers are latched by the *same* region update, one after
-/// another: while one follower is silent (heartbeats cut, so its own election
-/// timer fires) the other one keeps answering the leader, so the leader never
-/// loses its quorum and never re-elects. With both of them latched the region
-/// cannot collect a `CheckLeader` quorum at all, so its resolved ts freezes
-/// while every replica is up and the region keeps committing.
+/// Only scheduling is staged here: both followers campaign on their own
+/// election timers, the region update is a real split `ApplyRes`, and one
+/// follower is silenced at a time so the leader keeps its quorum throughout.
 ///
-/// The test only decides *when* each step is allowed to run, never *what* is
-/// written.
-
+/// See https://github.com/tikv/tikv/issues/19768 and
+/// https://github.com/tikv/tikv/pull/20029 (the fix).
 #[test]
 fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
+    const REGION_ID: u64 = 1;
+    const LEADER_STORE_ID: u64 = 1;
+    const LEADER_PEER_ID: u64 = 1;
+    const FOLLOWER_STORE_ID: u64 = 3;
     let mut cluster = new_server_cluster(0, 4);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -251,14 +248,14 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 30;
     cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
     cluster.run_conf_change();
-    pd_client.must_add_peer(LATCH_REGION_ID, new_peer(2, 2));
-    pd_client.must_add_peer(LATCH_REGION_ID, new_peer(3, 3));
-    cluster.must_transfer_leader(LATCH_REGION_ID, new_peer(1, LATCH_LEADER_PEER_ID));
+    pd_client.must_add_peer(REGION_ID, new_peer(2, 2));
+    pd_client.must_add_peer(REGION_ID, new_peer(3, 3));
+    cluster.must_transfer_leader(REGION_ID, new_peer(1, LEADER_PEER_ID));
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    wait_for_cached_leader(&cluster, 2);
-    wait_for_cached_leader(&cluster, LATCH_FOLLOWER_STORE_ID);
+    wait_for_cached_leader(&cluster, REGION_ID, 2, LEADER_PEER_ID);
+    wait_for_cached_leader(&cluster, REGION_ID, FOLLOWER_STORE_ID, LEADER_PEER_ID);
 
     let (batch_gate_2, batch_arrived_2) = ParkGate::new("batch_2");
     let (batch_gate_3, batch_arrived_3) = ParkGate::new("batch_3");
@@ -266,9 +263,12 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     let (apply_gate_3, apply_arrived_3) = ParkGate::new("apply_3");
     let (region_update_gate, region_update_arrived) = ParkGate::new("region_update");
     for (name, gate) in [
-        (APPLY_RES_GATE_STORE_2, apply_gate_2.clone()),
-        (APPLY_RES_GATE, apply_gate_3.clone()),
-        (REGION_UPDATE_GATE, region_update_gate.clone()),
+        ("pause_apply_res_of_store_2", apply_gate_2.clone()),
+        ("pause_apply_res_of_store_3", apply_gate_3.clone()),
+        (
+            "set_region_publishes_raw_leader_id",
+            region_update_gate.clone(),
+        ),
     ] {
         fail::cfg_callback(name, move || gate.enter()).unwrap();
     }
@@ -280,7 +280,8 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
 
     // Hold back the apply result of both followers, then drive one real region
     // update.
-    let (_, _, version_before) = wait_for_cached_leader(&cluster, LATCH_LEADER_STORE_ID);
+    let (_, _, version_before) =
+        wait_for_cached_leader(&cluster, REGION_ID, LEADER_STORE_ID, LEADER_PEER_ID);
     sleep_ms(300);
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"z");
@@ -290,7 +291,7 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
             .unwrap_or_else(|_| panic!("{name} must apply the split"));
     }
     let start = Instant::now();
-    while cached_leader_info(&cluster, LATCH_LEADER_STORE_ID).2 <= version_before {
+    while cached_leader_info(&cluster, REGION_ID, LEADER_STORE_ID).2 <= version_before {
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "the leader never applied the split"
@@ -322,11 +323,11 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     cluster.add_send_filter({
         let allow = allow_heartbeats_3.clone();
         move |_| DropHeartbeats {
-            target_store_ids: vec![LATCH_FOLLOWER_STORE_ID],
+            target_store_ids: vec![FOLLOWER_STORE_ID],
             allow: allow.clone(),
         }
     });
-    fail::cfg_callback(ELECTION_GATE, {
+    fail::cfg_callback("pause_before_collect_peer_msg_on_election", {
         let gate = batch_gate_3.clone();
         move || gate.enter()
     })
@@ -352,7 +353,7 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     // is re-armed for store 2; store 3 keeps receiving heartbeats, so its own
     // election never becomes due and its condition cannot fire here.
     allow_heartbeats_2.store(false, Ordering::SeqCst);
-    fail::cfg_callback(ELECTION_GATE, {
+    fail::cfg_callback("pause_before_collect_peer_msg_on_election", {
         let gate = batch_gate_2.clone();
         move || gate.enter()
     })
@@ -370,13 +371,13 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
         .recv_timeout(Duration::from_secs(3))
         .expect("the region update on store 2 must run while its campaign is pending");
     region_update_gate.open();
-    fail::remove(ELECTION_GATE);
-    fail::remove(REGION_UPDATE_GATE);
-    let cached_2 = cached_leader_info(&cluster, 2);
-    let cached_3 = cached_leader_info(&cluster, LATCH_FOLLOWER_STORE_ID);
+    fail::remove("pause_before_collect_peer_msg_on_election");
+    fail::remove("set_region_publishes_raw_leader_id");
+    let cached_2 = cached_leader_info(&cluster, REGION_ID, 2);
+    let cached_3 = cached_leader_info(&cluster, REGION_ID, FOLLOWER_STORE_ID);
 
-    fail::remove(APPLY_RES_GATE_STORE_2);
-    fail::remove(APPLY_RES_GATE);
+    fail::remove("pause_apply_res_of_store_2");
+    fail::remove("pause_apply_res_of_store_3");
     allow_heartbeats_2.store(true, Ordering::SeqCst);
     allow_heartbeats_3.store(true, Ordering::SeqCst);
     sleep_ms(500);
@@ -388,8 +389,8 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     // Both followers keep serving the region while the poisoned entries stay put.
     let mut latched_samples = 0;
     for _ in 0..20 {
-        for store_id in [2, LATCH_FOLLOWER_STORE_ID] {
-            if cached_leader_info(&cluster, store_id).0 != LATCH_LEADER_PEER_ID {
+        for store_id in [2, FOLLOWER_STORE_ID] {
+            if cached_leader_info(&cluster, REGION_ID, store_id).0 != LEADER_PEER_ID {
                 latched_samples += 1;
             }
         }
@@ -399,20 +400,20 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     // With both voters poisoned the leader cannot get a `CheckLeader` quorum at
     // all, while Raft itself is completely healthy: every replica is up, the
     // region keeps committing, and resolved ts still freezes.
-    let before = region_resolved_ts(&cluster, LATCH_LEADER_STORE_ID);
+    let before = region_resolved_ts(&cluster, REGION_ID, LEADER_STORE_ID);
     let start = Instant::now();
     let mut resolved_ts_advanced = false;
     while start.elapsed() < Duration::from_secs(4) {
         cluster.must_put(b"k3", b"v3");
         must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
         must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
-        if region_resolved_ts(&cluster, LATCH_LEADER_STORE_ID) > before {
+        if region_resolved_ts(&cluster, REGION_ID, LEADER_STORE_ID) > before {
             resolved_ts_advanced = true;
             break;
         }
         sleep_ms(50);
     }
-    let leader_version = cached_leader_info(&cluster, LATCH_LEADER_STORE_ID).2;
+    let leader_version = cached_leader_info(&cluster, REGION_ID, LEADER_STORE_ID).2;
 
     println!(
         "[latch2] cached_2={cached_2:?} cached_3={cached_3:?} leader_version={leader_version} \
@@ -420,13 +421,13 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     );
 
     assert_eq!(
-        cached_2.0, LATCH_LEADER_PEER_ID,
+        cached_2.0, LEADER_PEER_ID,
         "a follower published a raw Raft leader_id into the resolved-ts cache \
          (cached_2={cached_2:?}, cached_3={cached_3:?}, \
          latched_samples={latched_samples}/40, resolved_ts_advanced={resolved_ts_advanced})"
     );
     assert_eq!(
-        cached_3.0, LATCH_LEADER_PEER_ID,
+        cached_3.0, LEADER_PEER_ID,
         "a follower published a raw Raft leader_id into the resolved-ts cache \
          (cached_2={cached_2:?}, cached_3={cached_3:?}, \
          latched_samples={latched_samples}/40, resolved_ts_advanced={resolved_ts_advanced})"
