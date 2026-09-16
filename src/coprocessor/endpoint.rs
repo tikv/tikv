@@ -1274,13 +1274,6 @@ impl<E: Engine> Endpoint<E> {
             returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
             priority: ctx.get_priority(),
             metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
-            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
-                r.get_resource_limiter(
-                    ctx.get_resource_control_context().get_resource_group_name(),
-                    ctx.get_request_source(),
-                    ctx.get_resource_control_context().get_override_priority(),
-                )
-            }),
             deadline,
             task_id,
         }

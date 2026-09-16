@@ -50,14 +50,18 @@ It is a read-heavy hot path and directly impacts query latency.
   `data_merged_into_response`, and keeps its execution details. Failed or
   non-mergeable tasks keep normal per-task responses.
 - Final merging and serialization run in the read pool under the request's
-  deadline, resource-control settings, selected semaphore group, and tracker.
+  deadline, selected semaphore group, and tracker, but without resource-group
+  admission: every result being merged was admitted and charged when
+  produced, and under a throttled group a second admission wait could outlast
+  the deadline and discard all of them. The merge's own CPU is therefore not
+  charged to the group's limiter.
   Outputs are buffered until finalization, so they contribute to peak request
   memory; each buffered output rides in its memory-trace guard, and attachment
   rebuilds the combined response's guard (adopting a batch response's node when
   the top response is untracked, e.g. a top task error) so the retained data
   stays accounted until the response drops.
 - Data, acknowledgments, response-byte accounting, and memory tracing are
-  published only after the final deadline check. Admission failure, deadline
+  published only after the final deadline check. Pool rejection, deadline
   expiry, or failure to serialize a top result that already consumed child
   results returns no partial data or acknowledgments, allowing every task to be
   retried safely.
