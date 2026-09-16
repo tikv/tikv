@@ -551,12 +551,12 @@ mod tests {
 
         // Test `Write::parse()` handles incorrect input.
         assert!(WriteRef::parse(b"").is_err());
-        assert!(Write::has_short_value(b"").is_err());
+        Write::has_short_value(b"").unwrap_err();
 
         let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
         let mut v = lock.as_ref().to_bytes();
         assert!(WriteRef::parse(&v[..1]).is_err());
-        assert!(Write::has_short_value(&v[..1]).is_err());
+        Write::has_short_value(&v[..1]).unwrap_err();
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
         // Test `Write::parse()` ignores unknown bytes.
         v.extend(b"unknown");
