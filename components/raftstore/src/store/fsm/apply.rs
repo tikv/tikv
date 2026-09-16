@@ -808,6 +808,26 @@ where
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
+            // Test hook: let a test hold back one store's apply result, so the region
+            // update it carries is drained in a later, controlled round.
+            fail_point!(
+                "pause_apply_res_of_store_2",
+                self.store_id == 2
+                    && self.apply_res.iter().any(|res| res
+                        .exec_res
+                        .iter()
+                        .any(|e| matches!(e, ExecResult::SplitRegion { .. }))),
+                |_| panic!("should not use return")
+            );
+            fail_point!(
+                "pause_apply_res_of_store_3",
+                self.store_id == 3
+                    && self.apply_res.iter().any(|res| res
+                        .exec_res
+                        .iter()
+                        .any(|e| matches!(e, ExecResult::SplitRegion { .. }))),
+                |_| panic!("should not use return")
+            );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
