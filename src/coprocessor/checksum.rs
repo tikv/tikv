@@ -40,6 +40,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             false,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
+            range_versions: None,
             storage: TikvStorage::new(store, false),
             ranges: ranges
                 .into_iter()

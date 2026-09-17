@@ -9,6 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ::test_coprocessor::{
+    DagChunkSpliter as TestDagChunkSpliter, DagSelect as TestDagSelect,
+    ProductTable as TestProductTable,
+};
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
@@ -27,6 +31,7 @@ use kvproto::{
     tikvpb::*,
 };
 use pd_client::PdClient;
+use protobuf::Message;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -37,6 +42,10 @@ use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
+use tidb_query_datatype::{
+    codec::{Datum, table},
+    expr::EvalContext,
+};
 use tikv::{
     config::QuotaConfig,
     coprocessor::REQ_TYPE_DAG,
@@ -53,6 +62,7 @@ use tikv_util::{
     config::ReadableSize,
     worker::{LazyWorker, dummy_scheduler},
 };
+use tipb::SelectResponse;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
@@ -875,6 +885,98 @@ fn test_coprocessor() {
     let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
     client.coprocessor(&req).unwrap();
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_versioned_coprocessor_rpc() {
+    let (cluster, client, ctx) = new_cluster();
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+
+    let product = TestProductTable::new();
+    let row_key = table::encode_row_key(product.table_id(), 1);
+    let col_ids = vec![product["id"].id, product["name"].id, product["count"].id];
+
+    let old_value = table::encode_row(
+        &mut EvalContext::default(),
+        vec![
+            Datum::I64(1),
+            Datum::Bytes(b"name:old".to_vec()),
+            Datum::I64(2),
+        ],
+        &col_ids,
+    )
+    .unwrap();
+    let new_value = table::encode_row(
+        &mut EvalContext::default(),
+        vec![
+            Datum::I64(1),
+            Datum::Bytes(b"name:new".to_vec()),
+            Datum::I64(2),
+        ],
+        &col_ids,
+    )
+    .unwrap();
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(row_key.clone());
+    mutation.set_value(old_value);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], row_key.clone(), 10);
+    must_kv_commit(&client, ctx.clone(), vec![row_key.clone()], 10, 20, 20);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(row_key.clone());
+    mutation.set_value(new_value);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], row_key.clone(), 30);
+    must_kv_commit(&client, ctx.clone(), vec![row_key.clone()], 30, 40, 40);
+
+    let mut req = TestDagSelect::from(&product)
+        .key_ranges(vec![product.get_record_range_one(1)])
+        .build();
+    req.set_context(ctx.clone());
+    req.take_ranges();
+    let mut versioned_range = VersionedKeyRange::default();
+    versioned_range.set_range(product.get_record_range_one(1));
+    versioned_range.set_read_ts(20);
+    req.mut_versioned_ranges().push(versioned_range);
+
+    let err = client.coprocessor(&req).unwrap_err();
+    match err {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.code(), RpcStatusCode::INVALID_ARGUMENT);
+            assert!(
+                status
+                    .message()
+                    .contains("versioned_ranges is only supported")
+            );
+        }
+        e => panic!("unexpected rpc error: {e:?}"),
+    }
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(ctx.get_peer().get_store_id()));
+    let versioned_client = VersionedKvClient::new(channel);
+
+    let max_ts_before_req = cm.max_ts();
+    req.set_start_ts(max_ts_before_req.next().next().into_inner());
+    let resp = versioned_client.versioned_coprocessor(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(
+        resp.get_other_error().is_empty(),
+        "{}",
+        resp.get_other_error()
+    );
+
+    let mut sel_resp = SelectResponse::default();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let mut spliter = TestDagChunkSpliter::new(sel_resp.take_chunks().into(), 3);
+    let row = spliter.next().unwrap();
+    assert_eq!(row[1], Datum::Bytes(b"name:old".to_vec()));
+    assert!(spliter.next().is_none());
+    assert_eq!(max_ts_before_req, cm.max_ts());
 }
 
 #[test]

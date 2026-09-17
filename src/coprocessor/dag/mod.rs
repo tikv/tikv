@@ -34,6 +34,7 @@ where
 {
     req: DagRequest,
     ranges: Vec<KeyRange>,
+    range_versions: Option<Vec<u64>>,
     store: S,
     extra_storage_accessor: Option<R>,
     data_version: Option<u64>,
@@ -55,6 +56,7 @@ where
     pub fn new(
         req: DagRequest,
         ranges: Vec<KeyRange>,
+        range_versions: Option<Vec<u64>>,
         store: S,
         extra_storage_accessor: Option<R>,
         deadline: Deadline,
@@ -67,6 +69,7 @@ where
         DagHandlerBuilder {
             req,
             ranges,
+            range_versions,
             store,
             extra_storage_accessor,
             data_version: None,
@@ -91,6 +94,7 @@ where
         Ok(BatchDagHandler::new::<_, F>(
             self.req,
             self.ranges,
+            self.range_versions,
             self.store,
             self.extra_storage_accessor,
             self.data_version,
@@ -155,6 +159,7 @@ impl BatchDagHandler {
     pub fn new<S: Store + 'static, F: KvFormat>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
+        range_versions: Option<Vec<u64>>,
         store: S,
         extra_storage_accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
         data_version: Option<u64>,
@@ -173,6 +178,7 @@ impl BatchDagHandler {
                 ranges,
                 TikvStorage::new(store, is_cache_enabled),
                 extra_storage_accessor,
+                range_versions,
                 deadline,
                 streaming_batch_limit,
                 is_streaming,
