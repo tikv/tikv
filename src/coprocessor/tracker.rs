@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker_token, with_tls_tracker};
+use ::tracker::{FutureTrack, get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -561,11 +561,8 @@ mod tests {
     use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine};
     use tracker::track;
 
-    use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
-    use crate::{
-        coprocessor::ReqContextInner,
-        storage::{Statistics, TestEngineBuilder},
-    };
+    use super::{PerfLevel, ReqContext, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
+    use crate::storage::{Statistics, TestEngineBuilder};
 
     struct TwoPollFuture {
         first_poll: bool,
@@ -590,7 +587,8 @@ mod tests {
     fn test_streaming_item_process_time_spans_multiple_polls() {
         set_tls_engine(TestEngineBuilder::new().build().unwrap());
 
-        let req_ctx_inner = ReqContextInner::new(
+        let req_ctx = ReqContext::new(
+            ReqTag::select,
             kvrpcpb::Context::default(),
             vec![],
             Duration::from_secs(0),
@@ -599,10 +597,8 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            false,
         );
-        let mut tracker: Tracker<RocksEngine> =
-            Tracker::new(req_ctx_inner.into(), ReqTag::select, Duration::default());
+        let mut tracker: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
         tracker.on_scheduled();
         tracker.on_snapshot_finished();
         tracker.on_begin_all_items();
