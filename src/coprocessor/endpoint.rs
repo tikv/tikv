@@ -764,7 +764,7 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = track(
+                    let result = ::tracker::track(
                         handler.handle_streaming_request(),
                         tracker.poll_perf_context_tracker(),
                     )
