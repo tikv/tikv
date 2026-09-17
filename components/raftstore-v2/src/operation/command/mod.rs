@@ -874,7 +874,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 .iter()
                 .flat_map(|(v, _)| v.write_trackers().flat_map(|t| t.as_tracker_token()))
                 .collect();
-            self.perf_context().report_metrics(&tokens);
+            let _ = self.perf_context().report_metrics(&tokens);
         }
         let mut apply_res = ApplyRes::default();
         apply_res.applied_index = index;
