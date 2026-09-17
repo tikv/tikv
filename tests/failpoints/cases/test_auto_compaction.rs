@@ -2,20 +2,41 @@
 
 use std::{
     sync::{
+<<<<<<< HEAD
         atomic::{AtomicBool, Ordering},
         Arc,
+=======
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
     },
     thread,
     time::Duration,
 };
 
+<<<<<<< HEAD
 use engine_traits::{MiscExt, CF_WRITE};
+=======
+use engine_traits::{CF_DEFAULT, CF_WRITE, MiscExt};
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
 use kvproto::kvrpcpb::*;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
+use tikv_util::config::{ReadableDuration, ReadableSize};
+
+// Failpoints and FIRST_COMPACTION_CANDIDATE_REGION are process-global. Keep the
+// tests in this file from changing them concurrently.
+static AUTO_COMPACTION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_auto_compaction_test() -> MutexGuard<'static, ()> {
+    AUTO_COMPACTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 #[test]
 fn test_gc_worker_auto_compaction_with_failpoints() {
+    let _guard = lock_auto_compaction_test();
     // Test that auto compaction can be started and stopped gracefully
     // This test verifies that the auto compaction infrastructure works,
     // even though it may not actually compact in test environments
@@ -363,3 +384,347 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     fail::remove(fp_k15_k20);
     fail::remove(fp_k20_k35);
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_no_valid_split_key_wakes_auto_compaction_scan() {
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    let fp_candidates_collected = "gc_worker_auto_compaction_candidates_collected";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+
+    let scan_rounds = Arc::new(AtomicUsize::new(0));
+    let scan_rounds_clone = scan_rounds.clone();
+    fail::cfg_callback(fp_candidates_collected, move || {
+        scan_rounds_clone.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let (mut cluster, _client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        // A split-failure hint must wake the runner well before this interval.
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+    let region = cluster.get_region(b"k50");
+    cluster.must_split(&region, b"k50");
+    let region = cluster.get_region(b"k50");
+    assert_eq!(region.get_start_key(), b"k50");
+
+    fail::remove(fp_compaction_start);
+    for _ in 0..100 {
+        if scan_rounds.load(Ordering::SeqCst) >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(scan_rounds.load(Ordering::SeqCst), 1);
+
+    // The split key equals the Region start key, so SplitObserver reports
+    // NO_VALID_SPLIT_KEY. The request itself is expected to fail; its purpose
+    // is to deliver a best-effort wake-up hint to CompactionRunner.
+    cluster.split_region(&region, region.get_start_key(), Callback::None);
+
+    for _ in 0..100 {
+        if scan_rounds.load(Ordering::SeqCst) >= 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        scan_rounds.load(Ordering::SeqCst),
+        2,
+        "NO_VALID_SPLIT_KEY should wake a new scan before the 30-second interval"
+    );
+
+    fail::remove(fp_candidates_collected);
+}
+
+#[test]
+fn test_large_value_region_is_prioritized_by_reclaimable_bytes() {
+    use tikv::server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION;
+
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+        // Neither region meets the entry-count or percentage admission gates.
+        // Both are admitted through the byte gate, then ranked by reclaimable bytes.
+        cluster.cfg.gc.auto_compaction.redundant_rows_threshold = u64::MAX;
+        cluster
+            .cfg
+            .gc
+            .auto_compaction
+            .redundant_rows_percent_threshold = 100;
+        cluster.cfg.gc.auto_compaction.redundant_bytes_threshold = ReadableSize(1);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+
+    let region = cluster.get_region(b"k50");
+    cluster.must_split(&region, b"k50");
+    let large_value_region = cluster.get_region(b"k10");
+    let small_value_region = cluster.get_region(b"k60");
+
+    let make_ctx = |region: &kvproto::metapb::Region| {
+        let mut ctx = Context::new();
+        ctx.set_region_id(region.get_id());
+        ctx.set_region_epoch(region.get_region_epoch().clone());
+        ctx.set_peer(region.get_peers()[0].clone());
+        ctx
+    };
+    let large_ctx = make_ctx(&large_value_region);
+    let small_ctx = make_ctx(&small_value_region);
+
+    // The first region has only two stale versions, but they carry large values.
+    for (i, key) in [b"k10".as_slice(), b"k20".as_slice()].iter().enumerate() {
+        for commit_ts in [10 + i as u64, 30 + i as u64] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(Op::Put, key, &vec![b'x'; 256 * 1024])];
+            must_kv_prewrite(
+                &client,
+                large_ctx.clone(),
+                mutations,
+                key.to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                large_ctx.clone(),
+                vec![key.to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+
+    // The second region has more stale versions, but their values are tiny.
+    for i in 0..20 {
+        let key = format!("k{:02}", 60 + i);
+        for commit_ts in [10 + i, 40 + i] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(Op::Put, key.as_bytes(), b"small")];
+            must_kv_prewrite(
+                &client,
+                small_ctx.clone(),
+                mutations,
+                key.as_bytes().to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                small_ctx.clone(),
+                vec![key.as_bytes().to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+    fail::remove(fp_compaction_start);
+
+    let mut timeout = 100;
+    while FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) == 0 && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+    assert_eq!(
+        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst),
+        large_value_region.get_id(),
+        "the region with more reclaimable bytes should be compacted first"
+    );
+}
+
+#[test]
+fn test_mvcc_aware_compaction_prioritization() {
+    use tikv::{
+        server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION,
+        storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER,
+    };
+
+    let _guard = lock_auto_compaction_test();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
+    // Test that MVCC-aware compaction correctly prioritizes regions
+    // with high MVCC read activity over regions with just high redundancy
+    // First check if the auto compaction thread was started
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+
+    let fp_thread_start = "gc_worker_auto_compaction_thread_start";
+    let thread_started = Arc::new(AtomicBool::new(false));
+    let thread_started_clone = thread_started.clone();
+    fail::cfg_callback(fp_thread_start, move || {
+        thread_started_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(1);
+        cluster.cfg.gc.auto_compaction.tombstones_num_threshold = 3;
+        cluster.cfg.gc.auto_compaction.redundant_rows_threshold = 3;
+        cluster.cfg.gc.auto_compaction.tombstones_percent_threshold = 10;
+        cluster
+            .cfg
+            .gc
+            .auto_compaction
+            .redundant_rows_percent_threshold = 10;
+        // Enable compaction filter to score redundant MVCC versions
+        cluster.cfg.gc.enable_compaction_filter = true;
+        // Enable MVCC-aware compaction with low threshold for testing
+        cluster.cfg.gc.auto_compaction.mvcc_read_aware_enabled = true;
+        cluster.cfg.gc.auto_compaction.mvcc_scan_threshold = 50; // Low threshold for testing
+        cluster.cfg.gc.auto_compaction.mvcc_read_weight = 3.0;
+        cluster.cfg.gc.auto_compaction.mvcc_scan_threshold = 1000; // Disable age factor for simplicity
+    });
+
+    cluster.pd_client.disable_default_operator();
+
+    let mut timeout = 50; // 5 seconds
+    while !thread_started.load(Ordering::SeqCst) && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+    assert!(
+        thread_started.load(Ordering::SeqCst),
+        "Auto compaction thread should have started and hit the thread_start failpoint"
+    );
+
+    // Set gc_safe_point on pd_client's cluster (used by compaction runner)
+    cluster.pd_client.set_gc_safe_point(27);
+
+    // Create 3 regions with different characteristics
+    let mut region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k10");
+    region = cluster.get_region(b"k15");
+    cluster.must_split(&region, b"k20");
+
+    let region1 = cluster.get_region(b"k05"); // k0-k10
+    let region2 = cluster.get_region(b"k15"); // k10-k20
+    let region3 = cluster.get_region(b"k25"); // k20-...
+
+    let mut ctx1 = Context::new();
+    ctx1.set_region_id(region1.get_id());
+    ctx1.set_region_epoch(region1.get_region_epoch().clone());
+    ctx1.set_peer(region1.get_peers()[0].clone());
+
+    let mut ctx2 = Context::new();
+    ctx2.set_region_id(region2.get_id());
+    ctx2.set_region_epoch(region2.get_region_epoch().clone());
+    ctx2.set_peer(region2.get_peers()[0].clone());
+
+    let mut ctx3 = Context::new();
+    ctx3.set_region_id(region3.get_id());
+    ctx3.set_region_epoch(region3.get_region_epoch().clone());
+    ctx3.set_peer(region3.get_peers()[0].clone());
+
+    let large_value = vec![b'x'; 100];
+
+    // Region 1 (k0-k10): Medium redundancy, NO read activity
+    // 20 total entries, 10 redundant versions
+    for i in 0..10 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx1.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx1.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // Region 2 (k10-k20): Medium redundancy, HIGH read activity
+    // 20 total entries, 10 redundant versions
+    // This should be prioritized due to MVCC read tracking
+    for i in 10..20 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx2.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx2.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // Region 3 (k20-k30): HIGH redundancy, NO read activity
+    // 30 total entries, 20 redundant versions
+    // Even though this has more redundancy, it should be lower priority than Region
+    // 2
+    for i in 20..30 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 25, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx3.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx3.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // We record 100 requests, each scanning 20000 MVCC versions on average
+    for _ in 0..100 {
+        MVCC_READ_TRACKER
+            .get()
+            .unwrap()
+            .record_read(region2.get_id(), 20000);
+    }
+    // sleep
+    thread::sleep(Duration::from_millis(5000));
+    // start execution of auto compaction thread
+    fail::remove(fp_compaction_start);
+
+    // Store the expected region IDs for verification
+    let region1_id = region1.get_id();
+    let region2_id = region2.get_id();
+    let region3_id = region3.get_id();
+
+    // Wait for first candidate to be selected for compaction
+    let mut timeout: i32 = 100;
+    while FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) == 0 && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+
+    // Verify that Region 2 was selected as the first candidate
+    // This is the actual verification that proves MVCC-aware prioritization works
+    let first_region_id = FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst);
+
+    let tracker = MVCC_READ_TRACKER.get().unwrap();
+    assert_eq!(
+        first_region_id,
+        region2_id,
+        "Region 2 should be selected first for compaction due to MVCC read activity. \
+         Expected region_id={}, but got region_id={}. \
+         Region 1 has {} MVCC versions/req, Region 2 has {} MVCC versions/req, Region 3 has {} MVCC versions/req",
+        region2_id,
+        first_region_id,
+        tracker.get_mvcc_versions_scanned(region1_id),
+        tracker.get_mvcc_versions_scanned(region2_id),
+        tracker.get_mvcc_versions_scanned(region3_id)
+    );
+}
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))

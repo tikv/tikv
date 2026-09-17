@@ -43,7 +43,7 @@ use super::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
-    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
+    compaction_runner::{CompactionControl, CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
     Callback, Error, ErrorInner, Result,
@@ -1199,6 +1199,7 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
+    compaction_control: Arc<CompactionControl>,
     feature_gate: FeatureGate,
 }
 
@@ -1216,6 +1217,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             compaction_runner_handle: self.compaction_runner_handle.clone(),
+            compaction_control: self.compaction_control.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1323,11 +1325,20 @@ impl<E: Engine> GcWorker<E> {
             }
         };
 
+<<<<<<< HEAD
         let compaction_runner = CompactionRunner::new(
+=======
+        // Initialize the global MVCC read tracker with config manager
+        use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
+        init_mvcc_read_tracker(self.config_manager.clone());
+
+        let compaction_runner = CompactionRunner::new_with_control(
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
             safe_point_provider,
             region_info_provider,
             kv_engine,
             self.config_manager.clone(),
+            self.compaction_control.clone(),
         );
 
         let new_handle = compaction_runner
@@ -1339,7 +1350,57 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
+<<<<<<< HEAD
     pub fn start(&mut self, store_id: u64) -> Result<()> {
+=======
+    pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
+        self.worker_scheduler.clone()
+    }
+}
+
+impl<E: Engine> GcWorker<E> {
+    pub fn new(
+        engine: E,
+        flow_info_sender: Sender<FlowInfo>,
+        cfg: GcConfig,
+        feature_gate: FeatureGate,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
+    ) -> Self {
+        let worker_builder = WorkerBuilder::new(GC_WORKER_THREAD)
+            .pending_capacity(GC_MAX_PENDING_TASKS)
+            .thread_count(cfg.num_threads);
+        let worker = worker_builder.create().lazy_build(GC_WORKER_THREAD);
+        let worker_scheduler = worker.scheduler();
+        GcWorker {
+            engine,
+            flow_info_sender: Some(flow_info_sender),
+            config_manager: GcWorkerConfigManager(
+                Arc::new(VersionTrack::new(cfg)),
+                Some(worker.pool()),
+            ),
+            refs: Arc::new(AtomicUsize::new(1)),
+            worker: Arc::new(Mutex::new(worker)),
+            worker_scheduler,
+            gc_manager_handle: Arc::new(Mutex::new(None)),
+            compaction_runner_handle: Arc::new(Mutex::new(None)),
+            compaction_control: Arc::new(CompactionControl::default()),
+            feature_gate,
+            region_info_provider,
+        }
+    }
+
+    pub fn start(
+        &mut self,
+        store_id: u64,
+        coprocessor_host: CoprocessorHost<E::Local>,
+    ) -> Result<()> {
+        // Cloned coprocessor hosts share this notifier registry. The split
+        // observer only sets a coalesced wake-up bit; it never submits a
+        // compaction task to the GC or raftstore cleanup workers.
+        CompactionControl::initialize_metrics();
+        coprocessor_host.set_no_valid_split_key_notifier(self.compaction_control.clone());
+
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,
