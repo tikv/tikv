@@ -4277,7 +4277,9 @@ where
 
     /// `ReadIndex` requests could be lost in network, so on followers commands
     /// could queue in `pending_reads` forever. Sending a new `ReadIndex`
-    /// periodically can resolve this.
+    /// periodically can resolve this. Re-propose every unresolved read,
+    /// not just the tail: a mid-queue loss would otherwise block the
+    /// FIFO drain permanently.
     pub fn retry_pending_reads(&mut self, cfg: &Config) {
         if self.is_leader()
             || !self.pending_reads.check_needs_retry(cfg)
@@ -4286,21 +4288,28 @@ where
             return;
         }
 
-        let read = self.pending_reads.back_mut().unwrap();
-        debug_assert!(read.read_index.is_none());
-        self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(
-                read.id,
-                read.addition_request.as_deref(),
-                None,
-                None,
-            ));
-        debug!(
-            "request to get a read index";
-            "request_id" => ?read.id,
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
+        // Materialize before calling `read_index` to avoid holding a
+        // borrow of `self.pending_reads` across the mutation.
+        let unresolved: Vec<(Uuid, Option<Box<raft_cmdpb::ReadIndexRequest>>)> = self
+            .pending_reads
+            .unresolved_iter()
+            .map(|r| (r.id, r.addition_request.clone()))
+            .collect();
+        for (id, addition_request) in unresolved {
+            self.raft_group
+                .read_index(ReadIndexContext::fields_to_bytes(
+                    id,
+                    addition_request.as_deref(),
+                    None,
+                    None,
+                ));
+            debug!(
+                "request to get a read index";
+                "request_id" => ?id,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
     }
 
     pub fn push_pending_read(
