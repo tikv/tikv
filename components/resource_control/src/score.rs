@@ -25,11 +25,12 @@ use tikv_util::{
     time::Instant,
 };
 
-/// Test-only: a cpu_score high enough to guarantee maximum pressure
-/// regardless of configured thresholds, used to drive foreground/read-pool
-/// throttling tests unconditionally into their "fully engaged" branch.
-#[cfg(test)]
-pub(crate) const TARGET_CPU: f64 = 90.0;
+/// CPU utilization a node is assumed to reach once foreground pressure is
+/// engaged. `resource_group.rs` measures the overshoot from
+/// `fg_cpu_throttle_threshold` up to this when sizing the noisy group set,
+/// and tests pass it as a `cpu_score` guaranteed to engage regardless of the
+/// configured threshold.
+pub(crate) const PEAK_CPU_PCT: f64 = 90.0;
 
 /// Shortest interval [`ThreadGroupCpuTracker::measure_cpu_cores`] will measure
 /// over; below this the tick count is too small to be meaningful and the cached

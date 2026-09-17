@@ -20,12 +20,13 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, ControlledFuture, READ_POOL_CPU_VEC, ResourceController,
-    ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
+    AdmissionDecision, CONTROL_TICK, ControlledFuture, LEEWAY_FACTOR, LEEWAY_FRACTION,
+    READ_POOL_CPU_VEC, ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority,
+    with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
-    resource_control::{TaskMetadata, priority_from_task_meta},
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, priority_from_task_meta},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
@@ -46,8 +47,6 @@ use crate::{
     storage::kv::{Engine, FlowStatsReporter, destroy_tls_engine, set_tls_engine},
 };
 
-// the duration to check auto-scale unified-thread-pool's thread
-const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(10);
 // consider scale out read pool size if the average thread cpu usage is higher
 // than this threshold.
 const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
@@ -139,7 +138,7 @@ async fn admission_and_enqueue(
     gauge: IntGauge,
     max_tasks: usize,
     remote: Remote<TaskCell>,
-    task_cell: TaskCell,
+    mut task_cell: TaskCell,
     running_tasks: Vec<IntGauge>,
     resource_ctl: Option<Arc<ResourceController>>,
     estimated_priority: u64,
@@ -155,14 +154,14 @@ async fn admission_and_enqueue(
                           "group" => limiter.name(),
                           "delay" => ?d);
                 }
-                Some((d, resource_manager))
+                Some(d)
             }
             AdmissionDecision::Allow => None,
         },
         _ => None,
     };
-    if let Some((d, slot)) = delay {
-        let mut _guard = slot.as_ref().map(|rm| rm.delay_slot_guard());
+    if let Some(d) = delay {
+        let mut _guard = resource_manager.as_ref().map(|rm| rm.delay_slot_guard());
         futures_timer::Delay::new(d).await;
         if let Some(guard) = _guard.as_mut() {
             guard.release();
@@ -170,17 +169,41 @@ async fn admission_and_enqueue(
     }
     // After admission (and any sleep), check pool capacity and evict if needed.
     if gauge.get() as usize >= max_tasks {
-        if let Some(ref _resource_ctl) = resource_ctl {
-            if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
+        // Eviction is only available with a resource controller, and normally
+        // succeeds -- so nothing about the rejection is computed until the
+        // request is actually being rejected.
+        let evicted = if resource_ctl.is_some() {
+            remote.try_evict_lowest(estimated_priority)
+        } else {
+            None
+        };
+        match evicted {
+            Some(mut evicted) => {
                 let evicted_prio = priority_from_task_meta(evicted.mut_extras().metadata());
                 running_tasks[evicted_prio as usize].dec();
                 UNIFIED_READ_POOL_EVICTED_TASKS.inc();
                 drop(evicted);
-            } else {
+            }
+            None => {
+                let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
+                // The name reaches us from the client, so bound it to the
+                // configured groups before it becomes a metric label -- see
+                // `ResourceGroupManager::bounded_group_name`. Invalid UTF-8
+                // cannot name a configured group either, so it collapses the
+                // same way. `group_name()` already reports "default" for the
+                // default group, which is the label `check_busy_threshold`
+                // uses for it, so the two pre-pool counters agree there with
+                // no special case.
+                let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
+                let label = match resource_manager.as_deref() {
+                    Some(rm) => rm.bounded_group_name(name),
+                    None => DEFAULT_RESOURCE_GROUP_NAME,
+                };
+                UNIFIED_READ_POOL_FULL_REJECTED
+                    .with_label_values(&[label])
+                    .inc();
                 return Err(ReadPoolError::UnifiedReadPoolFull);
             }
-        } else {
-            return Err(ReadPoolError::UnifiedReadPoolFull);
         }
     }
     gauge.inc();
@@ -427,6 +450,13 @@ impl ReadPoolHandle {
         } = self
         {
             time_slice_inspector.update();
+            UNIFIED_READ_POOL_EWMA_TIME_SLICE_US
+                .set(time_slice_inspector.get_ewma_time_slice().as_micros() as i64);
+        }
+        // The input to `check_busy_threshold`. Sampled here rather than at the
+        // gate so it is reported even when no client sends a busy threshold.
+        if let Some(wait) = self.get_estimated_wait_duration() {
+            UNIFIED_READ_POOL_ESTIMATED_WAIT_US.set(wait.as_micros() as i64);
         }
     }
 
@@ -435,9 +465,28 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
+    /// Bound a wire-supplied resource group name for use as a metric label.
+    /// With no resource manager there are no configured groups to validate
+    /// against, so everything collapses to the default rather than letting an
+    /// unvalidated name reach the label.
+    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> &'a str {
+        match self {
+            ReadPoolHandle::Yatp {
+                resource_manager: Some(rm),
+                ..
+            } => rm.bounded_group_name(resource_group),
+            _ => DEFAULT_RESOURCE_GROUP_NAME,
+        }
+    }
+
+    /// `resource_group` is bytes rather than `&str` because most requests
+    /// return at one of the two gates below without ever needing the name:
+    /// a client that does not set `busy_threshold` never gets past the first.
+    /// Validating UTF-8 in the caller spent that work on every request.
     pub fn check_busy_threshold(
         &self,
         busy_threshold: Duration,
+        resource_group: &[u8],
     ) -> Result<(), errorpb::ServerIsBusy> {
         if busy_threshold.is_zero() {
             return Ok(());
@@ -452,6 +501,10 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        let group = std::str::from_utf8(resource_group).unwrap_or_default();
+        UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
+            .with_label_values(&[self.bounded_group_label(group)])
+            .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,
             "busy_err" => ?&busy_err,
@@ -918,9 +971,8 @@ impl ReadPoolConfigRunner {
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let leeway = 0.1;
-        let busy_cpu_scale_in = read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
-        let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
+        let busy_cpu_scale_in = read_pool_cpu > (1.0 + LEEWAY_FRACTION) * target_cpu_cores;
+        let busy_cpu_scale_out = read_pool_cpu < LEEWAY_FACTOR * target_cpu_cores
             && self.cur_thread_count < self.core_thread_count
             && scale_out_allowed;
 
@@ -946,14 +998,13 @@ impl ReadPoolConfigRunner {
 
         self.set_thread_count(new_thread_count);
 
-        // While we haven't scaled back up to core_thread_count, keep noisy
-        // resource groups deprioritized. Once recovered, release everyone —
-        // which also clears any flags left over from when fair scheduling was
-        // last enabled, since deprioritizing is a no-op while it is off.
+        // Only CPU pressure justifies penalizing a tenant — the thread ladder
+        // also scales in when the pool is merely oversized. Release at full
+        // recovery also clears flags left from when fair scheduling was off.
         if let Some(rm) = resource_manager.as_ref() {
-            if self.cur_thread_count < self.core_thread_count {
+            if busy_cpu_scale_in {
                 rm.deprioritize_over_quota_groups();
-            } else {
+            } else if self.cur_thread_count == self.core_thread_count {
                 rm.reset_group_priorities();
             }
         }
@@ -1015,7 +1066,7 @@ impl ReadPoolConfigManager {
         cpu_threshold: f64,
     ) -> Self {
         let runner = ReadPoolConfigRunner {
-            interval: READ_POOL_THREAD_CHECK_DURATION,
+            interval: CONTROL_TICK,
             sender,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new(&get_unified_read_pool_name()),
@@ -1100,6 +1151,34 @@ mod metrics {
         pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter = register_int_counter!(
             "tikv_unified_read_pool_evicted_tasks",
             "Number of tasks evicted from the unified read pool by higher-priority tasks"
+        )
+        .unwrap();
+        // Splits the two sources of `ServerIsBusy`: the estimated-wait gate in
+        // `check_busy_threshold` and the capacity gate in the spawn path. Both
+        // return the same error to the client, so without these the share of
+        // each is not recoverable from metrics.
+        pub static ref UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED: IntCounterVec =
+            register_int_counter_vec!(
+                "tikv_unified_read_pool_busy_threshold_rejected_total",
+                "Requests rejected because the estimated read pool wait exceeded the client's busy threshold",
+                &["resource_group"]
+            )
+            .unwrap();
+        pub static ref UNIFIED_READ_POOL_FULL_REJECTED: IntCounterVec =
+            register_int_counter_vec!(
+                "tikv_unified_read_pool_full_rejected_total",
+                "Requests rejected because the unified read pool queue was at capacity",
+                &["resource_group"]
+            )
+            .unwrap();
+        pub static ref UNIFIED_READ_POOL_ESTIMATED_WAIT_US: IntGauge = register_int_gauge!(
+            "tikv_unified_read_pool_estimated_wait_us",
+            "Estimated queueing wait for a new unified read pool task, in microseconds"
+        )
+        .unwrap();
+        pub static ref UNIFIED_READ_POOL_EWMA_TIME_SLICE_US: IntGauge = register_int_gauge!(
+            "tikv_unified_read_pool_ewma_time_slice_us",
+            "EWMA of a single task poll duration in the unified read pool, in microseconds"
         )
         .unwrap();
     }
@@ -1249,11 +1328,33 @@ mod tests {
         block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
             .unwrap();
 
+        let full_rejected = || {
+            UNIFIED_READ_POOL_FULL_REJECTED
+                .with_label_values(&[DEFAULT_RESOURCE_GROUP_NAME])
+                .get()
+        };
+        let before = full_rejected();
+
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
+        // The metadata above carries no resource group. Its rejection has to be
+        // attributed to "default", the label `check_busy_threshold` uses for the
+        // same group, so the two pre-pool counters stay comparable.
+        assert!(
+            full_rejected() > before,
+            "the default group's full-pool rejection must be counted under \
+             {DEFAULT_RESOURCE_GROUP_NAME}"
+        );
+        assert_eq!(
+            UNIFIED_READ_POOL_FULL_REJECTED
+                .with_label_values(&[""])
+                .get(),
+            0,
+            "an empty group name must never reach the label"
+        );
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1613,7 +1714,7 @@ mod tests {
 
         // Repeated ticks keep reducing cur_thread_count relative to itself
         // each time (via the read pool's own cur_thread_count * ratio math),
-        // until it stabilizes at floor(0.9 * 4.0) = 3 — the target ceiling's
+        // until it stabilizes at floor(0.85 * 4.0) = 3 — the target ceiling's
         // own floor, since the fixed test reading never drops further to
         // push the ceiling down any more.
         for _ in 0..20 {
@@ -1713,8 +1814,6 @@ mod tests {
         auto_adjust: bool,
         resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> (ReadPoolConfigRunner, tikv_util::worker::Worker) {
-        use tikv_util::worker::Worker;
-
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 8,
@@ -2218,6 +2317,97 @@ mod tests {
     }
 
     #[test]
+    fn test_busy_threshold_rejection_is_counted() {
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 1,
+            max_tasks_per_worker: 100,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        resource_manager.add_resource_group(new_resource_group_ru("noisy".into(), 5000, 1));
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool_with_name(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager.clone()),
+            CleanupMethod::InPlace,
+            "test-busy-threshold".to_owned(),
+            false,
+        );
+        let handle = pool.handle();
+
+        // The estimate is one poll's duration times the queued tasks per
+        // worker, so both have to be non-zero before the gate can fire at all.
+        let (inspector, running_tasks) = match &handle {
+            ReadPoolHandle::Yatp {
+                time_slice_inspector,
+                running_tasks,
+                ..
+            } => (time_slice_inspector, running_tasks),
+            _ => panic!("expected a yatp pool"),
+        };
+        inspector.atomic_ewma_nanos.store(
+            Duration::from_millis(1).as_nanos() as u64,
+            std::sync::atomic::Ordering::Release,
+        );
+        running_tasks[0].add(500);
+        assert_eq!(
+            handle.get_estimated_wait_duration(),
+            Some(Duration::from_millis(500)),
+            "500 queued tasks on one worker at 1ms per poll"
+        );
+
+        let counter = |g: &str| {
+            UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
+                .with_label_values(&[g])
+                .get()
+        };
+        let before = counter("noisy");
+        // Zero means the client asked for no gate; 1s is above the estimate.
+        // Neither is a rejection.
+        handle
+            .check_busy_threshold(Duration::ZERO, b"noisy")
+            .expect("a zero threshold disables the gate");
+        handle
+            .check_busy_threshold(Duration::from_secs(1), b"noisy")
+            .expect("1s is above the 500ms estimate");
+        assert_eq!(counter("noisy"), before);
+
+        let err = handle
+            .check_busy_threshold(Duration::from_millis(100), b"noisy")
+            .expect_err("the estimate is over the threshold");
+        assert_eq!(err.estimated_wait_ms, 500);
+        assert_eq!(counter("noisy"), before + 1, "rejection must be counted");
+        assert_eq!(
+            counter("quiet"),
+            0,
+            "rejection must be attributed to its own group"
+        );
+
+        // An unconfigured name arrives from the client and must not become a
+        // label of its own, or a caller mints a new series per request.
+        let default_before = counter(DEFAULT_RESOURCE_GROUP_NAME);
+        handle
+            .check_busy_threshold(Duration::from_millis(100), b"../../etc/passwd\n{injected}")
+            .expect_err("the estimate is over the threshold");
+        assert_eq!(
+            counter("../../etc/passwd\n{injected}"),
+            0,
+            "an unconfigured group name must never reach the label"
+        );
+        assert_eq!(
+            counter(DEFAULT_RESOURCE_GROUP_NAME),
+            default_before + 1,
+            "it is counted against the default group instead"
+        );
+
+        running_tasks[0].sub(500);
+    }
+
+    #[test]
     fn test_auto_adjust_disable_notifies_pool_size_change() {
         use std::sync::mpsc::sync_channel;
 
@@ -2250,7 +2440,7 @@ mod tests {
         };
 
         let mut runner = ReadPoolConfigRunner {
-            interval: READ_POOL_THREAD_CHECK_DURATION,
+            interval: CONTROL_TICK,
             sender: tx,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test"),
