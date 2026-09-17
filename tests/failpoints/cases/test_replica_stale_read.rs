@@ -109,21 +109,33 @@ impl Drop for GateGuard {
 struct DropHeartbeats {
     target_store_ids: Vec<u64>,
     allow: Arc<AtomicBool>,
+    /// Signals that a heartbeat for one of the target stores is on its way.
+    heartbeat_sent: mpsc::Sender<()>,
 }
 
 impl Filter for DropHeartbeats {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> raftstore::Result<()> {
-        if self.allow.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        msgs.retain(|msg| {
-            msg.get_message().get_msg_type() != MessageType::MsgHeartbeat
-                || !self
+        let is_heartbeat = |msg: &RaftMessage| {
+            msg.get_message().get_msg_type() == MessageType::MsgHeartbeat
+                && self
                     .target_store_ids
                     .contains(&msg.get_to_peer().get_store_id())
-        });
+        };
+        if !self.allow.load(Ordering::SeqCst) {
+            msgs.retain(|msg| !is_heartbeat(msg));
+        } else if msgs.iter().any(is_heartbeat) {
+            let _ = self.heartbeat_sent.send(());
+        }
         check_messages(msgs)
     }
+}
+
+/// Wait for one of the steps a peer thread announces through a gate or a
+/// filter.
+fn recv(arrived: &mpsc::Receiver<()>, what: &str) {
+    arrived
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
 }
 
 /// `(leader peer id, leader term, region version)` as cached by
@@ -280,6 +292,10 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     sleep_ms(300);
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"z");
+    // `right_derive_when_split` defaults to true, so the new region takes ["", "z")
+    // and region 1 keeps ["z", +∞): the keys used below have to be greater than
+    // "z".
+    assert_eq!(cluster.get_region(b"z1").get_id(), REGION_ID);
     for (name, arrived) in [("store 2", &apply_arrived_2), ("store 3", &apply_arrived_3)] {
         arrived
             .recv_timeout(Duration::from_secs(10))
@@ -308,11 +324,24 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     // Phase 1 silences store 3 while store 2 keeps answering.
     let allow_heartbeats_2 = Arc::new(AtomicBool::new(true));
     let allow_heartbeats_3 = Arc::new(AtomicBool::new(false));
+    let (apply_notified_2, apply_notified_2_rx) = mpsc::channel();
+    let (apply_notified_3, apply_notified_3_rx) = mpsc::channel();
+    fail::cfg_callback("notified_apply_res_of_store_2", move || {
+        let _ = apply_notified_2.send(());
+    })
+    .unwrap();
+    fail::cfg_callback("notified_apply_res_of_store_3", move || {
+        let _ = apply_notified_3.send(());
+    })
+    .unwrap();
+    let (heartbeat_sent_2, heartbeat_arrived_2) = mpsc::channel();
+    let (heartbeat_sent_3, heartbeat_arrived_3) = mpsc::channel();
     cluster.add_send_filter({
         let allow = allow_heartbeats_2.clone();
         move |_| DropHeartbeats {
             target_store_ids: vec![2],
             allow: allow.clone(),
+            heartbeat_sent: heartbeat_sent_2.clone(),
         }
     });
     cluster.add_send_filter({
@@ -320,6 +349,7 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
         move |_| DropHeartbeats {
             target_store_ids: vec![FOLLOWER_STORE_ID],
             allow: allow.clone(),
+            heartbeat_sent: heartbeat_sent_3.clone(),
         }
     });
     fail::cfg_callback("pause_before_collect_peer_msg_on_election", {
@@ -331,15 +361,33 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     batch_arrived_3
         .recv_timeout(Duration::from_secs(10))
         .expect("the follower on store 3 must reach its election timeout");
+    // Ten base ticks: the pending tick is in the mailbox by now and cannot be
+    // replaced while the peer is parked, because ticks are only re-armed once
+    // handled.
     sleep_ms(100);
+    while apply_notified_3_rx.try_recv().is_ok() {}
     apply_gate_3.open();
-    sleep_ms(50);
+    // The split's apply result is handed to this peer now, so the round below
+    // handles it after the election tick instead of racing it.
+    recv(
+        &apply_notified_3_rx,
+        "store 3 must hand the split apply result to its peer",
+    );
+    while heartbeat_arrived_3.try_recv().is_ok() {}
     allow_heartbeats_3.store(true, Ordering::SeqCst);
-    sleep_ms(200);
+    recv(&heartbeat_arrived_3, "a heartbeat for store 3 must be sent");
+    sleep_ms(50);
     batch_gate_3.open();
-    region_update_arrived
-        .recv_timeout(Duration::from_secs(3))
-        .expect("the region update on store 3 must run while its campaign is pending");
+    // The round now handles the election tick and then the region update; the
+    // failpoint parks it right there, which is the proof that the campaign is
+    // still unpublished and that everything queued from now on lands behind the
+    // region update.
+    recv(
+        &region_update_arrived,
+        "the region update on store 3 must run while its campaign is pending",
+    );
+    // Let a heartbeat in: it ends the campaign in this same round, so nothing is
+    // published. The filter acknowledges that it was sent.
     // The parked region update holds store 3's meta lock, so let it finish before
     // the caches are read.
     region_update_gate.permit();
@@ -357,14 +405,21 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
         .recv_timeout(Duration::from_secs(10))
         .expect("the follower on store 2 must reach its election timeout");
     sleep_ms(100);
+    while apply_notified_2_rx.try_recv().is_ok() {}
     apply_gate_2.open();
-    sleep_ms(50);
+    recv(
+        &apply_notified_2_rx,
+        "store 2 must hand the split apply result to its peer",
+    );
+    while heartbeat_arrived_2.try_recv().is_ok() {}
     allow_heartbeats_2.store(true, Ordering::SeqCst);
-    sleep_ms(200);
+    recv(&heartbeat_arrived_2, "a heartbeat for store 2 must be sent");
+    sleep_ms(50);
     batch_gate_2.open();
-    region_update_arrived
-        .recv_timeout(Duration::from_secs(3))
-        .expect("the region update on store 2 must run while its campaign is pending");
+    recv(
+        &region_update_arrived,
+        "the region update on store 2 must run while its campaign is pending",
+    );
     region_update_gate.open();
     fail::remove("pause_before_collect_peer_msg_on_election");
     fail::remove("set_region_publishes_raw_leader_id");
@@ -373,17 +428,23 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
 
     fail::remove("pause_apply_res_of_store_2");
     fail::remove("pause_apply_res_of_store_3");
+    fail::remove("notified_apply_res_of_store_2");
+    fail::remove("notified_apply_res_of_store_3");
     allow_heartbeats_2.store(true, Ordering::SeqCst);
     allow_heartbeats_3.store(true, Ordering::SeqCst);
-    sleep_ms(500);
+    // Let the released writes and the last heartbeat settle before reading the
+    // caches.
+    sleep_ms(200);
 
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
 
     // Both followers keep serving the region while the poisoned entries stay put.
+    // Ten samples over one second are enough: nothing in a healthy cluster rewrites
+    // the entry, so a single stale sample would already be a failure.
     let mut latched_samples = 0;
-    for _ in 0..20 {
+    for _ in 0..10 {
         for store_id in [2, FOLLOWER_STORE_ID] {
             if cached_leader_info(&cluster, REGION_ID, store_id).0 != LEADER_PEER_ID {
                 latched_samples += 1;
@@ -398,10 +459,15 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     let before = region_resolved_ts(&cluster, REGION_ID, LEADER_STORE_ID);
     let start = Instant::now();
     let mut resolved_ts_advanced = false;
-    while start.elapsed() < Duration::from_secs(4) {
-        cluster.must_put(b"k3", b"v3");
-        must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
-        must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    for round in 0..40 {
+        // Fresh keys and values inside region 1 prove the affected region is still
+        // committing, not the region created by the split.
+        let key = format!("z{round}").into_bytes();
+        let value = format!("v{round}").into_bytes();
+        cluster.must_put(&key, &value);
+        for store_id in [2, 3] {
+            must_get_equal(&cluster.get_engine(store_id), &key, &value);
+        }
         if region_resolved_ts(&cluster, REGION_ID, LEADER_STORE_ID) > before {
             resolved_ts_advanced = true;
             break;
@@ -409,23 +475,45 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
         sleep_ms(50);
     }
     let leader_version = cached_leader_info(&cluster, REGION_ID, LEADER_STORE_ID).2;
+    // Check the Raft view independently of the resolved-ts cache: the followers
+    // must still name the original leader, in the original term, i.e. no
+    // leadership change repaired (or caused) anything here.
+    let mut raft_leaders = Vec::new();
+    for store_id in [2, 3] {
+        let leader = cluster
+            .query_leader(store_id, REGION_ID, Duration::from_secs(1))
+            .unwrap_or_else(|| panic!("store {store_id} has no Raft leader"));
+        raft_leaders.push(leader.get_id());
+    }
+    let leader_term = cached_leader_info(&cluster, REGION_ID, LEADER_STORE_ID).1;
 
     println!(
         "[latch2] cached_2={cached_2:?} cached_3={cached_3:?} leader_version={leader_version} \
-         latched_samples={latched_samples}/40 resolved_ts_advanced={resolved_ts_advanced}"
+         raft_leaders={raft_leaders:?} leader_term={leader_term} \
+         latched_samples={latched_samples}/20 resolved_ts_advanced={resolved_ts_advanced}"
+    );
+    assert_eq!(
+        raft_leaders,
+        vec![LEADER_PEER_ID, LEADER_PEER_ID],
+        "a leadership change happened, so this run does not show the intended scenario"
+    );
+    assert!(
+        cached_2.1 == leader_term && cached_3.1 == leader_term,
+        "a term change happened, so this run does not show the intended scenario: \
+         cached_2={cached_2:?} cached_3={cached_3:?} leader_term={leader_term}"
     );
 
     assert_eq!(
         cached_2.0, LEADER_PEER_ID,
         "a follower published a raw Raft leader_id into the resolved-ts cache \
          (cached_2={cached_2:?}, cached_3={cached_3:?}, \
-         latched_samples={latched_samples}/40, resolved_ts_advanced={resolved_ts_advanced})"
+         latched_samples={latched_samples}/20, resolved_ts_advanced={resolved_ts_advanced})"
     );
     assert_eq!(
         cached_3.0, LEADER_PEER_ID,
         "a follower published a raw Raft leader_id into the resolved-ts cache \
          (cached_2={cached_2:?}, cached_3={cached_3:?}, \
-         latched_samples={latched_samples}/40, resolved_ts_advanced={resolved_ts_advanced})"
+         latched_samples={latched_samples}/20, resolved_ts_advanced={resolved_ts_advanced})"
     );
     assert!(
         cached_2.2 >= leader_version && cached_3.2 >= leader_version,

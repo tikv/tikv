@@ -830,6 +830,18 @@ where
             );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
+            // Test hook: the apply result above has been handed over to the peer, so a
+            // test can order what the peer handles next without guessing with sleeps.
+            fail_point!(
+                "notified_apply_res_of_store_2",
+                self.store_id == 2,
+                |_| panic!("should not use return")
+            );
+            fail_point!(
+                "notified_apply_res_of_store_3",
+                self.store_id == 3,
+                |_| panic!("should not use return")
+            );
         }
 
         let elapsed = t.saturating_elapsed();
