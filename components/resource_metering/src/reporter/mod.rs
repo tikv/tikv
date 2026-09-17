@@ -336,6 +336,7 @@ mod tests {
                 network_out_bytes: 5,
                 logical_read_bytes: 6,
                 logical_write_bytes: 7,
+                rocksdb_block_read_count: 0,
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {
@@ -386,6 +387,7 @@ mod tests {
                 network_out_bytes: 5,
                 logical_read_bytes: 6,
                 logical_write_bytes: 7,
+                rocksdb_block_read_count: 0,
             },
         );
 
@@ -455,6 +457,7 @@ mod tests {
                 network_out_bytes: 5,
                 logical_read_bytes: 6,
                 logical_write_bytes: 7,
+                rocksdb_block_read_count: 0,
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {

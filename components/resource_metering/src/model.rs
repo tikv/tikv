@@ -1287,6 +1287,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1299,6 +1300,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1311,6 +1313,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                rocksdb_block_read_count: 0,
             },
         );
         let rs = RawRecords {
@@ -1397,6 +1400,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                rocksdb_block_read_count: 0,
             },
         );
         raw_records.records.insert(
@@ -1409,6 +1413,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                rocksdb_block_read_count: 0,
             },
         );
         raw_records.records.insert(
@@ -1421,6 +1426,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                rocksdb_block_read_count: 0,
             },
         );
 
@@ -1500,6 +1506,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1512,6 +1519,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1524,6 +1532,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1536,6 +1545,7 @@ mod tests {
                 network_out_bytes: 22220,
                 logical_read_bytes: 33330,
                 logical_write_bytes: 44440,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1548,6 +1558,7 @@ mod tests {
                 network_out_bytes: 55550,
                 logical_read_bytes: 66660,
                 logical_write_bytes: 77770,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1560,6 +1571,7 @@ mod tests {
                 network_out_bytes: 88880,
                 logical_read_bytes: 99990,
                 logical_write_bytes: 111110,
+                rocksdb_block_read_count: 0,
             },
         );
         let rs = RawRecords {
@@ -1675,6 +1687,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1687,6 +1700,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1699,6 +1713,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1711,6 +1726,7 @@ mod tests {
                 network_out_bytes: 22220,
                 logical_read_bytes: 33330,
                 logical_write_bytes: 44440,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1723,6 +1739,7 @@ mod tests {
                 network_out_bytes: 55550,
                 logical_read_bytes: 66660,
                 logical_write_bytes: 77770,
+                rocksdb_block_read_count: 0,
             },
         );
         records.insert(
@@ -1735,6 +1752,7 @@ mod tests {
                 network_out_bytes: 88880,
                 logical_read_bytes: 99990,
                 logical_write_bytes: 111110,
+                rocksdb_block_read_count: 0,
             },
         );
         let rs = RawRecords {
@@ -1812,6 +1830,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 7777,
                 logical_write_bytes: 6666,
+                rocksdb_block_read_count: 0,
             },
         );
         // tag2 largest logical io
@@ -1825,6 +1844,7 @@ mod tests {
                 network_out_bytes: 6666,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 9999,
+                rocksdb_block_read_count: 0,
             },
         );
         // tag3 largest cpu
@@ -1838,6 +1858,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                rocksdb_block_read_count: 0,
             },
         );
         let rs = RawRecords {
@@ -1886,6 +1907,7 @@ mod tests {
                 network_out_bytes: 222,
                 logical_read_bytes: 333,
                 logical_write_bytes: 444,
+                rocksdb_block_read_count: 0,
             },
         );
         // tag5 won't be picked
@@ -1899,6 +1921,7 @@ mod tests {
                 network_out_bytes: 22,
                 logical_read_bytes: 33,
                 logical_write_bytes: 44,
+                rocksdb_block_read_count: 0,
             },
         );
         let rs = RawRecords {
