@@ -457,7 +457,6 @@ fn test_region_update_keeps_leader_progress_after_transient_pre_vote() {
     // all, while Raft itself is completely healthy: every replica is up, the
     // region keeps committing, and resolved ts still freezes.
     let before = region_resolved_ts(&cluster, REGION_ID, LEADER_STORE_ID);
-    let start = Instant::now();
     let mut resolved_ts_advanced = false;
     for round in 0..40 {
         // Fresh keys and values inside region 1 prove the affected region is still
