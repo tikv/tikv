@@ -1,6 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
+    time::Duration,
+};
 
 use futures::{
     channel::mpsc::{self, UnboundedSender},
@@ -12,7 +18,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
 
-use super::{Error, Result};
+use super::{Error, Result, metrics::DETECTOR_PENDING_MSGS};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
@@ -36,6 +42,10 @@ pub fn env() -> Arc<Environment> {
 pub struct Client {
     client: DeadlockClient,
     sender: Option<UnboundedSender<DeadlockRequest>>,
+    /// Unsent requests on this client's stream. Used to subtract leftover
+    /// from the process-wide gauge without `set(0)`, which would wipe a
+    /// newer client's accounting if reconnect overlaps.
+    pending: Arc<AtomicI64>,
 }
 
 impl Client {
@@ -48,6 +58,7 @@ impl Client {
         Self {
             client,
             sender: None,
+            pending: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -57,15 +68,32 @@ impl Client {
     ) -> (DeadlockFuture<()>, DeadlockFuture<()>) {
         let (tx, rx) = mpsc::unbounded();
         let (sink, receiver) = self.client.detect().unwrap();
+        let pending = Arc::clone(&self.pending);
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_map_err(Error::Grpc);
+            let pending_sent = Arc::clone(&pending);
 
-            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+            let result = sink
+                .send_all(
+                    &mut rx
+                        .inspect(move |_| {
+                            pending_sent.fetch_sub(1, Ordering::Relaxed);
+                            DETECTOR_PENDING_MSGS.dec();
+                        })
+                        .map(|r| Ok((r, WriteFlags::default()))),
+                )
                 .await
                 .map(|_| {
                     info!("cancel detect sender");
                     sink.get_mut().cancel();
-                })
+                });
+            // Stream ended (leader change / disconnect). Drop this stream's
+            // leftover only; `set(0)` would clear a newer client's queue.
+            let leftover = pending.swap(0, Ordering::Relaxed);
+            if leftover > 0 {
+                DETECTOR_PENDING_MSGS.sub(leftover);
+            }
+            result
         });
         self.sender = Some(tx);
 
@@ -82,6 +110,10 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
+            .map(|()| {
+                self.pending.fetch_add(1, Ordering::Relaxed);
+                DETECTOR_PENDING_MSGS.inc();
+            })
             .map_err(|e| Error::Other(box_err!(e)))
     }
 }
