@@ -37,12 +37,18 @@ It is a read-heavy hot path and directly impacts query latency.
   `Request::execute_batch_tasks_serially`, the top task and batched tasks are
   polled one at a time so batching does not increase scan concurrency. This
   relies on the `ReadPoolHandle::spawn` contract: on both backends a task is
-  admitted and enqueued only when the returned future is first polled. Because
-  neither admission nor queueing observes the deadline, serial collection is
-  bounded by the top task's deadline: on expiry the stream is dropped, which
-  abandons the in-flight child and never submits the rest, and only a
-  top-level timeout is returned. When the field is unset, batched tasks retain
-  the legacy concurrent polling behavior.
+  admitted and enqueued only when the returned future is first polled. The top
+  task keeps the request budget, while the batched tasks share a shorter one
+  that leaves time to return the results (`serial_batch_task_budget`). Because
+  neither admission nor queueing observes the deadline, the serial stream
+  (`serial_batch_task_outputs`) bounds its waits itself: no task starts
+  without time left, and the first task that runs out of time is abandoned. An
+  abandoned task still waiting for admission is dropped; one already in the
+  pool reaches its own deadline at about the same time and fails its next
+  deadline check. The tasks that completed are kept, and the abandoned and
+  unstarted ones are returned as deadline-exceeded batch responses so the
+  client retries only those. When the field is unset, batched tasks retain the
+  legacy concurrent polling behavior.
   TiDB correlates child responses by task ID, so scheduling does not depend on
   response order.
 - A successful mergeable batched result is folded into an error-free mergeable
@@ -62,9 +68,9 @@ It is a read-heavy hot path and directly impacts query latency.
   stays accounted until the response drops.
 - Data, acknowledgments, response-byte accounting, and memory tracing are
   published only after the final deadline check. Pool rejection, deadline
-  expiry, or failure to serialize a top result that already consumed child
-  results returns no partial data or acknowledgments, allowing every task to be
-  retried safely.
+  expiry during finalization, or failure to serialize a top result that
+  already consumed child results returns no partial data or acknowledgments,
+  allowing every task to be retried safely.
 
 The main contracts live in `HandlerOutput` and `MergeableResult` in
 `src/coprocessor/mod.rs`; orchestration is in `src/coprocessor/endpoint.rs`;
