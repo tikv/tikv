@@ -6,7 +6,7 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-    ENABLE_NETWORK_IO_COLLECTION, RawRecords,
+    RawRecords, io_collection_config,
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, STORAGE},
@@ -35,7 +35,8 @@ pub fn record_write_keys(count: u32) {
 
 /// Records how many bytes have been received in the current context.
 pub fn record_network_in_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -48,7 +49,8 @@ pub fn record_network_in_bytes(bytes: u64) {
 
 /// Records how many bytes have been sent in the current context.
 pub fn record_network_out_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -61,7 +63,8 @@ pub fn record_network_out_bytes(bytes: u64) {
 
 /// Records how many bytes have been read in the current context.
 pub fn record_logical_read_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -74,7 +77,8 @@ pub fn record_logical_read_bytes(bytes: u64) {
 
 /// Records how many bytes have been written in the current context.
 pub fn record_logical_write_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -82,6 +86,26 @@ pub fn record_logical_write_bytes(bytes: u64) {
             .summary_cur_record
             .logical_write_bytes
             .fetch_add(bytes, Relaxed);
+    })
+}
+
+/// Records RocksDB block reads used as the per-request `read_iops` signal.
+///
+/// This is a relative attribution signal for Top SQL, not a device-level IOPS
+/// measurement.
+pub fn record_rocksdb_block_read_count(count: u64) {
+    if count == 0 {
+        return;
+    }
+    let config = io_collection_config();
+    if !config.detailed_io_collection_enabled() {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .rocksdb_block_read_count
+            .fetch_add(count, Relaxed);
     })
 }
 
@@ -146,5 +170,45 @@ impl SubRecorder for SummaryRecorder {
 
     fn thread_created(&mut self, _id: Pid, store: &LocalStorage) {
         store.summary_enable.store(self.enabled, SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use super::*;
+    use crate::{
+        IO_COLLECTION_TEST_LOCK, IoCollectionConfigGuard, config::set_io_collection_config,
+    };
+
+    #[test]
+    fn test_record_rocksdb_block_read_count_respects_config() {
+        let _test_guard = IO_COLLECTION_TEST_LOCK.lock().unwrap();
+        let _config_guard = IoCollectionConfigGuard::set(false, false);
+        std::thread::spawn(|| {
+            for (network, detailed, expected) in [
+                (false, false, 0),
+                (false, true, 0),
+                (true, false, 0),
+                (true, true, 7),
+            ] {
+                set_io_collection_config(network, detailed);
+                STORAGE.with(|s| s.borrow().summary_cur_record.reset());
+                record_rocksdb_block_read_count(7);
+                record_rocksdb_block_read_count(0);
+                STORAGE.with(|s| {
+                    assert_eq!(
+                        s.borrow()
+                            .summary_cur_record
+                            .rocksdb_block_read_count
+                            .load(Relaxed),
+                        expected
+                    );
+                });
+            }
+        })
+        .join()
+        .unwrap();
     }
 }

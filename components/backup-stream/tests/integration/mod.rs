@@ -89,7 +89,11 @@ mod all {
             e.set_conf_ver(conf_ver);
             e
         };
+<<<<<<< HEAD
         assert!(dfs[0].region_start_key.is_empty());
+=======
+        assert_eq!(dfs[0].get_region_start_key(), b"");
+>>>>>>> 7119bd090c (*: extend Top SQL resource dimensions (#19953) (#20086))
         assert_eq!(dfs[0].region_end_key, hnd_key(42));
         assert_eq!(dfs[0].region_epoch.len(), 1, "{:?}", dfs[0]);
         assert_eq!(dfs[0].region_epoch[0], epoch(2, 1), "{:?}", dfs[0]);
@@ -100,7 +104,11 @@ mod all {
         assert_eq!(dfs[2].region_epoch[0], epoch(3, 1), "{:?}", dfs[2]);
 
         assert_eq!(dfs[4].region_start_key, hnd_key(86));
+<<<<<<< HEAD
         assert!(dfs[4].region_end_key.is_empty());
+=======
+        assert_eq!(dfs[4].get_region_end_key(), b"");
+>>>>>>> 7119bd090c (*: extend Top SQL resource dimensions (#19953) (#20086))
         assert_eq!(dfs[4].region_epoch.len(), 1, "{:?}", dfs[4]);
         assert_eq!(dfs[4].region_epoch[0], epoch(3, 1), "{:?}", dfs[4]);
 

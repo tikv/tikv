@@ -645,9 +645,15 @@ impl Suite {
                     let mut default_segs = vec![];
                     let mut write_segs = vec![];
                     for file in fg.get_data_files_info() {
+<<<<<<< HEAD
                         let v = if file.cf == "default".into() || file.cf.is_empty() {
                             Some(&mut default_segs)
                         } else if file.cf == "write".into() {
+=======
+                        let v = if file.get_cf() == "default" || file.get_cf().is_empty() {
+                            Some(&mut default_segs)
+                        } else if file.get_cf() == "write" {
+>>>>>>> 7119bd090c (*: extend Top SQL resource dimensions (#19953) (#20086))
                             Some(&mut write_segs)
                         } else {
                             None

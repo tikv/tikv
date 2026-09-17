@@ -1942,9 +1942,14 @@ impl DataFile {
         meta.set_sha256(
             self.sha256
                 .finish()
+<<<<<<< HEAD
                 .map(|bytes| bytes.to_vec())
                 .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?
                 .into(),
+=======
+                .map(|bytes| bytes.to_vec().into())
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
+>>>>>>> 7119bd090c (*: extend Top SQL resource dimensions (#19953) (#20086))
         );
         meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);
