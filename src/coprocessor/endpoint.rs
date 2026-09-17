@@ -802,11 +802,15 @@ impl<E: Engine> Endpoint<E> {
         };
         let execute_batch_tasks_serially =
             req.get_execute_batch_tasks_serially() && has_batch_tasks;
-        // Serial collection and result merging bound their waits by the top
-        // task's deadline. The fallback starts before parsing so a failure
-        // cannot reset the timeout.
-        let fallback_deadline =
-            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
+        // Result merging bounds its waits by the top task's deadline. The
+        // fallback starts before parsing so a failure cannot reset the timeout.
+        let request_budget =
+            super::max_execution_duration(req.get_context(), self.max_handle_duration);
+        let fallback_deadline = Deadline::from_now(request_budget);
+        // The top task keeps the whole budget, while serial batched tasks share
+        // a shorter one that leaves time to return what completed.
+        let serial_task_budget = execute_batch_tasks_serially
+            .then(|| serial_batch_task_budget(request_budget, req.get_tasks().len()));
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
@@ -814,7 +818,7 @@ impl<E: Engine> Endpoint<E> {
         // Boxed so only batched requests carry the per-task machinery.
         let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
             has_batch_tasks.then(|| {
-                self.process_batch_tasks(&mut req, &peer, output_mode, execute_batch_tasks_serially)
+                self.process_batch_tasks(&mut req, &peer, output_mode, serial_task_budget)
                     .boxed()
             });
         set_tls_tracker_token(tracker);
@@ -865,12 +869,7 @@ impl<E: Engine> Endpoint<E> {
                 // twice over in its layout.
                 Some(batch_outputs) => {
                     let collect = if execute_batch_tasks_serially {
-                        collect_batch_task_outputs_sequentially(
-                            top_output,
-                            batch_outputs,
-                            batch_deadline,
-                        )
-                        .boxed()
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs).boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -918,16 +917,20 @@ impl<E: Engine> Endpoint<E> {
     }
 
     // All batched coprocessor tasks are prepared up front. Serial execution
-    // streams them lazily so `ReadPoolHandle::spawn` enqueues only one child at
-    // a time; otherwise `FuturesOrdered` preserves the legacy concurrent
-    // scheduling behavior. Output materialization is controlled independently.
+    // runs them one at a time within `serial_task_budget`, so
+    // `ReadPoolHandle::spawn` enqueues only one child at a time; otherwise
+    // `FuturesOrdered` preserves the legacy concurrent scheduling behavior.
+    // Output materialization is controlled independently.
     fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
         output_mode: UnaryOutputMode,
-        execute_serially: bool,
+        serial_task_budget: Option<Duration>,
     ) -> impl Stream<Item = BatchTaskOutput> {
+        // The serial deadline starts before the tasks are parsed and start
+        // theirs, so it runs out no later than they do.
+        let serial_deadline = serial_task_budget.map(Deadline::from_now);
         // Without merging, every task serializes its result inside its own
         // read pool task; with it, results stay unserialized for
         // `merge_batch_task_responses`.
@@ -945,6 +948,9 @@ impl<E: Engine> Endpoint<E> {
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
                 new_context.set_peer(task.take_peer());
+                if let Some(budget) = serial_task_budget {
+                    new_context.set_max_execution_duration_ms(budget.as_millis() as u64);
+                }
                 (new_req, task.get_task_id())
             })
             .collect();
@@ -1013,21 +1019,25 @@ impl<E: Engine> Endpoint<E> {
                         }
                     };
 
-                    batch_futs.push(future::Either::Left(fut));
+                    batch_futs.push((task_id, future::Either::Left(fut)));
                 }
-                Err(e) => batch_futs.push(future::Either::Right(async move {
-                    make_error_batch_response(&mut response, e);
-                    BatchTaskOutput {
-                        response: response.into(),
-                        mergeable_result: None,
-                    }
-                })),
+                Err(e) => {
+                    let fut = async move {
+                        make_error_batch_response(&mut response, e);
+                        BatchTaskOutput {
+                            response: response.into(),
+                            mergeable_result: None,
+                        }
+                    };
+                    batch_futs.push((task_id, future::Either::Right(fut)));
+                }
             }
         }
-        if execute_serially {
-            Either::Left(stream::iter(batch_futs).then(|task| task))
-        } else {
-            Either::Right(stream::FuturesOrdered::from_iter(batch_futs))
+        match serial_deadline {
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            None => Either::Right(stream::FuturesOrdered::from_iter(
+                batch_futs.into_iter().map(|(_, fut)| fut),
+            )),
         }
     }
 
@@ -1274,13 +1284,6 @@ impl<E: Engine> Endpoint<E> {
             returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
             priority: ctx.get_priority(),
             metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
-            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
-                r.get_resource_limiter(
-                    ctx.get_resource_control_context().get_resource_group_name(),
-                    ctx.get_request_source(),
-                    ctx.get_resource_control_context().get_override_priority(),
-                )
-            }),
             deadline,
             task_id,
         }

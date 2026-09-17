@@ -2,16 +2,17 @@
 
 //! Batched unary request collection, result merging, and response finalization.
 
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use ::tracker::{PollTimeTracker, TrackerToken, track};
+use async_stream::stream;
 use futures::{
     channel::oneshot,
     future::{self, Either},
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, kvrpcpb::CommandPri};
-use resource_control::{ResourceLimiter, TaskMetadata};
+use resource_control::TaskMetadata;
 use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{deadline::Deadline, defer, future::async_timeout};
@@ -52,11 +53,11 @@ impl BatchTaskOutput {
     }
 }
 
-/// Runs batch-result merging in the read pool under the request's resource,
-/// concurrency, and deadline constraints.
+/// Runs batch-result merging in the read pool under the request's concurrency
+/// and deadline constraints.
 ///
-/// Results remain cancelable until the task starts, so admission failures and
-/// queue timeouts do not consume them and are safe to retry.
+/// Results remain cancelable until the task starts, so queue timeouts do not
+/// consume them and are safe to retry.
 pub(super) struct BatchMergeFinalizer {
     pub(super) read_pool: ReadPoolHandle,
     pub(super) semaphore: Option<Arc<Semaphore>>,
@@ -66,7 +67,6 @@ pub(super) struct BatchMergeFinalizer {
     pub(super) returned_response_tag: ResourceMeteringTag,
     pub(super) priority: CommandPri,
     pub(super) metadata: TaskMetadata<'static>,
-    pub(super) resource_limiter: Option<Arc<ResourceLimiter>>,
     pub(super) deadline: Deadline,
     pub(super) task_id: u64,
 }
@@ -85,7 +85,6 @@ impl BatchMergeFinalizer {
             returned_response_tag,
             priority,
             metadata,
-            resource_limiter,
             deadline,
             task_id,
         } = self;
@@ -126,20 +125,19 @@ impl BatchMergeFinalizer {
             }
         };
         // Handler tasks already paid the memory admission cost of these results,
-        // so submitting the merge must not charge them again. `submission` only
-        // reports admission and enqueue; `response_rx` reports merge completion.
-        let submission = read_pool.spawn(pool_task, priority, task_id, metadata, resource_limiter);
-        let submission_error = match async_timeout(submission, deadline.remaining_duration()).await
-        {
-            Ok(Ok(())) => None,
-            Ok(Err(_)) => Some(Error::MaxPendingTasksExceeded),
-            Err(_) => Some(Error::DeadlineExceeded),
-        };
+        // so submitting the merge must not charge them again. Nor does the merge
+        // wait for resource-group admission: every result it merges was admitted
+        // and charged when produced, and under a throttled group a second wait
+        // could outlast the deadline and discard all of them. The merge's own
+        // CPU is therefore not charged to the group's limiter. Without
+        // admission, submission only enqueues and never waits; `response_rx`
+        // reports merge completion.
+        let submission = read_pool.spawn(pool_task, priority, task_id, metadata, None);
         // Error returns here and below drop the completed outputs along with
         // their execution details; the endpoint refills only the top task's
         // scan and time details from the tracker. Accepted for atomic retries.
-        if let Some(error) = submission_error {
-            return make_error_response(error).into();
+        if submission.await.is_err() {
+            return make_error_response(Error::MaxPendingTasksExceeded).into();
         }
 
         let completion_error = match async_timeout(&mut response_rx, deadline.remaining_duration())
@@ -212,31 +210,81 @@ pub(super) async fn collect_batch_task_outputs_concurrently(
     (output, completed_outputs)
 }
 
-/// Collects the top output before the batch outputs, stopping at the deadline.
+/// The execution budget of each task in a serial batch of `task_count` tasks,
+/// given the budget of the request.
+///
+/// One of `task_count + 1` equal shares is held back to return the completed
+/// tasks before the client, whose timer started before ours, gives up on the
+/// whole batch; the finalizer waits for the pool and a permit like a task does.
+/// The budget is in whole milliseconds, the unit a task receives it in, so that
+/// a task never runs out of time before the batch does, and a budget as short
+/// as a millisecond never becomes zero, which a task would read as no budget at
+/// all.
+pub(super) fn serial_batch_task_budget(request_budget: Duration, task_count: usize) -> Duration {
+    let budget_ms = request_budget.as_millis() as u64;
+    Duration::from_millis(budget_ms - budget_ms / (task_count as u64 + 1))
+}
+
+/// Runs the batch tasks one at a time until `deadline`, yielding one output per
+/// task in order. Each task is `(task_id, output)`, and a task starts when its
+/// output is first polled, as `ReadPoolHandle::spawn` makes it.
+///
+/// The outputs of the tasks that complete in time are kept. The first task that
+/// does not is abandoned, and it and the tasks after it, which never start, are
+/// answered as deadline exceeded, so the client retries exactly those.
+pub(super) fn serial_batch_task_outputs<F>(
+    tasks: Vec<(u64, F)>,
+    deadline: Deadline,
+) -> impl Stream<Item = BatchTaskOutput>
+where
+    F: Future<Output = BatchTaskOutput> + Send,
+{
+    stream! {
+        let mut tasks = tasks.into_iter();
+        for (task_id, output) in &mut tasks {
+            // The timeout polls once before arming its timer, so a task must
+            // find time left before it starts.
+            let remaining = deadline.remaining_duration();
+            let completed = if remaining.is_zero() {
+                None
+            } else {
+                async_timeout(output, remaining).await.ok()
+            };
+            match completed {
+                Some(batch_output) => yield batch_output,
+                None => {
+                    yield deadline_exceeded_output(task_id);
+                    break;
+                }
+            }
+        }
+        for (task_id, _) in tasks {
+            yield deadline_exceeded_output(task_id);
+        }
+    }
+}
+
+/// Collects the top output before the batch outputs.
 ///
 /// The caller must provide lazily scheduled tasks in a sequential stream to
 /// ensure that at most one read-pool task from this request is active at a
 /// time.
 pub(super) async fn collect_batch_task_outputs_sequentially(
     top_output: impl Future<Output = HandlerOutput>,
-    batch_outputs: impl Stream<Item = BatchTaskOutput> + Send,
-    deadline: Deadline,
+    batch_outputs: impl Stream<Item = BatchTaskOutput>,
 ) -> (HandlerOutput, Vec<BatchTaskOutput>) {
     let output = top_output.await;
-    let collected = match deadline.check() {
-        // The timeout polls once before arming its timer, so an already
-        // expired deadline must be caught before the first child is submitted.
-        Err(_) => None,
-        Ok(()) => async_timeout(batch_outputs.collect(), deadline.remaining_duration())
-            .await
-            .ok(),
-    };
-    match collected {
-        Some(batch_outputs) => (output, batch_outputs),
-        None => (
-            HandlerOutput::ready(make_error_response(Error::DeadlineExceeded)),
-            Vec::new(),
-        ),
+    (output, batch_outputs.collect().await)
+}
+
+/// The output of a batched task that the batch ran out of time for.
+fn deadline_exceeded_output(task_id: u64) -> BatchTaskOutput {
+    let mut response = coppb::StoreBatchTaskResponse::new();
+    response.set_task_id(task_id);
+    make_error_batch_response(&mut response, Error::DeadlineExceeded);
+    BatchTaskOutput {
+        response: response.into(),
+        mergeable_result: None,
     }
 }
 
@@ -385,31 +433,16 @@ mod tests {
     };
 
     use ::tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken};
-    use file_system::IoBytes;
     use futures::{StreamExt, channel::oneshot, executor::block_on, future, stream};
     use kvproto::kvrpcpb;
-    use raftstore::store::{ReadStats, WriteStats};
-    use resource_control::{ResourceGroupManager, ResourceLimiter};
     use resource_metering::ResourceTagFactory;
     use tikv_alloc::trace::{MemoryTrace, MemoryTraceGuard};
-    use tikv_util::yatp_pool::CleanupMethod;
 
     use super::*;
     use crate::{
-        config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
-        coprocessor::readpool_impl::build_read_pool_for_test,
-        read_pool::{ReadPool, build_yatp_read_pool},
-        storage::{FlowStatsReporter, TestEngineBuilder},
+        config::CoprReadPoolConfig, coprocessor::readpool_impl::build_read_pool_for_test,
+        read_pool::ReadPool, storage::TestEngineBuilder,
     };
-
-    #[derive(Clone)]
-    struct NoopFlowStatsReporter;
-
-    impl FlowStatsReporter for NoopFlowStatsReporter {
-        fn report_read_stats(&self, _read_stats: ReadStats) {}
-
-        fn report_write_stats(&self, _write_stats: WriteStats) {}
-    }
 
     pub(crate) struct ConcatMergeable {
         values: Vec<u8>,
@@ -471,6 +504,14 @@ mod tests {
             response: response.into(),
             mergeable_result: None,
         }
+    }
+
+    fn server_is_busy_reason(output: &BatchTaskOutput) -> &str {
+        output
+            .response
+            .get_region_error()
+            .get_server_is_busy()
+            .get_reason()
     }
 
     fn tracked_future<T>(
@@ -579,7 +620,6 @@ mod tests {
         read_pool: &ReadPool,
         context: &kvrpcpb::Context,
         semaphore: Option<Arc<Semaphore>>,
-        resource_limiter: Option<Arc<ResourceLimiter>>,
         timeout: Duration,
     ) -> BatchMergeFinalizer {
         BatchMergeFinalizer {
@@ -589,7 +629,6 @@ mod tests {
             returned_response_tag: ResourceTagFactory::new_for_test().new_tag(context),
             priority: context.get_priority(),
             metadata: TaskMetadata::default(),
-            resource_limiter,
             deadline: Deadline::from_now(timeout),
             task_id: 0,
         }
@@ -630,7 +669,6 @@ mod tests {
                 &read_pool,
                 &context,
                 Some(Arc::new(Semaphore::new(1))),
-                None,
                 Duration::from_secs(60),
             )
             .finalize(top_output(), vec![mergeable_batch_output(vec![2])], token),
@@ -651,7 +689,6 @@ mod tests {
                 &read_pool,
                 &context,
                 Some(Arc::new(Semaphore::new(0))),
-                None,
                 Duration::from_millis(500),
             )
             .finalize(
@@ -689,14 +726,8 @@ mod tests {
         assert_eq!(trace.sum(), 5);
 
         let resp = block_on(
-            batch_merge_finalizer_for_test(
-                &read_pool,
-                &context,
-                None,
-                None,
-                Duration::from_secs(60),
-            )
-            .finalize(output, vec![mergeable_batch_output(vec![2])], token),
+            batch_merge_finalizer_for_test(&read_pool, &context, None, Duration::from_secs(60))
+                .finalize(output, vec![mergeable_batch_output(vec![2])], token),
         );
         let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
 
@@ -708,82 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_merge_finalizer_admission_respects_deadline() {
-        let resource_manager = Arc::new(ResourceGroupManager::default());
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_yatp_read_pool(
-            &UnifiedReadPoolConfig {
-                min_thread_count: 1,
-                max_thread_count: 1,
-                max_tasks_per_worker: 10,
-                ..UnifiedReadPoolConfig::default()
-            },
-            NoopFlowStatsReporter,
-            engine,
-            None,
-            Some(resource_manager),
-            CleanupMethod::InPlace,
-            false,
-        );
-        let limiter = Arc::new(ResourceLimiter::new(
-            "batch-merge-finalizer".to_owned(),
-            10_000.0,
-            f64::INFINITY,
-            0,
-            true,
-        ));
-
-        // Without deadline cancellation, admission would take at least one second.
-        let mut admission_delay = Duration::ZERO;
-        for _ in 0..1_000 {
-            limiter.consume(
-                Duration::from_micros(1_000),
-                IoBytes::default(),
-                false,
-                true,
-            );
-            admission_delay = limiter.admission_delay(true);
-            if admission_delay >= Duration::from_secs(1) {
-                break;
-            }
-        }
-        assert!(admission_delay >= Duration::from_secs(1));
-
-        let context = kvrpcpb::Context::default();
-        let trace = tikv_alloc::mem_trace!(test_batch_merge_admission_deadline);
-        let output = mergeable_output_with_held_trace(vec![1], &trace, 5);
-        assert_eq!(trace.sum(), 5);
-        let finalizer = batch_merge_finalizer_for_test(
-            &read_pool,
-            &context,
-            None,
-            Some(limiter),
-            Duration::from_millis(20),
-        );
-
-        let started_at = Instant::now();
-        let resp = block_on(finalizer.finalize(
-            output,
-            vec![mergeable_batch_output(vec![2])],
-            ::tracker::INVALID_TRACKER_TOKEN,
-        ));
-        let elapsed = started_at.elapsed();
-
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "finalizer waited {elapsed:?} for admission"
-        );
-        assert!(resp.get_region_error().has_server_is_busy());
-        assert_eq!(
-            resp.get_region_error().get_server_is_busy().get_reason(),
-            "deadline is exceeded"
-        );
-        assert!(resp.get_data().is_empty());
-        assert!(resp.get_batch_responses().is_empty());
-        assert_eq!(trace.sum(), 0);
-    }
-
-    #[test]
     fn test_batch_merge_finalizer_queue_respects_deadline() {
         let read_pool = build_single_thread_read_pool();
         let release_tx = hold_single_thread_read_pool(&read_pool.handle());
@@ -792,13 +747,8 @@ mod tests {
         let trace = tikv_alloc::mem_trace!(test_batch_merge_queue_deadline);
         let output = mergeable_output_with_held_trace(vec![1], &trace, 5);
         assert_eq!(trace.sum(), 5);
-        let finalizer = batch_merge_finalizer_for_test(
-            &read_pool,
-            &context,
-            None,
-            None,
-            Duration::from_millis(20),
-        );
+        let finalizer =
+            batch_merge_finalizer_for_test(&read_pool, &context, None, Duration::from_millis(20));
 
         let started_at = Instant::now();
         let resp = block_on(finalizer.finalize(
@@ -833,7 +783,7 @@ mod tests {
             0,
         )));
         let timeout = Duration::from_millis(500);
-        let finalizer = batch_merge_finalizer_for_test(&read_pool, &context, None, None, timeout);
+        let finalizer = batch_merge_finalizer_for_test(&read_pool, &context, None, timeout);
         let trace = tikv_alloc::mem_trace!(test_batch_merge_completed_response);
         let (serialize_tx, serialize_rx) = mpsc::channel();
         let mut result = ConcatMergeable::new(vec![1]);
@@ -882,13 +832,8 @@ mod tests {
         let trace = tikv_alloc::mem_trace!(test_batch_merge_dropped_caller);
         let output = mergeable_output_with_held_trace(vec![1], &trace, 5);
         assert_eq!(trace.sum(), 5);
-        let finalizer = batch_merge_finalizer_for_test(
-            &read_pool,
-            &context,
-            None,
-            None,
-            Duration::from_secs(60),
-        );
+        let finalizer =
+            batch_merge_finalizer_for_test(&read_pool, &context, None, Duration::from_secs(60));
         let mut finalize = Box::pin(finalizer.finalize(
             output,
             vec![mergeable_batch_output(vec![2])],
@@ -950,19 +895,89 @@ mod tests {
             max_active.clone(),
         );
         let batch_tasks = vec![
-            tracked_future(batch_output(2), active.clone(), max_active.clone()),
-            tracked_future(batch_output(3), active.clone(), max_active.clone()),
+            (
+                2,
+                tracked_future(batch_output(2), active.clone(), max_active.clone()),
+            ),
+            (
+                3,
+                tracked_future(batch_output(3), active.clone(), max_active.clone()),
+            ),
         ];
-        let batch_outputs = stream::iter(batch_tasks).then(|task| task);
+        let batch_outputs =
+            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::from_secs(60)));
 
-        let (_, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
-            top,
-            batch_outputs,
-            Deadline::from_now(Duration::from_secs(60)),
-        ));
+        let (_, batch_outputs) =
+            block_on(collect_batch_task_outputs_sequentially(top, batch_outputs));
 
         assert_eq!(batch_outputs.len(), 2);
         assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_collect_batch_task_outputs_sequentially_at_deadline() {
+        let top = future::ready(HandlerOutput::ready(coppb::Response::default()));
+        // The second task never completes, so the deadline passes during it.
+        let batch_tasks = vec![
+            (2, future::ready(batch_output(2)).boxed()),
+            (3, future::pending().boxed()),
+            (4, future::ready(batch_output(4)).boxed()),
+        ];
+        let batch_outputs =
+            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::from_millis(500)));
+
+        let (output, batch_outputs) =
+            block_on(collect_batch_task_outputs_sequentially(top, batch_outputs));
+
+        // The completed task is kept; the running task and the one never
+        // started are reported for retry.
+        assert!(!unary_response_has_error(&output.response));
+        let task_ids: Vec<_> = batch_outputs
+            .iter()
+            .map(|output| output.response.get_task_id())
+            .collect();
+        assert_eq!(task_ids, vec![2, 3, 4]);
+        assert!(!batch_response_has_error(&batch_outputs[0].response));
+        assert_eq!(
+            server_is_busy_reason(&batch_outputs[1]),
+            "deadline is exceeded"
+        );
+        assert_eq!(
+            server_is_busy_reason(&batch_outputs[2]),
+            "deadline is exceeded"
+        );
+    }
+
+    #[test]
+    fn test_serial_batch_task_outputs_after_deadline() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let batch_tasks = vec![(
+            2,
+            tracked_future(batch_output(2), active, max_active.clone()),
+        )];
+
+        let batch_outputs: Vec<_> = block_on(
+            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::ZERO)).collect(),
+        );
+
+        // No task starts once the deadline has passed.
+        assert_eq!(max_active.load(Ordering::SeqCst), 0);
+        assert_eq!(batch_outputs.len(), 1);
+        assert_eq!(
+            server_is_busy_reason(&batch_outputs[0]),
+            "deadline is exceeded"
+        );
+    }
+
+    #[test]
+    fn test_serial_batch_task_budget() {
+        let ms = Duration::from_millis;
+        // One of `task_count + 1` shares is held back, in whole milliseconds.
+        assert_eq!(serial_batch_task_budget(ms(60_000), 1), ms(30_000));
+        assert_eq!(serial_batch_task_budget(ms(60_000), 8), ms(53_334));
+        // A short budget is not rounded down to zero, which means no budget.
+        assert_eq!(serial_batch_task_budget(ms(1), 8), ms(1));
     }
 
     #[test]
