@@ -1315,11 +1315,20 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        // A rejected region is recorded while the registry lock is held and
+        // logged after it is released, so that formatting the entry never
+        // extends the critical section.
+        struct Rejection<'a> {
+            reason: &'static str,
+            request: &'a LeaderInfo,
+            /// `None` when the region is absent from the registry.
+            cached: Option<(LeaderInfo, Option<u64>)>,
+        }
+
         let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
         let mut rejected_count = 0;
-        let mut logged_rejection_count = 0;
-        let mut rejection_log_truncated = false;
+        let mut rejections: Vec<Rejection<'_>> = Vec::new();
         let registry = self.registry.lock().unwrap();
         let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
@@ -1329,43 +1338,54 @@ impl RegionReadProgressRegistry {
                     regions.push(region_id);
                 } else {
                     rejected_count += 1;
-                    if logged_rejection_count < CHECK_LEADER_REJECT_LOG_LIMIT {
-                        logged_rejection_count += 1;
-                        let (local_leader_info, local_leader_store_id) = rp.dump_leader_info();
-                        warn!(
-                            "[resolved-ts-stuck] check leader task rejected region";
-                            "reason" => "leader_info_mismatch",
-                            "region_id" => region_id,
-                            "request_peer_id" => leader_info.peer_id,
-                            "request_term" => leader_info.term,
-                            "request_epoch_conf_ver" => leader_info.get_region_epoch().get_conf_ver(),
-                            "request_epoch_version" => leader_info.get_region_epoch().get_version(),
-                            "cached_leader_peer_id" => local_leader_info.peer_id,
-                            "cached_leader_term" => local_leader_info.term,
-                            "cached_epoch_conf_ver" => local_leader_info.get_region_epoch().get_conf_ver(),
-                            "cached_epoch_version" => local_leader_info.get_region_epoch().get_version(),
-                            "cached_leader_store_id" => ?local_leader_store_id,
-                        );
-                    } else {
-                        rejection_log_truncated = true;
+                    if rejections.len() < CHECK_LEADER_REJECT_LOG_LIMIT {
+                        rejections.push(Rejection {
+                            reason: "leader_info_mismatch",
+                            request: leader_info,
+                            cached: Some(rp.dump_leader_info()),
+                        });
                     }
                 }
             } else {
                 rejected_count += 1;
-                if logged_rejection_count < CHECK_LEADER_REJECT_LOG_LIMIT {
-                    logged_rejection_count += 1;
-                    warn!(
-                        "[resolved-ts-stuck] check leader task rejected region";
-                        "reason" => "registry_miss",
-                        "region_id" => region_id,
-                        "request_peer_id" => leader_info.peer_id,
-                        "request_term" => leader_info.term,
-                        "request_epoch_conf_ver" => leader_info.get_region_epoch().get_conf_ver(),
-                        "request_epoch_version" => leader_info.get_region_epoch().get_version(),
-                    );
-                } else {
-                    rejection_log_truncated = true;
+                if rejections.len() < CHECK_LEADER_REJECT_LOG_LIMIT {
+                    rejections.push(Rejection {
+                        reason: "registry_miss",
+                        request: leader_info,
+                        cached: None,
+                    });
                 }
+            }
+        }
+        drop(registry);
+
+        let logged_rejection_count = rejections.len();
+        for rejection in &rejections {
+            let request = rejection.request;
+            match &rejection.cached {
+                Some((cached, cached_leader_store_id)) => warn!(
+                    "[resolved-ts-stuck] check leader task rejected region";
+                    "reason" => rejection.reason,
+                    "region_id" => request.get_region_id(),
+                    "request_peer_id" => request.peer_id,
+                    "request_term" => request.term,
+                    "request_epoch_conf_ver" => request.get_region_epoch().get_conf_ver(),
+                    "request_epoch_version" => request.get_region_epoch().get_version(),
+                    "cached_leader_peer_id" => cached.peer_id,
+                    "cached_leader_term" => cached.term,
+                    "cached_epoch_conf_ver" => cached.get_region_epoch().get_conf_ver(),
+                    "cached_epoch_version" => cached.get_region_epoch().get_version(),
+                    "cached_leader_store_id" => ?cached_leader_store_id,
+                ),
+                None => warn!(
+                    "[resolved-ts-stuck] check leader task rejected region";
+                    "reason" => rejection.reason,
+                    "region_id" => request.get_region_id(),
+                    "request_peer_id" => request.peer_id,
+                    "request_term" => request.term,
+                    "request_epoch_conf_ver" => request.get_region_epoch().get_conf_ver(),
+                    "request_epoch_version" => request.get_region_epoch().get_version(),
+                ),
             }
         }
         if regions.len() < request_count {
@@ -1375,7 +1395,7 @@ impl RegionReadProgressRegistry {
                 "response_count" => regions.len(),
                 "rejected_count" => rejected_count,
                 "logged_rejection_count" => logged_rejection_count,
-                "rejection_log_truncated" => rejection_log_truncated,
+                "rejection_log_truncated" => rejected_count > logged_rejection_count,
             );
         }
         regions
