@@ -1228,6 +1228,19 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             |_| unreachable!()
         );
 
+        // Test hook: park *only* on the round whose pending Raft tick is about to start
+        // an election, so a test can let a follower campaign on its own timer and still
+        // control which messages that single round handles together.
+        fail_point!(
+            "pause_before_collect_peer_msg_on_election",
+            (self.poll_ctx.store_id() == 2 || self.poll_ctx.store_id() == 3)
+                && peer.region_id() == 1
+                && peer.peer.raft_group.raft.state == StateRole::Follower
+                && peer.peer.raft_group.raft.election_elapsed + 1
+                    >= peer.peer.raft_group.raft.randomized_election_timeout(),
+            |_| panic!("should not use return")
+        );
+
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
