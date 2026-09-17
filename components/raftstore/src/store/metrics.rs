@@ -183,6 +183,7 @@ make_static_metric! {
         non_witness,
         recovery,
         unsafe_vote,
+        step_local_msg,
     }
 
     pub label_enum ProposalType {
