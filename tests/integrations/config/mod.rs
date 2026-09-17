@@ -833,6 +833,21 @@ fn test_serde_custom_tikv_config() {
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
         num_threads: 2,
+<<<<<<< HEAD
+=======
+        auto_compaction: AutoCompactionConfig {
+            check_interval: ReadableDuration::secs(300),
+            tombstones_num_threshold: 10000,
+            tombstones_percent_threshold: 30,
+            redundant_rows_threshold: 50000,
+            redundant_rows_percent_threshold: 20,
+            redundant_bytes_threshold: ReadableSize::mb(129),
+            bottommost_level_force: false,
+            mvcc_read_aware_enabled: true,
+            mvcc_scan_threshold: 10000,
+            mvcc_read_weight: 3.0,
+        },
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),

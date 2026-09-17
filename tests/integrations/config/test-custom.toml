@@ -644,6 +644,14 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+<<<<<<< HEAD
+=======
+[gc.auto-compaction]
+redundant-bytes-threshold = "129MB"
+mvcc-read-aware-enabled = true
+mvcc-scan-threshold = 10000
+
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"

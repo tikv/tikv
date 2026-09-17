@@ -13,6 +13,107 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
+<<<<<<< HEAD
+=======
+// Auto compaction defaults - matching raftstore defaults
+const DEFAULT_AUTO_COMPACTION_CHECK_INTERVAL: ReadableDuration = ReadableDuration::secs(300); // 5 minutes, same as raftstore
+
+// Compaction threshold defaults - matching raftstore defaults
+const DEFAULT_TOMBSTONES_NUM_THRESHOLD: u64 = 10000; // same as region_compact_min_tombstones
+const DEFAULT_TOMBSTONES_PERCENT_THRESHOLD: u64 = 30; // same as region_compact_tombstones_percent
+const DEFAULT_REDUNDANT_ROWS_THRESHOLD: u64 = 50000; // same as region_compact_min_redundant_rows
+const DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD: u64 = 20; // same as region_compact_redundant_rows_percent
+// Derive the byte-based admission threshold from the classic raftstore's
+// default split size. This is still an independent GC setting, so custom
+// Region sizes do not create an implicit runtime dependency.
+const DEFAULT_REDUNDANT_BYTES_THRESHOLD: ReadableSize =
+    ReadableSize(raftstore::coprocessor::config::SPLIT_SIZE.0 / 2 * 3);
+
+// MVCC-read-aware compaction defaults
+const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
+const DEFAULT_MVCC_SCAN_THRESHOLD: u64 = 1000; // Minimum MVCC versions scanned per request to record in tracker
+const DEFAULT_MVCC_READ_WEIGHT: f64 = 3.0; // Weight multiplier for MVCC read activity in scoring
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct AutoCompactionConfig {
+    /// How often to check for new compaction candidates
+    pub check_interval: ReadableDuration,
+    /// Minimum number of tombstones to trigger compaction
+    pub tombstones_num_threshold: u64,
+    /// Minimum percentage of tombstones to trigger compaction
+    pub tombstones_percent_threshold: u64,
+    /// Minimum number of redundant rows to trigger compaction
+    pub redundant_rows_threshold: u64,
+    /// Minimum percentage of redundant rows to trigger compaction
+    pub redundant_rows_percent_threshold: u64,
+    /// Minimum estimated redundant bytes to admit a region to auto-compaction
+    /// even when the entry-count and ratio thresholds are not met. The estimate
+    /// covers stale MVCC data that compaction may reclaim. Candidates admitted
+    /// by this threshold force bottommost-level compaction. Zero disables this
+    /// byte-based admission path.
+    pub redundant_bytes_threshold: ReadableSize,
+    /// Force compaction of bottommost level
+    pub bottommost_level_force: bool,
+
+    // MVCC-read-aware compaction settings
+    /// Enable MVCC-read-aware compaction prioritization
+    /// When enabled, regions with high MVCC version scanning during reads
+    /// will be prioritized for compaction
+    pub mvcc_read_aware_enabled: bool,
+
+    /// Minimum MVCC versions scanned per request to consider region hot
+    /// Regions where reads encounter this many or more MVCC versions per
+    /// request will get higher compaction priority
+    pub mvcc_scan_threshold: u64,
+
+    /// Weight multiplier for MVCC read activity in scoring
+    /// Higher values give more priority to regions with MVCC read activity
+    /// Typical range: 1.0 (low priority) to 10.0 (high priority)
+    pub mvcc_read_weight: f64,
+}
+
+impl Default for AutoCompactionConfig {
+    fn default() -> AutoCompactionConfig {
+        AutoCompactionConfig {
+            check_interval: DEFAULT_AUTO_COMPACTION_CHECK_INTERVAL,
+            tombstones_num_threshold: DEFAULT_TOMBSTONES_NUM_THRESHOLD,
+            tombstones_percent_threshold: DEFAULT_TOMBSTONES_PERCENT_THRESHOLD,
+            redundant_rows_threshold: DEFAULT_REDUNDANT_ROWS_THRESHOLD,
+            redundant_rows_percent_threshold: DEFAULT_REDUNDANT_ROWS_PERCENT_THRESHOLD,
+            redundant_bytes_threshold: DEFAULT_REDUNDANT_BYTES_THRESHOLD,
+            bottommost_level_force: false,
+            mvcc_read_aware_enabled: DEFAULT_MVCC_READ_AWARE_ENABLED,
+            mvcc_scan_threshold: DEFAULT_MVCC_SCAN_THRESHOLD,
+            mvcc_read_weight: DEFAULT_MVCC_READ_WEIGHT,
+        }
+    }
+}
+
+impl AutoCompactionConfig {
+    pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if self.check_interval.as_secs() == 0 {
+            return Err("auto_compaction.check_interval should not be 0".into());
+        }
+        if self.tombstones_percent_threshold > 100 {
+            return Err(
+                "auto_compaction.tombstones_percent_threshold should not exceed 100".into(),
+            );
+        }
+        if self.redundant_rows_percent_threshold > 100 {
+            return Err(
+                "auto_compaction.redundant_rows_percent_threshold should not exceed 100".into(),
+            );
+        }
+        if self.mvcc_read_weight < 0.0 {
+            return Err("auto_compaction.mvcc_read_weight should be non-negative".into());
+        }
+        Ok(())
+    }
+}
+
+>>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -90,5 +191,18 @@ impl std::ops::Deref for GcWorkerConfigManager {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_redundant_bytes_threshold_matches_region_max_size() {
+        assert_eq!(
+            AutoCompactionConfig::default().redundant_bytes_threshold,
+            raftstore::coprocessor::config::Config::default().region_max_size()
+        );
     }
 }
