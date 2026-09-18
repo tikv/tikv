@@ -528,9 +528,22 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                 };
 
                 match write_type {
-                    WriteType::Put => self.props.num_puts += 1,
+                    WriteType::Put => {
+                        self.props.num_puts += 1;
+                        if Write::has_short_value(value)
+                            .is_ok_and(|has_short_value| !has_short_value)
+                        {
+                            self.props.num_default_puts += 1;
+                            if self.row_versions > 1 {
+                                self.props.num_stale_default_puts += 1;
+                            }
+                        }
+                    }
                     WriteType::Delete => {
                         self.props.num_deletes += 1;
+                        if self.row_versions > 1 {
+                            self.props.num_stale_deletes += 1;
+                        }
                         self.props.oldest_delete_ts = cmp::min(self.props.oldest_delete_ts, ts);
                         self.props.newest_delete_ts = cmp::max(self.props.newest_delete_ts, ts);
                     }
@@ -871,8 +884,69 @@ mod tests {
         assert_eq!(props.max_ts, 7.into());
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_default_puts, 4);
+        assert_eq!(props.num_stale_default_puts, 2);
+        assert_eq!(props.num_stale_deletes, 1);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+    }
+
+    fn collect_txn_mvcc_properties(
+        cases: &[(&str, u64, WriteType, Option<&[u8]>)],
+    ) -> MvccProperties {
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
+        for &(key, ts, write_type, short_value) in cases {
+            let ts = ts.into();
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(ts).as_encoded());
+            let value = Write::new(write_type, ts, short_value.map(ToOwned::to_owned))
+                .as_ref()
+                .to_bytes();
+            collector.add(&key, &value, DBEntryType::Put, 0, 0);
+        }
+        RocksMvccProperties::decode(&UserProperties(collector.finish())).unwrap()
+    }
+
+    #[test]
+    fn test_mvcc_properties_count_stale_delete_once() {
+        let properties = collect_txn_mvcc_properties(&[
+            ("key", 20, WriteType::Delete, None),
+            ("key", 10, WriteType::Delete, None),
+        ]);
+
+        assert_eq!(properties.num_rows, 1);
+        assert_eq!(properties.num_versions, 2);
+        assert_eq!(properties.num_deletes, 2);
+        assert_eq!(properties.num_stale_deletes, 1);
+        assert_eq!(properties.num_default_puts, 0);
+        assert_eq!(properties.num_stale_default_puts, 0);
+    }
+
+    #[test]
+    fn test_mvcc_properties_exclude_short_values_from_default_puts() {
+        let properties = collect_txn_mvcc_properties(&[
+            ("key", 30, WriteType::Put, Some(b"short-new")),
+            ("key", 20, WriteType::Put, None),
+            ("key", 10, WriteType::Put, Some(b"short-old")),
+        ]);
+
+        assert_eq!(properties.num_puts, 3);
+        assert_eq!(properties.num_default_puts, 1);
+        assert_eq!(properties.num_stale_default_puts, 1);
+    }
+
+    #[test]
+    fn test_mvcc_properties_count_large_put_before_delete() {
+        let properties = collect_txn_mvcc_properties(&[
+            ("key", 20, WriteType::Delete, None),
+            ("key", 10, WriteType::Put, None),
+        ]);
+
+        assert_eq!(properties.num_rows, 1);
+        assert_eq!(properties.num_puts, 1);
+        assert_eq!(properties.num_deletes, 1);
+        assert_eq!(properties.num_default_puts, 1);
+        assert_eq!(properties.num_stale_default_puts, 1);
+        assert_eq!(properties.num_stale_deletes, 0);
     }
 
     #[test]
