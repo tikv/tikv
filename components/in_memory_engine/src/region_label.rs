@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use engine_traits::CacheRegion;
@@ -99,6 +99,18 @@ impl RegionLabelRulesManager {
         }
     }
 
+    fn retain_region_labels(&self, valid_rule_ids: &HashSet<String>) {
+        let stale_rules = self
+            .region_labels
+            .iter()
+            .filter(|entry| !valid_rule_ids.contains(entry.key()))
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        for rule in stale_rules {
+            self.remove_region_label(&rule);
+        }
+    }
+
     #[cfg(test)]
     pub fn get_region_label(&self, label_rule_id: &str) -> Option<LabelRule> {
         self.region_labels
@@ -182,21 +194,20 @@ impl RegionLabelService {
         )
     }
 
-    fn on_label_rule_add(&mut self, label_rule: &LabelRule) {
-        let should_add_label = self
-            .rule_filter_fn
+    fn should_apply_label_rule(&self, label_rule: &LabelRule) -> bool {
+        self.rule_filter_fn
             .as_ref()
-            .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
-        if should_add_label {
+            .map_or_else(|| true, |rule_filter_fn| rule_filter_fn(label_rule))
+    }
+
+    fn on_label_rule_add(&mut self, label_rule: &LabelRule) {
+        if self.should_apply_label_rule(label_rule) {
             self.manager.add_region_label(label_rule)
         }
     }
+
     fn on_label_rule_delete(&mut self, label_rule: &LabelRule) {
-        let should_remove_label = self
-            .rule_filter_fn
-            .as_ref()
-            .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
-        if should_remove_label {
+        if self.should_apply_label_rule(label_rule) {
             self.manager.remove_region_label(label_rule)
         }
     }
@@ -244,6 +255,26 @@ impl RegionLabelService {
                         cancel.abort();
                         continue 'outer;
                     }
+                    // etcd can also send compaction as a raw gRPC error
+                    // instead of inside the ResponseHeader proto field.
+                    // That arrives as PdError::Grpc and was falling into
+                    // the generic handler below, retrying forever from the
+                    // same stale revision. Catch it here and recover the
+                    // same way as DataCompacted.
+                    Err(PdError::Grpc(grpcio::Error::RpcFailure(ref status)))
+                        if status.code() == grpcio::RpcStatusCode::UNKNOWN
+                            && status
+                                .message()
+                                .contains("required revision has been compacted") =>
+                    {
+                        warn!(
+                            "ime required revision has been compacted (gRPC transport error)";
+                            "err" => ?status
+                        );
+                        self.reload_all_region_labels().await;
+                        cancel.abort();
+                        continue 'outer;
+                    }
                     Err(err) => {
                         error!("ime failed to watch region labels"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
@@ -266,16 +297,28 @@ impl RegionLabelService {
                 .await
             {
                 Ok(mut resp) => {
+                    let revision = resp.get_header().get_revision();
                     let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
+                    let mut valid_rule_ids = HashSet::with_capacity(kvs.len());
                     for g in kvs.iter() {
                         match serde_json::from_slice::<LabelRule>(g.get_value()) {
-                            Ok(label_rule) => self.on_label_rule_add(&label_rule),
+                            Ok(label_rule) => {
+                                if self.should_apply_label_rule(&label_rule) {
+                                    valid_rule_ids.insert(label_rule.id.clone());
+                                    self.manager.add_region_label(&label_rule);
+                                }
+                            }
 
                             Err(e) => {
                                 error!("ime parse label rule failed"; "name" => ?g.get_key(), "err" => ?e);
                             }
                         }
                     }
+                    // The GET response and its revision form one snapshot. Reconcile
+                    // removals before resuming the watch from that revision so events
+                    // missed due to compaction cannot leave stale rules behind.
+                    self.manager.retain_region_labels(&valid_rule_ids);
+                    self.revision = revision;
                     return;
                 }
                 Err(err) => {
@@ -400,6 +443,12 @@ pub mod tests {
         );
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 1);
+        assert_eq!(s.revision, 1);
+
+        delete_region_label_rule(s.meta_client.clone(), cluster_id, "cache/0");
+        block_on(s.reload_all_region_labels());
+        assert_eq!(s.manager.region_labels().len(), 0);
+        assert_eq!(s.revision, 2);
 
         server.stop();
     }
@@ -462,6 +511,82 @@ pub mod tests {
         assert!(s.manager.get_region_label("cache/0").is_none());
         let label = s.manager.get_region_label("cache/1").unwrap();
         assert_eq!(label.data[0].start_key, "c".to_string());
+
+        server.stop();
+    }
+    #[test]
+    fn watch_grpc_compaction_error_recovers() {
+        use std::sync::atomic::Ordering;
+
+        use test_pd::util::new_client_with_update_interval;
+
+        // Build our own MetaStorage so we can control the injection flag.
+        let mocker = Arc::new(MetaStorage::default());
+        let inject_flag = mocker.inject_compaction_error.clone();
+
+        let mut server = MockServer::with_case(1, Arc::clone(&mocker));
+        let eps = server.bind_addrs();
+        let client = new_client_with_update_interval(eps, None, ReadableDuration::millis(100));
+
+        let region_label_manager = Arc::new(RegionLabelRulesManager::default());
+        let cluster_id = client.get_cluster_id().unwrap();
+
+        let s = RegionLabelServiceBuilder::new(Arc::clone(&region_label_manager), Arc::new(client))
+            .build()
+            .unwrap();
+
+        // Establish a non-zero snapshot revision. Both the initial watch and
+        // the watch restarted after compaction must use this revision.
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            &new_region_label_rule("cache/before-compaction", "a", "b"),
+        );
+
+        // Fail the first Watch call with the production gRPC compaction error.
+        // The mock injects it once and records every requested start revision.
+        inject_flag.store(true, Ordering::Release);
+
+        let background_worker = Builder::new("ime-compaction-test").thread_count(1).create();
+        let mut s_clone = s.clone();
+        background_worker.spawn_async_task(async move {
+            s_clone.watch_region_labels().await;
+        });
+
+        // Wait for the watch to restart, then verify the compaction arm did a
+        // second snapshot GET. The generic error path retries without reloading.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while mocker.watch_start_revisions.lock().unwrap().len() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "compaction recovery did not restart the watch"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(mocker.get_call_count.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            mocker.watch_start_revisions.lock().unwrap().as_slice(),
+            &[1, 1]
+        );
+
+        // A new event after recovery must arrive through the resumed watch.
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            &new_region_label_rule("cache/after-compaction", "c", "d"),
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if region_label_manager.region_labels().len() == 2 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "resumed watch did not receive an event after compaction recovery"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         server.stop();
     }

@@ -63,6 +63,7 @@ Concrete runtime anchors:
 High-risk service contracts:
 
 - metadata-derived store-id checks
+- advertised store and status addresses published through PD store metadata
 - request batching and stream callback completion
 - region-error and timeout mapping from storage/raftstore to RPCs
 
@@ -113,6 +114,13 @@ High-risk service contracts:
 - `raftkv/mod.rs` is the bridge between storage and raftstore.
 - `raftkv2/mod.rs` is the bridge between storage and `raftstore-v2`.
 - `debug2.rs` is the matching debugger surface for the `RaftKv2` path.
+- Raft address resolution distinguishes a definitive PD tombstone from an
+  ambiguous not-found response. A definitive tombstone is reported to the
+  raftstore extension and permanently blocks new connections. Not-found is
+  retryable because the store may not have registered yet and uses
+  `raft_client_max_backoff`. It is also reported as a maybe-tombstone hint so
+  raftstore-v2 can clean up existing peer-removal records; this hint does not
+  add the store to the connection tombstone block list.
 
 ### Status and diagnostics
 
@@ -122,6 +130,26 @@ High-risk service contracts:
 ### GC and lock manager
 
 - `gc_worker/*` implements MVCC garbage collection and compaction filter logic.
+  Its auto-compaction runner admits candidates by version/tombstone thresholds
+  or estimated reclaimable bytes, and ranks admitted candidates by estimated
+  reclaimable bytes from write/default-CF range properties. This keeps
+  large-value regions visible even when they contain relatively few versions.
+  The default byte threshold is 384 MiB, aligned with the default
+  `coprocessor.region-max-size`; it remains an independent GC setting and
+  should be tuned separately for custom Region sizes. Candidates admitted through
+  `redundant-bytes-threshold` force bottommost-level
+  compaction so old values already at the last level can actually be reclaimed.
+  Candidate execution remains single-threaded and bounded by the check interval;
+  this policy improves selection but does not increase compaction throughput.
+  A `NO_VALID_SPLIT_KEY` result sends a non-blocking hint that wakes this runner
+  for an early full scan. All concurrent hints are coalesced into one pending
+  wake-up, urgent rounds have a 30-second minimum gap, and one full-store round
+  suppresses later hints observed at the same cached GC safe point. A pending
+  hint is retained while the GC safe point is zero. Because the safe point is
+  refreshed by the runner, a PD safe-point advance that occurs while it sleeps
+  may be discovered by the next periodic round rather than by an immediate
+  hint. The hint never submits per-Region work to the raftstore cleanup worker
+  and never bypasses candidate evaluation or the execution-time recheck.
 - `lock_manager/*` owns the live waiter-manager workers, deadlock detector, and
   RPC-facing lock-manager runtime.
 - This module sits on top of the storage-side wait-queue contracts in
@@ -136,13 +164,24 @@ High-risk service contracts:
   `raftkv` and `raftkv2`.
 - Status-server actions must match the real runtime control plane.
 - GC worker changes must preserve MVCC and safe-point correctness.
+- Auto-compaction must estimate reclaimable default-CF bytes only from stale
+  value-bearing MVCC versions. Tombstones and MVCC Delete records do not own
+  default-CF values and must not inflate that estimate.
 
 ## Observability And Operational Signals
 
 - gRPC service metrics and request-duration tracking
 - raft transport rejection and memory-pressure signals
+- raft address-resolution success, failure, tombstone, and not-found counters;
+  retryable not-found warnings are emitted immediately and then rate limited
+  per store while the counters continue to record every attempt
+- startup-time advertised-address probe warnings and
+  `tikv_server_advertise_addr_probe_failure_total`; the probe is advisory and
+  uses bounded endpoint/reason labels
 - status-server endpoints for config, metrics, health, and profiles
-- GC and diagnostics metrics and logs
+- GC and diagnostics metrics and logs, including auto-compaction candidate
+  counts, score, estimated reclaimable bytes, evaluation/compaction latency,
+  and split-failure hint receive/coalesce/drop/triggered-round counters
 
 Start triage with:
 
@@ -180,6 +219,8 @@ Start triage with:
 - Does it change request batching, stream behavior, or backpressure?
 - Does it alter memory-pressure rejection or raft append filtering?
 - Does it change bootstrap or store-registration ordering in `raft_server.rs`?
+- Does snapshot recovery probe the validated effective advertised addresses
+  before opening its local engines and calling PD `bootstrap_cluster`?
 - Does it add new status-server behavior without security or readiness review?
 - Does it alter dynamic config behavior in `config.rs` or config managers?
 

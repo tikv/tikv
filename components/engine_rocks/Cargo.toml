@@ -39,6 +39,7 @@ lazy_static = "1.4.0"
 log_wrappers = { workspace = true }
 num_cpus = "1"
 online_config = { workspace = true }
+parking_lot = "0.12"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"

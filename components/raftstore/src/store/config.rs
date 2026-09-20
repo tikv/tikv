@@ -1380,21 +1380,35 @@ impl Config {
 
     fn write_change_into_metrics(change: ConfigChange) {
         for (name, value) in change {
-            if let Ok(v) = match value {
-                ConfigValue::F64(v) => Ok(v),
-                ConfigValue::U64(v) => Ok(v as f64),
-                ConfigValue::Size(v) => Ok(v as f64),
-                ConfigValue::Usize(v) => Ok(v as f64),
-                ConfigValue::Bool(v) => Ok((v as i32).into()),
-                ConfigValue::Duration(v) => Ok((v / 1000) as f64), // millis -> secs
-                _ => Err(()),
-            } {
-                CONFIG_RAFTSTORE_GAUGE
-                    .with_label_values(&[name.as_str()])
-                    .set(v);
+            if let Some((name, v)) = metric_value(&name, value) {
+                CONFIG_RAFTSTORE_GAUGE.with_label_values(&[name]).set(v);
             }
         }
     }
+}
+
+fn metric_value(name: &str, value: ConfigValue) -> Option<(&str, f64)> {
+    let value = match value {
+        ConfigValue::F64(v) => v,
+        ConfigValue::U64(v) => v as f64,
+        ConfigValue::Size(v) => v as f64,
+        ConfigValue::Usize(v) => v as f64,
+        ConfigValue::Bool(v) => (v as i32).into(),
+        ConfigValue::Duration(v) if name == "raft_write_wait_duration" => v.as_micros() as f64,
+        ConfigValue::Duration(v) => v.as_secs_f64(),
+        ConfigValue::I32(_)
+        | ConfigValue::U32(_)
+        | ConfigValue::String(_)
+        | ConfigValue::Module(_)
+        | ConfigValue::Schedule(_)
+        | ConfigValue::Skip
+        | ConfigValue::None => return None,
+    };
+    let name = match name {
+        "consistency_check_interval" => "consistency_check_interval_seconds",
+        name => name,
+    };
+    Some((name, value))
 }
 
 pub struct RaftstoreConfigManager {
@@ -1826,5 +1840,30 @@ mod tests {
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
         cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
+    }
+
+    #[test]
+    fn test_write_change_into_metrics_preserves_duration_units_and_labels() {
+        assert_eq!(
+            metric_value(
+                "raft_write_wait_duration",
+                ConfigValue::from(ReadableDuration::micros(200)),
+            ),
+            Some(("raft_write_wait_duration", 200.0))
+        );
+        assert_eq!(
+            metric_value(
+                "inspect_interval",
+                ConfigValue::from(ReadableDuration::millis(1)),
+            ),
+            Some(("inspect_interval", 0.001))
+        );
+        assert_eq!(
+            metric_value(
+                "consistency_check_interval",
+                ConfigValue::from(ReadableDuration::secs(9)),
+            ),
+            Some(("consistency_check_interval_seconds", 9.0))
+        );
     }
 }

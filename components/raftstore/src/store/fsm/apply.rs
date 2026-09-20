@@ -627,7 +627,7 @@ where
                 .flat_map(|(cb, _)| cb.write_trackers())
                 .flat_map(|trackers| trackers.as_tracker_token())
                 .collect();
-            self.perf_context.report_metrics(&trackers);
+            let _ = self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -808,8 +808,40 @@ where
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
+            // Test hook: let a test hold back one store's apply result, so the region
+            // update it carries is drained in a later, controlled round.
+            fail_point!(
+                "pause_apply_res_of_store_2",
+                self.store_id == 2
+                    && self.apply_res.iter().any(|res| res
+                        .exec_res
+                        .iter()
+                        .any(|e| matches!(e, ExecResult::SplitRegion { .. }))),
+                |_| panic!("should not use return")
+            );
+            fail_point!(
+                "pause_apply_res_of_store_3",
+                self.store_id == 3
+                    && self.apply_res.iter().any(|res| res
+                        .exec_res
+                        .iter()
+                        .any(|e| matches!(e, ExecResult::SplitRegion { .. }))),
+                |_| panic!("should not use return")
+            );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
+            // Test hook: the apply result above has been handed over to the peer, so a
+            // test can order what the peer handles next without guessing with sleeps.
+            fail_point!(
+                "notified_apply_res_of_store_2",
+                self.store_id == 2,
+                |_| panic!("should not use return")
+            );
+            fail_point!(
+                "notified_apply_res_of_store_3",
+                self.store_id == 3,
+                |_| panic!("should not use return")
+            );
         }
 
         let elapsed = t.saturating_elapsed();

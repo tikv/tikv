@@ -13,6 +13,7 @@ use tikv_util::{
     Either,
     config::ReadableSize,
     lru::{LruCache, SizePolicy},
+    memory::HeapSize,
     time::Instant,
 };
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
@@ -26,19 +27,66 @@ pub(crate) type OldValueCallback = Box<
 #[derive(Default)]
 pub struct OldValueCacheSizePolicy(usize);
 
+// Conservative floor for tiny entries. Even `OldValue::None` still retains the
+// HashMap entry, LRU trace record, duplicated key, boxed record allocation, and
+// allocator overhead.
+const OLD_VALUE_CACHE_MIN_ENTRY_SIZE: usize = 256;
+
+// Hashbrown/std HashMap stores one control byte per bucket. This is part of
+// the raw table metadata, separate from the bucket payload.
+const HASH_TABLE_CONTROL_BYTES: usize = 1;
+
+// Approximate the effective bucket overhead caused by the current hash table
+// load factor. The 7/8 load factor is implementation-based, not a public API
+// contract, but is suitable for retained-memory estimation.
+const HASH_TABLE_LOAD_FACTOR_NUMERATOR: usize = 8;
+const HASH_TABLE_LOAD_FACTOR_DENOMINATOR: usize = 7;
+
+// Per-bucket payload retained by the HashMap entry: the map key, the value
+// tuple, the pointer from ValueEntry to the LRU trace record, and the control
+// byte. Heap allocations owned by Key and OldValue are charged separately.
+const HASH_TABLE_BUCKET_BYTES: usize = std::mem::size_of::<Key>()
+    + std::mem::size_of::<(OldValue, Option<MutationType>)>()
+    + std::mem::size_of::<usize>()
+    + HASH_TABLE_CONTROL_BYTES;
+
+// HashMap entry overhead after spreading buckets by the estimated load factor.
+const HASH_TABLE_ENTRY_BYTES: usize = (HASH_TABLE_BUCKET_BYTES * HASH_TABLE_LOAD_FACTOR_NUMERATOR)
+    .div_ceil(HASH_TABLE_LOAD_FACTOR_DENOMINATOR);
+
+// The boxed LRU trace record stores a cloned Key plus prev/next links. The
+// cloned key's heap allocation is charged by `2 * key.approximate_heap_size()`.
+const TRACE_RECORD_BYTES: usize = std::mem::size_of::<Key>() + 2 * std::mem::size_of::<usize>();
+
+fn old_value_heap_size(old_value: &OldValue) -> usize {
+    match old_value {
+        OldValue::Value { value } => value.capacity(),
+        OldValue::SeekWrite(key) => key.approximate_heap_size(),
+        OldValue::ValueTimeStamp { .. } | OldValue::None | OldValue::Unspecified => 0,
+    }
+}
+
+fn old_value_cache_entry_size(key: &Key, value: &(OldValue, Option<MutationType>)) -> usize {
+    // LruCache stores one key in the HashMap and a cloned key in a boxed trace
+    // record. Its HashMap payload is a Key plus ValueEntry { value, record }.
+    (HASH_TABLE_ENTRY_BYTES
+        + TRACE_RECORD_BYTES
+        + 2 * key.approximate_heap_size()
+        + old_value_heap_size(&value.0))
+    .max(OLD_VALUE_CACHE_MIN_ENTRY_SIZE)
+}
+
 impl SizePolicy<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizePolicy {
     fn current(&self) -> usize {
         self.0
     }
 
     fn on_insert(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
-        self.0 +=
-            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+        self.0 += old_value_cache_entry_size(key, value);
     }
 
     fn on_remove(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
-        self.0 -=
-            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+        self.0 -= old_value_cache_entry_size(key, value);
     }
 
     fn on_reset(&mut self, val: usize) {
@@ -322,9 +370,6 @@ mod tests {
 
     #[test]
     fn test_old_value_resize() {
-        let capacity = 1024;
-
-        let mut old_value_cache = OldValueCache::new(ReadableSize(capacity));
         let value = (
             OldValue::Value {
                 value: b"value".to_vec(),
@@ -336,9 +381,12 @@ mod tests {
         let mut size_calc = OldValueCacheSizePolicy::default();
         size_calc.on_insert(&Key::from_raw(&0_usize.to_be_bytes()), &value);
         let size = size_calc.current();
+        let cases = 10_usize;
+        let capacity = size * cases;
+
+        let mut old_value_cache = OldValueCache::new(ReadableSize(capacity as u64));
 
         // Insert ten values.
-        let cases = 10_usize;
         for i in 0..cases {
             let key = Key::from_raw(&i.to_be_bytes());
             old_value_cache.cache.insert(key, value.clone());
@@ -346,19 +394,12 @@ mod tests {
 
         assert_eq!(old_value_cache.cache.size(), size * cases);
         assert_eq!(old_value_cache.cache.len(), cases);
-        assert_eq!(old_value_cache.capacity(), capacity as usize);
+        assert_eq!(old_value_cache.capacity(), capacity);
 
         // Reduces capacity.
-        let new_capacity = 256;
-        // The memory usage that needs to be removed because of the capacity reduction.
-        let dropped = old_value_cache.cache.size() - new_capacity;
-        let dropped_count = if !dropped.is_multiple_of(size) {
-            (dropped / size) + 1
-        } else {
-            dropped / size
-        };
-        // The remaining values count.
-        let remaining_count = old_value_cache.cache.len() - dropped_count;
+        let remaining_count = cases / 2;
+        let new_capacity = size * remaining_count;
+        let dropped_count = cases - remaining_count;
         old_value_cache.resize(ReadableSize(new_capacity as u64));
 
         assert_eq!(old_value_cache.cache.size(), size * remaining_count);
@@ -370,16 +411,36 @@ mod tests {
         }
 
         // Increases the capacity again.
-        let new_capacity = 1024;
-        old_value_cache.resize(ReadableSize(new_capacity));
+        let new_capacity = capacity;
+        old_value_cache.resize(ReadableSize(new_capacity as u64));
 
         assert_eq!(old_value_cache.cache.size(), size * remaining_count);
         assert_eq!(old_value_cache.cache.len(), remaining_count);
-        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        assert_eq!(old_value_cache.capacity(), new_capacity);
         for i in dropped_count..cases {
             let key = Key::from_raw(&i.to_be_bytes());
             assert_eq!(old_value_cache.cache.get(&key).is_some(), true);
         }
+    }
+
+    #[test]
+    fn test_old_value_cache_size_policy_charges_retained_memory() {
+        let key = Key::from_raw(b"k");
+        let none_value = (OldValue::None, None);
+        let none_size = old_value_cache_entry_size(&key, &none_value);
+        let old_logical_size = key.as_encoded().len()
+            + none_value.0.size()
+            + std::mem::size_of::<Option<MutationType>>();
+        assert!(none_size >= OLD_VALUE_CACHE_MIN_ENTRY_SIZE);
+        assert!(none_size > old_logical_size);
+
+        let mut value = Vec::with_capacity(1024);
+        value.extend_from_slice(b"v");
+        let value = (OldValue::Value { value }, None);
+        let value_size = old_value_cache_entry_size(&key, &value);
+        let value_logical_size =
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+        assert!(value_size >= value_logical_size + 512);
     }
 
     #[test]

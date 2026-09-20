@@ -39,6 +39,21 @@ const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::MAX);
 
+// azure_core 0.18.0 can expose live Authorization headers through Debug/Trace
+// request logs, so suppress them here.
+// TODO: Remove this filter after the legacy Azure SDK is upgraded or patched.
+fn should_emit_log(module: &str, level: Level, disabled_targets: &[String]) -> bool {
+    let is_azure_core = module == "azure_core" || module.starts_with("azure_core::");
+    if is_azure_core && matches!(level, Level::Debug | Level::Trace) {
+        return false;
+    }
+    if disabled_targets.is_empty() {
+        return true;
+    }
+    let root_module = module.split("::").next().unwrap();
+    disabled_targets.iter().all(|target| target != root_module)
+}
+
 pub fn init_log<D>(
     drain: D,
     level: Level,
@@ -59,23 +74,10 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
+    // The module name looks like `raftstore::store::fsm::store` or
+    // `grpcio::log_util`. Filtering uses its highest-level component.
     let filter = move |record: &Record<'_>| {
-        if !disabled_targets.is_empty() {
-            // The format of the returned value from module() would like this:
-            // ```
-            //  raftstore::store::fsm::store
-            //  tikv_util
-            //  tikv_util::config::check_data_dir
-            //  raft::raft
-            //  grpcio::log_util
-            //  ...
-            // ```
-            // Here get the highest level module name to check.
-            let module = record.module().split("::").next().unwrap();
-            disabled_targets.iter().all(|target| target != module)
-        } else {
-            true
-        }
+        should_emit_log(record.module(), record.level(), &disabled_targets)
     };
 
     fn build_log_drain<I>(
@@ -747,6 +749,48 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             self.0.lock().unwrap().flush()
         }
+    }
+
+    #[test]
+    fn test_filter_credential_bearing_azure_core_logs() {
+        let disabled_targets = vec![];
+        assert!(!should_emit_log(
+            "azure_core::policies::transport",
+            Level::Debug,
+            &disabled_targets,
+        ));
+        assert!(!should_emit_log(
+            "azure_core",
+            Level::Debug,
+            &disabled_targets,
+        ));
+        assert!(!should_emit_log(
+            "azure_core::policies::retry_policies::retry_policy",
+            Level::Trace,
+            &disabled_targets,
+        ));
+        assert!(should_emit_log(
+            "azure_core::policies::transport",
+            Level::Info,
+            &disabled_targets,
+        ));
+        assert!(should_emit_log(
+            "azure_core_extra",
+            Level::Debug,
+            &disabled_targets,
+        ));
+        assert!(should_emit_log(
+            "azure_storage::clients",
+            Level::Debug,
+            &disabled_targets,
+        ));
+
+        let disabled_targets = vec!["azure_storage".to_owned()];
+        assert!(!should_emit_log(
+            "azure_storage::clients",
+            Level::Info,
+            &disabled_targets,
+        ));
     }
 
     fn log_format_cases(logger: slog::Logger) {

@@ -258,6 +258,7 @@ impl ServerCluster {
             resource_metering::init_recorder(
                 cfg.precision.as_millis(),
                 cfg.enable_network_io_collection,
+                cfg.enable_detailed_io_collection,
             );
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());

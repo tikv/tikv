@@ -24,6 +24,7 @@ use tokio::{
 use tokio_stream::Stream;
 use tracing::trace_span;
 use tracing_active_tree::{frame, root};
+use txn_types::TimeStamp;
 
 use self::hooking::AbortedCtx;
 use super::{
@@ -203,7 +204,8 @@ impl slog::KV for ExecutionConfig {
             serializer.emit_u64("shard.total", shard.total)?;
         }
         let date = |pts| {
-            chrono::DateTime::<Utc>::from_timestamp_millis(pts as i64)
+            let ts = TimeStamp::new(pts).physical();
+            chrono::DateTime::<Utc>::from_timestamp_millis(ts as i64)
                 .map(|dt| dt.to_string())
                 .unwrap_or_else(|| format!("invalid_ts({pts})"))
         };

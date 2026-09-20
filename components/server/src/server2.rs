@@ -374,6 +374,7 @@ where
                 &background_worker,
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
@@ -548,6 +549,10 @@ where
                     .config
                     .resource_metering
                     .enable_network_io_collection,
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_detailed_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =

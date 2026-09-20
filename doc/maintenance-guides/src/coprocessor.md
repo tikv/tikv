@@ -22,6 +22,50 @@ It is a read-heavy hot path and directly impacts query latency.
 - execute in read pool
 - collect stats and emit response
 
+### Batched unary result merging
+
+- Unary handlers return `Result<HandlerOutput>`. Response data is either ready
+  or kept as an unserialized `MergeableResult`. Currently only full-sampling
+  analyze produces mergeable results. All mergeable outputs of one request must
+  have the same concrete type and must produce the same logical result
+  regardless of merge order.
+- Merging is enabled only when the client sets
+  `Request::allow_batch_task_data_merge` and supplies batched tasks. Otherwise,
+  every task is serialized in its own read-pool task, preserving the existing
+  wire behavior.
+- Execution scheduling is negotiated independently. When the client sets
+  `Request::execute_batch_tasks_serially`, the top task and batched tasks are
+  polled one at a time so batching does not increase scan concurrency. This
+  relies on the `ReadPoolHandle::spawn` contract: on both backends a task is
+  admitted and enqueued only when the returned future is first polled. Because
+  neither admission nor queueing observes the deadline, serial collection is
+  bounded by the top task's deadline: on expiry the stream is dropped, which
+  abandons the in-flight child and never submits the rest, and only a
+  top-level timeout is returned. When the field is unset, batched tasks retain
+  the legacy concurrent polling behavior.
+  TiDB correlates child responses by task ID, so scheduling does not depend on
+  response order.
+- A successful mergeable batched result is folded into an error-free mergeable
+  top result. Its batch response contains no data, sets
+  `data_merged_into_response`, and keeps its execution details. Failed or
+  non-mergeable tasks keep normal per-task responses.
+- Final merging and serialization run in the read pool under the request's
+  deadline, resource-control settings, selected semaphore group, and tracker.
+  Outputs are buffered until finalization, so they contribute to peak request
+  memory; each buffered output rides in its memory-trace guard, and attachment
+  rebuilds the combined response's guard (adopting a batch response's node when
+  the top response is untracked, e.g. a top task error) so the retained data
+  stays accounted until the response drops.
+- Data, acknowledgments, response-byte accounting, and memory tracing are
+  published only after the final deadline check. Admission failure, deadline
+  expiry, or failure to serialize a top result that already consumed child
+  results returns no partial data or acknowledgments, allowing every task to be
+  retried safely.
+
+The main contracts live in `HandlerOutput` and `MergeableResult` in
+`src/coprocessor/mod.rs`; orchestration is in `src/coprocessor/endpoint.rs`;
+collection and finalization are in `src/coprocessor/batch.rs`.
+
 ## Process Lifecycle And Startup Sequencing
 
 - Endpoint and read pools are created during server startup.
@@ -31,6 +75,20 @@ It is a read-heavy hot path and directly impacts query latency.
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
   `src/server/service/kv.rs` as the RPC entry path.
+- On the Yatp path, unary and streaming heavy tasks are admitted through
+  semaphores created in `Endpoint::new`: a shared semaphore for ordinary
+  coprocessor work and a dedicated semaphore for Analyze requests that are
+  intentionally throttled by the background quota limiter.
+- The shared semaphore is controlled by
+  `server.end-point-max-concurrency`. The dedicated background-limited
+  semaphore is enabled only when
+  `server.end-point-max-bg-concurrency` is explicitly set to a positive value;
+  its capacity is then controlled by that value.
+- When the dedicated setting is absent or `0`, Analyze and ordinary Cop
+  requests share the legacy semaphore. When it is positive, the two semaphores
+  are independent and both lanes can make progress concurrently.
+- The dedicated cap does not automatically track unified read-pool worker
+  autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
   `IoType::ForegroundRead`. Any change that moves blocking work into or out of
   this path should be reviewed against foreground IO expectations.
@@ -45,6 +103,9 @@ It is a read-heavy hot path and directly impacts query latency.
   version, perf level.
 - Request parsing contract differs by request type:
   DAG, analyze, checksum.
+- `HandlerOutput` always owns the traced response and records separately
+  whether its data is ready or remains as a mergeable result until
+  finalization.
 - `ReqContextInner::new` is where deadline, bypass/access locks, and derived
   lower/upper bounds are normalized. Reviewers should treat changes there as
   cross-cutting request-semantic changes.
@@ -71,6 +132,7 @@ It is a read-heavy hot path and directly impacts query latency.
 
 - `src/coprocessor/mod.rs`
 - `src/coprocessor/endpoint.rs`
+- `src/coprocessor/batch.rs`
 - `src/coprocessor/readpool_impl.rs`
 - `src/coprocessor/dag/*`
 - `src/coprocessor/statistics/*`
@@ -81,12 +143,13 @@ It is a read-heavy hot path and directly impacts query latency.
 
 1. `src/coprocessor/mod.rs`
 2. `src/coprocessor/endpoint.rs`
-3. `src/coprocessor/tracker.rs`
-4. `src/coprocessor/readpool_impl.rs`
-5. `src/coprocessor/interceptors/deadline.rs`
-6. `src/coprocessor/interceptors/concurrency_limiter.rs`
-7. `src/coprocessor/dag/mod.rs`
-8. `src/coprocessor/statistics/analyze_context.rs`
+3. `src/coprocessor/batch.rs`
+4. `src/coprocessor/tracker.rs`
+5. `src/coprocessor/readpool_impl.rs`
+6. `src/coprocessor/interceptors/deadline.rs`
+7. `src/coprocessor/interceptors/concurrency_limiter.rs`
+8. `src/coprocessor/dag/mod.rs`
+9. `src/coprocessor/statistics/analyze_context.rs`
 
 ## Main Responsibilities
 
@@ -105,16 +168,38 @@ It is a read-heavy hot path and directly impacts query latency.
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
 - Memory quota and concurrency limiters must remain cheap and correct.
+- Request parsing and admission must stay aligned: when the dedicated setting
+  is enabled, a request class that reports quota samples to the background
+  quota limiter should use the dedicated background-limited semaphore instead
+  of bypassing heavy-task admission. With the setting disabled, it intentionally
+  shares the ordinary semaphore.
+- When enabled, the dedicated background-limited semaphore protects all
+  Analyze variants, including index, common-handle, column, mixed, and
+  full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
+  shared heavy-task budget; when disabled, these requests intentionally use the
+  shared semaphore.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
-- Short-circuit AND/OR evaluation must preserve Kleene logic and keep pending
-  output positions aligned with logical input rows.
+- Batched unary result merging must preserve task identity, retry semantics,
+  deadline enforcement, response-byte accounting, and memory tracing.
+- Serial batch execution must keep at most one task from the request active
+  without changing result-merging or response-order semantics.
 
 ## Observability And Operational Signals
 
 - wait-time and snapshot-time metrics
 - request-type metrics and execution summaries
 - slow-log behavior driven by endpoint thresholds
+- Resource metering / TopSQL records the per-request RocksDB PerfContext
+  `block_read_count` delta as `rocksdb_block_read_count` when both
+  `resource-metering.enable-network-io-collection` and
+  `resource-metering.enable-detailed-io-collection` are enabled. The field is
+  used for the downstream `read_iops` dimension and relative attribution; it is
+  not a device-level IOPS measurement. Unary and streaming handler futures must
+  keep this PerfContext accounting poll-scoped so TLS metrics cannot be
+  attributed to another request. Keep that poll observer separate from the
+  streaming item lifecycle: one item can span multiple polls, but its
+  `ExecDetails` process time must still cover the complete item.
 - Start with `src/coprocessor/metrics.rs`. High-value signals include:
   `tikv_coprocessor_request_duration_seconds` family,
   `tikv_coprocessor_request_wait_seconds`,
@@ -124,7 +209,12 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_scan_details`,
   `tikv_coprocessor_response_bytes`,
   `tikv_coprocessor_waiting_for_semaphore`, and
-  `tikv_coprocessor_semaphore_wait_seconds`.
+  `tikv_coprocessor_semaphore_wait_time_duration_seconds`.
+- The semaphore wait metrics use `group=shared|background_limited` to
+  distinguish ordinary Cop request pressure from Analyze background-limited
+  throttling. Dashboard queries should preserve this label when diagnosing an
+  individual lane and aggregate it only when displaying total semaphore
+  pressure.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
@@ -193,10 +283,11 @@ Suggested reading order:
 
 1. `mod.rs`
 2. `endpoint.rs`
-3. `readpool_impl.rs`
-4. `dag/mod.rs`
-5. `statistics/analyze_context.rs`
-6. `interceptors/*`
+3. `batch.rs`
+4. `readpool_impl.rs`
+5. `dag/mod.rs`
+6. `statistics/analyze_context.rs`
+7. `interceptors/*`
 
 Companion docs:
 

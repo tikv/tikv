@@ -7,9 +7,15 @@ use rocksdb::{DB, DBIterator, Writable};
 use tikv_util::range_latch::RangeLatch;
 
 use crate::{
-    RocksEngineIterator, RocksSnapshot, db_vector::RocksDbVector, options::RocksReadOptions, r2e,
-    util::get_cf_handle,
+    RocksEngineIterator, RocksSnapshot, SnapshotSequenceNumber, db_vector::RocksDbVector,
+    options::RocksReadOptions, r2e, util::get_cf_handle,
 };
+
+/// Whether the snapshot sequence-number invariant is checked by default.
+///
+/// Debug builds favor catching invariant violations, while release builds avoid
+/// adding synchronization to the snapshot hot path unless explicitly enabled.
+pub const DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK: bool = cfg!(debug_assertions);
 
 #[cfg(feature = "trace-lifetime")]
 mod trace {
@@ -147,6 +153,11 @@ mod trace {
 pub struct RocksEngine {
     db: Arc<DB>,
     support_multi_batch_write: bool,
+    // RocksDB sequence numbers belong to one live DB instance. Engine clones share
+    // this state, while opening another DB (including reopening this path) starts a
+    // new history and must not compare against the old instance. `None` keeps the
+    // disabled snapshot path free of locking.
+    snapshot_sequence_number: Option<Arc<SnapshotSequenceNumber>>,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
     // Used to ensure mutual exclusivity between compaction filter writes and the SST ingestion
@@ -155,10 +166,12 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
-    pub fn new(db: DB) -> RocksEngine {
+    pub fn new(db: DB, enable_snapshot_sequence_number_check: bool) -> RocksEngine {
         let db = Arc::new(db);
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
+            snapshot_sequence_number: enable_snapshot_sequence_number_check
+                .then(|| Arc::new(SnapshotSequenceNumber::new(db.path().to_owned()))),
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
@@ -188,7 +201,10 @@ impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
     fn snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.db.clone())
+        match &self.snapshot_sequence_number {
+            Some(sequence_number) => RocksSnapshot::new_checked(self.db.clone(), sequence_number),
+            None => RocksSnapshot::new(self.db.clone()),
+        }
     }
 
     fn sync(&self) -> Result<()> {
@@ -278,14 +294,64 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Peekable, SyncMutable};
+    use std::sync::Arc;
+
+    use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Peekable, SnapshotMiscExt, SyncMutable};
     use kvproto::metapb::Region;
     use proptest::prelude::*;
     use rocksdb::{DB, DBOptions, FlushOptions, SeekKey, TitanDBOptions, Writable};
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
 
-    use crate::{RocksSnapshot, util};
+    use crate::util;
+
+    #[test]
+    fn test_snapshot_sequence_number_check_setting() {
+        let default_path = Builder::new()
+            .prefix("snapshot-sequence-default")
+            .tempdir()
+            .unwrap();
+        let engine = util::new_default_engine(default_path.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            engine.snapshot_sequence_number.is_some(),
+            super::DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK
+        );
+
+        let disabled_path = Builder::new()
+            .prefix("snapshot-sequence-disabled")
+            .tempdir()
+            .unwrap();
+        let disabled = util::new_engine_opt_with_snapshot_sequence_number_check(
+            disabled_path.path().to_str().unwrap(),
+            Default::default(),
+            vec![(CF_DEFAULT, Default::default())],
+            false,
+        )
+        .unwrap();
+        assert!(disabled.snapshot_sequence_number.is_none());
+
+        let enabled_path = Builder::new()
+            .prefix("snapshot-sequence-enabled")
+            .tempdir()
+            .unwrap();
+        let engine = util::new_engine_opt_with_snapshot_sequence_number_check(
+            enabled_path.path().to_str().unwrap(),
+            Default::default(),
+            vec![(CF_DEFAULT, Default::default())],
+            true,
+        )
+        .unwrap();
+        let cloned = engine.clone();
+        assert!(Arc::ptr_eq(
+            engine.snapshot_sequence_number.as_ref().unwrap(),
+            cloned.snapshot_sequence_number.as_ref().unwrap()
+        ));
+        let snapshot = cloned.snapshot();
+        assert_eq!(
+            engine.snapshot_sequence_number.as_ref().unwrap().latest(),
+            Some(snapshot.sequence_number())
+        );
+    }
 
     #[test]
     fn test_base() {
@@ -396,7 +462,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = RocksSnapshot::new(engine.get_sync_db());
+        let snap = engine.snapshot();
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_some());

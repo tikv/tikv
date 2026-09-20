@@ -424,6 +424,7 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
     let cf = match cur_api_version {
         ApiVersion::V1 | ApiVersion::V1ttl => String::from(CF_DEFAULT),
         ApiVersion::V2 => String::from(""),
+        ApiVersion::V3 => unreachable!("API V3 is not supported by this TiKV build"),
     };
     let digest = crc64fast::Digest::new();
     let mut admin_checksum: u64 = 0;

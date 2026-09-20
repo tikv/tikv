@@ -71,6 +71,7 @@ impl KvFormat for ApiV1Ttl {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
             ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1ttl")), /* reject apiv2 -> apiv1ttl conversion */
+            ApiVersion::V3 => Err(box_err!("unsupported conversion from v3 to v1ttl")),
         }
     }
 
@@ -82,6 +83,7 @@ impl KvFormat for ApiV1Ttl {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
             ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1ttl")), /* reject apiv2 -> apiv1ttl conversion */
+            ApiVersion::V3 => Err(box_err!("unsupported conversion from v3 to v1ttl")),
         }
     }
 }

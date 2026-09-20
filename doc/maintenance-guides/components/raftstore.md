@@ -63,6 +63,10 @@ Concrete startup anchors:
 High-risk contracts:
 
 - `RaftCmdRequest` header validation against region epoch and peer identity
+- classic load-based split candidates may outlive the peer identity observed
+  with their read statistics; execution must re-enter the current peer FSM and
+  build the split request from its current Region and peer; a local follower
+  rejects the candidate rather than forwarding it to the current leader
 - persisted apply/raft state alignment in `peer_storage.rs`
 - callback/result semantics in `store/msg.rs` and `store/fsm/apply.rs`
 
@@ -121,6 +125,9 @@ High-risk contracts:
 - `store/region_snapshot.rs` is the region-scoped snapshot view.
 - `store/snap/*` owns snapshot files and application helpers.
 - `store/async_io/*` separates read/write background IO from FSM execution.
+- The async writer observes `store/config.rs::Config` through `VersionTrack`.
+  After a database write it refreshes the configured write-wait duration and
+  hint, while preserving the adaptive wait learned by the recorder.
 
 ### Worker sub-systems
 
@@ -135,11 +142,21 @@ High-risk contracts:
 - `coprocessor/dispatcher.rs` hosts raftstore observers.
 - `coprocessor/region_info_accessor.rs` exposes region metadata for other
   subsystems.
+- `coprocessor/split_observer.rs` emits a best-effort notification when all
+  proposed split keys collapse to invalid Region boundaries. The notification
+  must remain non-blocking and must not enqueue per-failure compaction work on
+  raftstore cleanup workers; the server-side auto-compaction runner coalesces
+  it into a bounded scan wake-up.
 
 ## Critical Invariants
 
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
+- Normal load-based split keys must be validated against the current Region's
+  exclusive range before requesting split IDs from PD.
+- A no-valid-split-key notification is only a scheduling hint. It must not
+  bypass GC-safe-point checks, candidate admission, execution-time rechecks, or
+  auto-compaction I/O bounds.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
 - `EntryStorage` caches are performance hints, not an authority for unknown
@@ -151,18 +168,52 @@ High-risk contracts:
   generation, transport, application, and cleanup are all coupled.
 - Local reads must only bypass raft when lease and read-progress guarantees are
   valid.
+- Resolved-ts `RegionReadProgress` has split ownership: region metadata paths
+  may refresh epoch/peers, but leader ID and term must be published by Raft
+  Ready leader/term transitions.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
+- Store-to-peer broadcasts can fan out one peer message per region. Keep this
+  work bounded on the store FSM. `StoreUnreachable` must only do its per-store
+  backoff check, snapshot the target region IDs, and enqueue the first
+  `StoreUnreachableBatch`.
+- `StoreUnreachableBatch`, `StoreResolvedBatch`, and
+  `UpdateReplicationModeBatch` process one bounded slice of a fixed region-ID
+  snapshot and self-enqueue the next offset when more regions remain. The
+  self-enqueued batch must stay out of the current `handle_msgs` drain; it is
+  handled by the next control-message drain. That next drain may still run
+  immediately inside the same `Poller::poll()`, because batch-system can release
+  and re-take the control FSM without waiting for another poller scheduling
+  cycle.
+- Pending pre-transfer-leader messages and cache warm-up state belong to the
+  leader ID and term that accepted them. They must be discarded when either
+  changes, including term changes that do not yield a new Raft `SoftState`.
 - Any write-path change must preserve callback completion and region-error
   semantics.
 
 ## Observability And Operational Signals
 
 - metrics under `store/metrics.rs`, `store/local_metrics.rs`, and worker metrics
+- `split_success` and `split_failed` cover load-split attempts after they reach
+  PD split-ID allocation or admin-request handling; candidates rejected earlier
+  by routing, leadership, epoch/key validation, or scheduler delivery are
+  logged where applicable and are not included; CPU half-split candidates use
+  the split-check outcome metrics
 - PD heartbeat and region/store statistics
+- `store/worker/pd.rs` merges `ReadStats` from both read pools and the
+  transaction scheduler, so region heartbeat read-byte deltas include storage
+  reads caused by foreground write commands.
 - logs around snapshot, split/merge, peer lifecycle, disk-full, and unsafe
   recovery paths
 - memory accounting for raft entries/messages/apply state
+- `tikv_config_raftstore` reports ordinary duration fields in seconds.
+  `raft_write_wait_duration` is the historical microsecond exception.
+- Startup and online updates share the
+  `consistency_check_interval_seconds` label; online updates must not create a
+  separate `consistency_check_interval` series.
+- Resolved-ts CheckLeader anomalies should expose both sides of the decision:
+  leader-side local skip/request/response state and follower-side registry miss
+  or cached leader tuple mismatch details.
 
 Open these first when triaging:
 

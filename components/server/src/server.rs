@@ -377,10 +377,19 @@ where
         };
 
         if is_recovering_marked {
-            // Run a TiKV server in recovery modeß
+            // Run a TiKV server in recovery mode.
             info!("TiKV running in Snapshot Recovery Mode");
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
-            // connect_to_pd_cluster retreived the cluster id from pd
+        }
+
+        // Initialize and check config
+        let cfg_controller = TikvServerCore::init_config(config);
+        let config = cfg_controller.get_current();
+
+        if is_recovering_marked {
+            // `connect_to_pd_cluster` retrieved the cluster id from PD. Start
+            // recovery only after config initialization has probed the
+            // effective advertised addresses, and before regular engine setup.
             let cluster_id = config.server.cluster_id;
             snap_recovery::init_cluster::start_recovery(
                 config.clone(),
@@ -388,10 +397,6 @@ where
                 pd_client.clone(),
             );
         }
-
-        // Initialize and check config
-        let cfg_controller = TikvServerCore::init_config(config);
-        let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
@@ -410,6 +415,7 @@ where
                 &background_worker,
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
@@ -680,6 +686,10 @@ where
                     .config
                     .resource_metering
                     .enable_network_io_collection,
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_detailed_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =

@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread, time,
@@ -379,6 +379,59 @@ fn test_tombstone_block_list() {
         DiscardReason::Disconnected,
         raft_client.send(message).unwrap_err()
     );
+}
+
+/// A store missing from PD may still register later and must not be added to
+/// the tombstone block list.
+#[test]
+fn test_store_not_found_is_retryable() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
+    let (_mock_server, port) = create_mock_server(service, 60300, 60400).unwrap();
+
+    let store_registered = Arc::new(AtomicBool::new(false));
+    let not_found_count = Arc::new(AtomicUsize::new(0));
+    let resolver = resolve::MockStoreAddrResolver {
+        resolve_fn: Arc::new({
+            let store_registered = Arc::clone(&store_registered);
+            let not_found_count = Arc::clone(&not_found_count);
+            move |store_id, cb| {
+                if store_registered.load(Ordering::SeqCst) {
+                    cb(Ok(format!("127.0.0.1:{}", port)));
+                } else {
+                    not_found_count.fetch_add(1, Ordering::SeqCst);
+                    cb(Err(resolve::Error::StoreNotFound(store_id)));
+                }
+                Ok(())
+            }
+        }),
+    };
+    let mut raft_client = get_raft_client(FakeExtension, resolver);
+
+    const STORE_ID: u64 = 2;
+    let mut message = RaftMessage::default();
+    message.mut_to_peer().set_store_id(STORE_ID);
+    raft_client.send(message.clone()).unwrap();
+    raft_client.flush();
+
+    for _ in 0..50 {
+        if not_found_count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(not_found_count.load(Ordering::SeqCst) > 0);
+    store_registered.store(true, Ordering::SeqCst);
+
+    // The connection task keeps resolving with backoff and should recover
+    // after the store registers.
+    for _ in 0..20 {
+        raft_client.send(message.clone()).unwrap();
+        raft_client.flush();
+        thread::sleep(Duration::from_millis(20));
+    }
+    check_msg_count(1000, &msg_count, 1);
 }
 
 #[test]
