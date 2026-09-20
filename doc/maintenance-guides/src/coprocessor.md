@@ -95,6 +95,10 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Online config is limited but real: `Endpoint::config_manager()` exposes
   `CopConfigManager`, which currently updates memory quota. If config scope
   expands, update lifecycle and operational sections in this guide together.
+- `Endpoint::new` also publishes `server.end-point-schema-cache-capacity` to
+  the process-wide schema cache setting
+  (`tidb_query_executors::set_schema_cache_capacity`). The setting is static;
+  each read-pool thread picks it up on its next lookup.
 
 ## Data Model And Metadata Contracts
 
@@ -117,6 +121,16 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   and `statistics/analyze.rs`, and checksum requests use `checksum.rs`.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
+- Schema cache contract (`components/tidb_query_executors/src/util/schema_cache.rs`):
+  TiDB still sends the full `ColumnInfo` list in every DAG request. Table scan
+  and index scan executors derive their request-independent metadata
+  (`TableScanMeta`, `IndexScanMeta`: field types, column-id lookup, handle
+  positions, default values) once per distinct schema description and share it
+  through a thread-local LRU keyed by a fingerprint of that description. Every
+  hit is verified by full equality of the source description, so a fingerprint
+  collision can only cost a miss, never a wrong schema. Anything added to the
+  derivation must depend only on the cached source; per-request state such as
+  `EvalContext` or `is_column_filled` must stay on the executor.
 
 ## Start Here
 
@@ -198,8 +212,11 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   `tikv_coprocessor_scan_keys`,
   `tikv_coprocessor_scan_details`,
   `tikv_coprocessor_response_bytes`,
-  `tikv_coprocessor_waiting_for_semaphore`, and
-  `tikv_coprocessor_semaphore_wait_time_duration_seconds`.
+  `tikv_coprocessor_waiting_for_semaphore`,
+  `tikv_coprocessor_semaphore_wait_time_duration_seconds`, and
+  `tikv_coprocessor_schema_cache_total` (`type=hit|miss|bypass`; a low hit
+  ratio under steady OLTP load means schemas churn faster than the per-thread
+  capacity, `bypass` means the cache is disabled).
 - The semaphore wait metrics use `group=shared|background_limited` to
   distinguish ordinary Cop request pressure from Analyze background-limited
   throttling. Dashboard queries should preserve this label when diagnosing an
@@ -234,6 +251,10 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   inspect interceptors, `tracker.rs`, metrics, and read-pool behavior
 - DAG execution changes:
   inspect `dag/*`, snapshot/store setup, and query-side statistics paths
+- Scan executor schema handling changes:
+  inspect `table_scan_executor.rs`, `index_scan_executor.rs`, and
+  `util/schema_cache.rs`; keep derived metadata a pure function of the cached
+  source description
 - Analyze or checksum changes:
   inspect `statistics/*` or `checksum.rs` plus exec-detail accounting
 

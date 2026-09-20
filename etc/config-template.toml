@@ -245,6 +245,11 @@
 ## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
 # end-point-max-bg-concurrency = 0
 
+## Number of table/index schemas each coprocessor thread caches, so requests
+## against an unchanged schema reuse the metadata derived from it instead of
+## rebuilding it per request. Set to 0 to disable the cache.
+# end-point-schema-cache-capacity = 256
+
 ## Max bytes that snapshot can interact with disk in one second. It should be
 ## set based on your disk performance. Only write flow is considered, if
 ## partitioned-raft-kv is used, read flow is also considered and it will be estimated

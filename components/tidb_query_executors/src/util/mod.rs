@@ -5,6 +5,7 @@ pub mod hash_aggr_helper;
 #[cfg(test)]
 pub mod mock_executor;
 pub mod scan_executor;
+pub mod schema_cache;
 pub mod top_n_heap;
 
 use tidb_query_common::Result;

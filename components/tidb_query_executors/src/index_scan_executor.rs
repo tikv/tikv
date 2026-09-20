@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    cell::RefCell,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use DecodeHandleStrategy::*;
 use api_version::{ApiV1, KvFormat};
@@ -30,7 +34,10 @@ use tidb_query_datatype::{
 use tipb::{ColumnInfo, FieldType, IndexScan};
 use txn_types::TimeStamp;
 
-use super::util::scan_executor::*;
+use super::util::{
+    scan_executor::*,
+    schema_cache::{SchemaCache, hash_columns_info},
+};
 use crate::interface::*;
 
 pub struct BatchIndexScanExecutor<S: Storage, F: KvFormat>(
@@ -87,6 +94,102 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) must be requested in this order in
         // columns_info! since current implementation looks for them backwards for -3,
         // -2, -1.
+        let source = IndexScanSource {
+            columns_info,
+            primary_column_ids_len,
+        };
+        let meta = INDEX_SCAN_SCHEMA_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .get_or_derive(source, IndexScanMeta::derive)
+        })?;
+
+        let imp = IndexScanExecutorImpl {
+            context: EvalContext::new(config),
+            meta,
+            index_version: -1,
+            fill_extra_common_handle_key: is_fill_extra_common_handle_key,
+        };
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            executor_name: ExecutorName::batch_index_scan,
+            imp,
+            storage,
+            key_ranges,
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+            is_scanned_range_aware,
+            load_commit_ts: false,
+        })?;
+        Ok(Self(wrapper))
+    }
+
+    /// Returns the schema metadata this executor runs with.
+    #[cfg(test)]
+    pub(crate) fn meta(&self) -> &Arc<IndexScanMeta> {
+        &self.0.imp().meta
+    }
+}
+
+thread_local! {
+    /// Schema metadata shared by index scans on this thread. See
+    /// `util::schema_cache`.
+    static INDEX_SCAN_SCHEMA_CACHE: RefCell<SchemaCache<IndexScanSource, IndexScanMeta>> =
+        RefCell::new(SchemaCache::new());
+}
+
+/// The part of an index scan request that `IndexScanMeta` is derived from.
+///
+/// Equal sources derive equal metadata, which is what makes sharing one
+/// `IndexScanMeta` between requests through the schema cache sound.
+#[derive(PartialEq)]
+struct IndexScanSource {
+    columns_info: Vec<ColumnInfo>,
+    primary_column_ids_len: usize,
+}
+
+impl Hash for IndexScanSource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_columns_info(&self.columns_info, state);
+        state.write_usize(self.primary_column_ids_len);
+    }
+}
+
+/// Request-independent metadata derived from the schema of an index scan.
+///
+/// Instances are immutable and shared between executors on the same thread
+/// through `INDEX_SCAN_SCHEMA_CACHE`.
+pub struct IndexScanMeta {
+    /// See `TableScanMeta`'s `schema`.
+    schema: Vec<FieldType>,
+
+    /// ID of interested columns (exclude PK handle column).
+    columns_id_without_handle: Vec<i64>,
+
+    columns_id_for_common_handle: Vec<i64>,
+
+    /// The strategy to decode handles.
+    /// Handle will be always placed in the last column.
+    decode_handle_strategy: DecodeHandleStrategy,
+
+    /// Number of partition ID columns, now it can only be 0 or 1.
+    /// Must be after all normal columns and handle, but before
+    /// physical_table_id_column
+    pid_column_cnt: usize,
+
+    /// Number of Physical Table ID columns, can only be 0 or 1.
+    /// Must be last, after pid_column
+    physical_table_id_column_cnt: usize,
+}
+
+impl IndexScanMeta {
+    fn derive(source: &IndexScanSource) -> Result<Self> {
+        let IndexScanSource {
+            columns_info,
+            primary_column_ids_len,
+        } = source;
+        let primary_column_ids_len = *primary_column_ids_len;
+
         let physical_table_id_column_cnt = columns_info.last().map_or(0, |ci| {
             (ci.get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID) as usize
         });
@@ -137,29 +240,14 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             .map(|ci| ci.get_column_id())
             .collect();
 
-        let imp = IndexScanExecutorImpl {
-            context: EvalContext::new(config),
+        Ok(Self {
             schema,
             columns_id_without_handle,
             columns_id_for_common_handle,
             decode_handle_strategy,
             pid_column_cnt,
             physical_table_id_column_cnt,
-            index_version: -1,
-            fill_extra_common_handle_key: is_fill_extra_common_handle_key,
-        };
-        let wrapper = ScanExecutor::new(ScanExecutorOptions {
-            executor_name: ExecutorName::batch_index_scan,
-            imp,
-            storage,
-            key_ranges,
-            is_backward,
-            is_key_only: false,
-            accept_point_range: unique,
-            is_scanned_range_aware,
-            load_commit_ts: false,
-        })?;
-        Ok(Self(wrapper))
+        })
     }
 }
 
@@ -221,7 +309,7 @@ impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexScanExecutor<S, F> {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum DecodeHandleStrategy {
     NoDecode,
     DecodeIntHandle,
@@ -232,30 +320,13 @@ struct IndexScanExecutorImpl {
     /// See `TableScanExecutorImpl`'s `context`.
     context: EvalContext,
 
-    /// See `TableScanExecutorImpl`'s `schema`.
-    schema: Vec<FieldType>,
-
-    /// ID of interested columns (exclude PK handle column).
-    columns_id_without_handle: Vec<i64>,
-
-    columns_id_for_common_handle: Vec<i64>,
+    /// Schema-derived metadata, shared with other executors scanning the
+    /// same schema.
+    meta: Arc<IndexScanMeta>,
 
     /// If true, also fill the `extra_common_handle_keys` in
     /// `LazyBatchColumnVec` for each row.
     fill_extra_common_handle_key: bool,
-
-    /// The strategy to decode handles.
-    /// Handle will be always placed in the last column.
-    decode_handle_strategy: DecodeHandleStrategy,
-
-    /// Number of partition ID columns, now it can only be 0 or 1.
-    /// Must be after all normal columns and handle, but before
-    /// physical_table_id_column
-    pid_column_cnt: usize,
-
-    /// Number of Physical Table ID columns, can only be 0 or 1.
-    /// Must be last, after pid_column
-    physical_table_id_column_cnt: usize,
 
     index_version: i64,
 }
@@ -263,7 +334,7 @@ struct IndexScanExecutorImpl {
 impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
-        &self.schema
+        &self.meta.schema
     }
 
     #[inline]
@@ -277,14 +348,14 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     /// Note: the structure of the constructed column is the same as table scan
     /// executor but due to different reasons.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
-        let columns_len = self.schema.len();
+        let columns_len = self.meta.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
-        for _ in 0..self.columns_id_without_handle.len() {
+        for _ in 0..self.meta.columns_id_without_handle.len() {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
 
-        match self.decode_handle_strategy {
+        match self.meta.decode_handle_strategy {
             NoDecode => {}
             DecodeIntHandle => {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -293,22 +364,24 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 ));
             }
             DecodeCommonHandle => {
-                for _ in self.columns_id_without_handle.len()
-                    ..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt
+                for _ in self.meta.columns_id_without_handle.len()
+                    ..columns_len
+                        - self.meta.pid_column_cnt
+                        - self.meta.physical_table_id_column_cnt
                 {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
             }
         }
 
-        if self.pid_column_cnt > 0 {
+        if self.meta.pid_column_cnt > 0 {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
             ));
         }
 
-        if self.physical_table_id_column_cnt > 0 {
+        if self.meta.physical_table_id_column_cnt > 0 {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
@@ -486,11 +559,11 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         let row = RowSlice::from_bytes(value)?;
-        for (idx, col_id) in self.columns_id_without_handle.iter().enumerate() {
+        for (idx, col_id) in self.meta.columns_id_without_handle.iter().enumerate() {
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
                 let mut buffer_to_write = columns[idx].mut_raw().begin_concat_extend();
                 buffer_to_write
-                    .write_v2_as_datum(&row.values()[start..offset], &self.schema[idx])?;
+                    .write_v2_as_datum(&row.values()[start..offset], &self.meta.schema[idx])?;
             } else if row.search_in_null_ids(*col_id) {
                 columns[idx].mut_raw().push(datum::DATUM_DATA_NULL);
             } else {
@@ -530,20 +603,21 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         Self::extract_columns_from_datum_format(
             &mut key_payload,
-            &mut columns[..self.columns_id_without_handle.len()],
+            &mut columns[..self.meta.columns_id_without_handle.len()],
         )?;
 
         // Track partition ID extracted from key (for pid_column_cnt handling below).
         let mut partition_id: Option<i64> = None;
 
-        match self.decode_handle_strategy {
+        let decode_handle_strategy = self.meta.decode_handle_strategy;
+        match decode_handle_strategy {
             NoDecode => {
                 // Note: V2 key-only partition ID only exists for IntHandle
                 // global indexes, when !PKIsHandle, and TiDB always sends
                 // the handle column for those, so this path is only reached
                 // for local indexes where decode_table_id correctly returns
                 // the partition's table ID.
-                if self.physical_table_id_column_cnt > 0 {
+                if self.meta.physical_table_id_column_cnt > 0 {
                     self.process_physical_table_id_column(key, columns)?;
                 }
             }
@@ -553,10 +627,10 @@ impl IndexScanExecutorImpl {
             DecodeIntHandle if key_payload.is_empty() => {
                 // This is a unique index, and we should look up PK int handle in the value.
                 let handle_val = self.decode_int_handle_from_value(value)?;
-                columns[self.columns_id_without_handle.len()]
+                columns[self.meta.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
-                if self.physical_table_id_column_cnt > 0 {
+                if self.meta.physical_table_id_column_cnt > 0 {
                     self.process_physical_table_id_column(key, columns)?;
                 }
             }
@@ -568,12 +642,12 @@ impl IndexScanExecutorImpl {
                 let (handle_val, pid) =
                     self.decode_int_handle_and_partition_from_key(key_payload)?;
                 partition_id = pid;
-                columns[self.columns_id_without_handle.len()]
+                columns[self.meta.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
                 // For global indexes, use the partition ID as physical table ID
                 // instead of the index table ID from the key prefix.
-                if self.physical_table_id_column_cnt > 0 {
+                if self.meta.physical_table_id_column_cnt > 0 {
                     if let Some(pid) = partition_id {
                         let col_index = columns.columns_len() - 1;
                         columns[col_index].mut_decoded().push_int(Some(pid));
@@ -584,8 +658,9 @@ impl IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
-                let end_index =
-                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                let end_index = columns.columns_len()
+                    - self.meta.pid_column_cnt
+                    - self.meta.physical_table_id_column_cnt;
                 if self.fill_extra_common_handle_key {
                     columns
                         .mut_extra_common_handle_keys()
@@ -593,9 +668,9 @@ impl IndexScanExecutorImpl {
                 }
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[self.columns_id_without_handle.len()..end_index],
+                    &mut columns[self.meta.columns_id_without_handle.len()..end_index],
                 )?;
-                if self.physical_table_id_column_cnt > 0 {
+                if self.meta.physical_table_id_column_cnt > 0 {
                     self.process_physical_table_id_column(key, columns)?;
                 }
             }
@@ -604,8 +679,8 @@ impl IndexScanExecutorImpl {
         // Deprecated: Keep this for old tidb version during upgrade.
         // If need partition id, append partition id to the last column before physical
         // table id column if exists.
-        if self.pid_column_cnt > 0 {
-            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+        if self.meta.pid_column_cnt > 0 {
+            let pid_col_idx = columns.columns_len() - self.meta.physical_table_id_column_cnt - 1;
             if let Some(pid) = partition_id {
                 columns[pid_col_idx].mut_decoded().push_int(Some(pid));
             } else {
@@ -743,7 +818,7 @@ impl IndexScanExecutorImpl {
             }
         }
 
-        if self.physical_table_id_column_cnt > 0 {
+        if self.meta.physical_table_id_column_cnt > 0 {
             match decode_pid {
                 DecodePartitionIdOp::Nop => {
                     self.process_physical_table_id_column(key, columns)?;
@@ -761,8 +836,8 @@ impl IndexScanExecutorImpl {
         // Deprecated: Keep this for old tidb version during upgrade.
         // If need partition id, append partition id to the last column before physical
         // table id column if exists.
-        if self.pid_column_cnt > 0 {
-            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+        if self.meta.pid_column_cnt > 0 {
+            let pid_col_idx = columns.columns_len() - self.meta.physical_table_id_column_cnt - 1;
             match decode_pid {
                 DecodePartitionIdOp::Nop => {
                     // No partition ID found in key or value. Fall back to table ID
@@ -804,14 +879,15 @@ impl IndexScanExecutorImpl {
         let mut partition_id_from_key: Option<&'a [u8]> = None;
 
         let (decode_handle_op, remaining) = {
-            if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle
+            if !common_handle_bytes.is_empty()
+                && self.meta.decode_handle_strategy != DecodeCommonHandle
             {
                 return Err(other_err!(
                     "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
                 ));
             }
 
-            let dispatcher = match self.decode_handle_strategy {
+            let dispatcher = match self.meta.decode_handle_strategy {
                 // V2 key-only partition ID only exists for IntHandle global
                 // indexes && !PKIsHandle, and TiDB always sends the handle
                 // column for those, so NoDecode never needs to parse
@@ -819,7 +895,7 @@ impl IndexScanExecutorImpl {
                 NoDecode => DecodeHandleOp::Nop,
                 DecodeIntHandle if tail_len < 8 => {
                     // This is a non-unique index, we should extract the int handle from the key.
-                    datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                    datum::skip_n(&mut key_payload, self.meta.columns_id_without_handle.len())?;
 
                     // V1/V2: Check for partition ID in key (after indexed columns, before handle)
                     let (pid_from_key, remaining_key) = Self::split_partition_id(key_payload)?;
@@ -836,7 +912,7 @@ impl IndexScanExecutorImpl {
                 }
                 DecodeCommonHandle if common_handle_bytes.is_empty() => {
                     // This is a non-unique index, we should extract the common handle from the key.
-                    datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                    datum::skip_n(&mut key_payload, self.meta.columns_id_without_handle.len())?;
                     DecodeHandleOp::CommonHandle(key_payload)
                 }
                 DecodeCommonHandle => {
@@ -895,7 +971,7 @@ impl IndexScanExecutorImpl {
             RestoreData::NotExists => {
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[..self.columns_id_without_handle.len()],
+                    &mut columns[..self.meta.columns_id_without_handle.len()],
                 )?;
             }
 
@@ -910,14 +986,14 @@ impl IndexScanExecutorImpl {
                 // data.
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[..self.columns_id_without_handle.len()],
+                    &mut columns[..self.meta.columns_id_without_handle.len()],
                 )?;
-                let limit = self.columns_id_without_handle.len();
+                let limit = self.meta.columns_id_without_handle.len();
                 self.restore_original_data(
                     rst,
                     izip!(
-                        &self.schema[..limit],
-                        &self.columns_id_without_handle,
+                        &self.meta.schema[..limit],
+                        &self.meta.columns_id_without_handle,
                         &mut columns[..limit],
                     ),
                 )?;
@@ -938,22 +1014,23 @@ impl IndexScanExecutorImpl {
             DecodeHandleOp::Nop => {}
             DecodeHandleOp::IntFromKey(handle) => {
                 let handle = self.decode_int_handle_from_key(handle)?;
-                columns[self.columns_id_without_handle.len()]
+                columns[self.meta.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
             }
             DecodeHandleOp::IntFromValue(handle) => {
                 let handle = self.decode_int_handle_from_value(handle)?;
-                columns[self.columns_id_without_handle.len()]
+                columns[self.meta.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
             }
             DecodeHandleOp::CommonHandle(mut handle) => {
-                let end_index =
-                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                let end_index = columns.columns_len()
+                    - self.meta.pid_column_cnt
+                    - self.meta.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut handle,
-                    &mut columns[self.columns_id_without_handle.len()..end_index],
+                    &mut columns[self.meta.columns_id_without_handle.len()..end_index],
                 )?;
             }
         }
@@ -964,14 +1041,15 @@ impl IndexScanExecutorImpl {
         };
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
-            let skip = self.columns_id_without_handle.len();
-            let end_index =
-                columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+            let skip = self.meta.columns_id_without_handle.len();
+            let end_index = columns.columns_len()
+                - self.meta.pid_column_cnt
+                - self.meta.physical_table_id_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
-                    &self.schema[skip..end_index],
-                    &self.columns_id_for_common_handle,
+                    &self.meta.schema[skip..end_index],
+                    &self.meta.columns_id_for_common_handle,
                     &mut columns[skip..end_index],
                 ),
             )?;
@@ -1086,6 +1164,74 @@ mod tests {
     use tipb::ColumnInfo;
 
     use super::*;
+
+    #[test]
+    fn test_schema_meta_is_shared_between_executors() {
+        use crate::util::schema_cache::schema_cache_capacity;
+
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(1);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_pk_handle(true);
+                ci
+            },
+        ];
+        let key_range = {
+            let mut ctx = EvalContext::default();
+            let mut range = KeyRange::default();
+            let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+            range.set_start(table::encode_index_seek_key(1, 1, &start_data));
+            let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+            range.set_end(table::encode_index_seek_key(1, 1, &end_data));
+            range
+        };
+        let build = |columns_info: Vec<ColumnInfo>, primary_column_ids_len: usize| {
+            BatchIndexScanExecutor::<_, ApiV1>::new(
+                FixtureStorage::from(vec![]),
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                vec![key_range.clone()],
+                primary_column_ids_len,
+                false,
+                false,
+                false,
+                false,
+            )
+        };
+
+        let a = build(columns_info.clone(), 0).unwrap();
+        let b = build(columns_info.clone(), 0).unwrap();
+        if schema_cache_capacity() > 0 {
+            assert!(Arc::ptr_eq(a.meta(), b.meta()));
+        }
+        assert_eq!(a.meta().decode_handle_strategy, DecodeIntHandle);
+
+        // A different column list derives different metadata.
+        let c = build(vec![columns_info[0].clone()], 0).unwrap();
+        assert!(!Arc::ptr_eq(a.meta(), c.meta()));
+        assert_eq!(c.meta().decode_handle_strategy, NoDecode);
+
+        // Invalid combinations keep failing on every build; errors are not
+        // cached.
+        for _ in 0..2 {
+            let err = build(columns_info.clone(), 1)
+                .err()
+                .expect("build must fail");
+            assert!(
+                err.to_string()
+                    .contains("Both int handle and common handle are push downed"),
+                "{}",
+                err
+            );
+        }
+    }
 
     #[test]
     fn test_basic() {
@@ -2265,12 +2411,14 @@ mod tests {
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
-            columns_id_without_handle: vec![1],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
+                columns_id_without_handle: vec![1],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2312,18 +2460,20 @@ mod tests {
         // i_b and i_ub
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![2],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![2],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2365,18 +2515,20 @@ mod tests {
         // i_c and i_uc
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![3],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![3],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2421,23 +2573,25 @@ mod tests {
         // i_abc and i_uabc
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![1, 2, 3],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![1, 2, 3],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2515,12 +2669,14 @@ mod tests {
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
-            columns_id_without_handle: vec![1],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
+                columns_id_without_handle: vec![1],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2562,18 +2718,20 @@ mod tests {
         // i_b and i_ub
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![2],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![2],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2620,18 +2778,20 @@ mod tests {
         // i_c and i_uc
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![3],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![3],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2678,23 +2838,25 @@ mod tests {
         // i_abc and i_uabc
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::LongLong.into(),
-            ],
-            columns_id_without_handle: vec![1, 2, 3],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::LongLong.into(),
+                ],
+                columns_id_without_handle: vec![1, 2, 3],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2796,31 +2958,33 @@ mod tests {
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![1],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![1],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -2913,34 +3077,36 @@ mod tests {
         // i_b and i_ub
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![2],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![2],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3032,34 +3198,36 @@ mod tests {
         // i_c and i_uc
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![3],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![3],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3151,34 +3319,36 @@ mod tests {
         // i_d and i_ud
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![4],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![4],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3270,34 +3440,36 @@ mod tests {
         // i_e and i_ue
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![5],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![5],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3389,47 +3561,49 @@ mod tests {
         // i_abcde and i_uabcde
         idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4Bin)
-                    .into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::VarChar)
-                    .collation(Collation::Utf8Mb4UnicodeCi)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![1, 2, 3, 4, 5],
-            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Utf8Mb4UnicodeCi)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![1, 2, 3, 4, 5],
+                columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3571,20 +3745,22 @@ mod tests {
         // idx_bc
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Long.into(),
-                // EXTRA_PHYSICAL_TABLE_ID_COL
-                FieldTypeTp::Long.into(),
-            ],
-            columns_id_without_handle: vec![2, 3],
-            columns_id_for_common_handle: vec![1, 3, 4],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 1,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeTp::Long.into(),
+                    FieldTypeTp::Long.into(),
+                    // EXTRA_PHYSICAL_TABLE_ID_COL
+                    FieldTypeTp::Long.into(),
+                ],
+                columns_id_without_handle: vec![2, 3],
+                columns_id_for_common_handle: vec![1, 3, 4],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 1,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3642,19 +3818,21 @@ mod tests {
         // uidx_a
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                // column `a`
-                FieldTypeTp::Long.into(),
-                // _tidb_rowid
-                FieldTypeTp::Long.into(),
-                // EXTRA_PHYSICAL_TABLE_ID_COL
-                FieldTypeTp::Long.into(),
-            ],
-            columns_id_without_handle: vec![1],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 1,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    // column `a`
+                    FieldTypeTp::Long.into(),
+                    // _tidb_rowid
+                    FieldTypeTp::Long.into(),
+                    // EXTRA_PHYSICAL_TABLE_ID_COL
+                    FieldTypeTp::Long.into(),
+                ],
+                columns_id_without_handle: vec![1],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 1,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3700,18 +3878,20 @@ mod tests {
         // kk(c2), its columns will be <c2, c1>
         let mut idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![
-                FieldTypeTp::Long.into(),
-                FieldTypeBuilder::new()
-                    .tp(FieldTypeTp::String)
-                    .collation(Collation::Latin1Bin)
-                    .into(),
-            ],
-            columns_id_without_handle: vec![2],
-            columns_id_for_common_handle: vec![1],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![
+                    FieldTypeTp::Long.into(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .collation(Collation::Latin1Bin)
+                        .into(),
+                ],
+                columns_id_without_handle: vec![2],
+                columns_id_for_common_handle: vec![1],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };
@@ -3772,12 +3952,14 @@ mod tests {
     fn test_decode_int_handle_and_partition_from_key() {
         let idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
-            schema: vec![],
-            columns_id_without_handle: vec![],
-            columns_id_for_common_handle: vec![],
-            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
-            pid_column_cnt: 0,
-            physical_table_id_column_cnt: 0,
+            meta: Arc::new(IndexScanMeta {
+                schema: vec![],
+                columns_id_without_handle: vec![],
+                columns_id_for_common_handle: vec![],
+                decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+                pid_column_cnt: 0,
+                physical_table_id_column_cnt: 0,
+            }),
             index_version: -1,
             fill_extra_common_handle_key: false,
         };

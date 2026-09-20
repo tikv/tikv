@@ -30,6 +30,16 @@ make_auto_flush_static_metric! {
     pub struct LocalCoprExecutorCount: LocalIntCounter {
         "type" => ExecutorName,
     }
+
+    pub label_enum SchemaCacheLookup {
+        hit,
+        miss,
+        bypass,
+    }
+
+    pub struct LocalCoprSchemaCacheCount: LocalIntCounter {
+        "type" => SchemaCacheLookup,
+    }
 }
 
 lazy_static::lazy_static! {
@@ -44,6 +54,22 @@ lazy_static::lazy_static! {
 lazy_static::lazy_static! {
     pub static ref EXECUTOR_COUNT_METRICS: LocalCoprExecutorCount =
         auto_flush_from!(COPR_EXECUTOR_COUNT, LocalCoprExecutorCount);
+}
+
+lazy_static::lazy_static! {
+    static ref COPR_SCHEMA_CACHE_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_schema_cache_total",
+        "Total number of coprocessor schema cache lookups by outcome",
+        &["type"]
+    )
+    .unwrap();
+}
+
+lazy_static::lazy_static! {
+    /// Outcome counters of the coprocessor schema cache. `bypass` counts
+    /// lookups made while the cache is disabled.
+    pub static ref SCHEMA_CACHE_METRICS: LocalCoprSchemaCacheCount =
+        auto_flush_from!(COPR_SCHEMA_CACHE_COUNT, LocalCoprSchemaCacheCount);
 }
 
 #[inline]

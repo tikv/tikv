@@ -193,6 +193,7 @@ impl<E: Engine> Endpoint<E> {
         );
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
+        tidb_query_executors::set_schema_cache_capacity(cfg.end_point_schema_cache_capacity);
         Self {
             read_pool,
             shared_semaphore,
