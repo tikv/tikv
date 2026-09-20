@@ -56,6 +56,16 @@ It is a read-heavy hot path and directly impacts query latency.
   and `statistics/analyze.rs`, and checksum requests use `checksum.rs`.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
+- The DAG `flags` bitmask is a network-facing contract. Bit 12,
+  `Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION`, enables lazy `LogicalAnd`/`LogicalOr`
+  evaluation through `EvalConfig::from_request` and `RpnExpressionBuilder`.
+- Lazy evaluation is left-to-right, row-selective, and must preserve SQL
+  three-valued logic; short-circuit nesting is capped at 32. If the bit is
+  absent or unknown to the server, the expression is not eligible/profitable,
+  or the cap is exceeded, the existing eager `FnCall` path is used.
+- Skipped arguments produce no warnings or errors. Evaluated arguments still
+  follow SQL mode/evaluation flags; their warnings appear in
+  `SelectResponse`/`StreamResponse`, and their errors fail the request.
 
 ## Start Here
 
@@ -97,6 +107,8 @@ It is a read-heavy hot path and directly impacts query latency.
 - Memory quota and concurrency limiters must remain cheap and correct.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
+- Short-circuit AND/OR evaluation must preserve Kleene logic and keep pending
+  output positions aligned with logical input rows.
 
 ## Observability And Operational Signals
 
@@ -131,6 +143,8 @@ It is a read-heavy hot path and directly impacts query latency.
 - If lock checking or extra snapshot access logic changes, review the change
   with `src/storage` and concurrency-manager semantics in mind, not as a
   coprocessor-only patch.
+- Changes to request flags or DAG expression evaluation must preserve the
+  compatibility fallback and response warning/error semantics described above.
 - If a new request type or major execution mode is added, document its parser,
   handler builder, resource admission path, and observability surface here.
 
@@ -141,7 +155,8 @@ It is a read-heavy hot path and directly impacts query latency.
 - Timeout or concurrency admission changes:
   inspect interceptors, `tracker.rs`, metrics, and read-pool behavior
 - DAG execution changes:
-  inspect `dag/*`, snapshot/store setup, and query-side statistics paths
+  inspect `dag/*`, expression evaluation, snapshot/store setup, and query-side
+  statistics paths
 - Analyze or checksum changes:
   inspect `statistics/*` or `checksum.rs` plus exec-detail accounting
 
@@ -152,6 +167,7 @@ It is a read-heavy hot path and directly impacts query latency.
 - Does it change read-pool wiring or per-request resource control?
 - Does it add extra allocation, parsing, or logging to the hot path?
 - Does it change handler stats collection or slow-log behavior?
+- Does it change request-semantic fallback or response warning/error behavior?
 
 ## Observability And Tests
 
