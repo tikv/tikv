@@ -1784,9 +1784,20 @@ where
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
 
-        // Update leader info
-        self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+        // Test hook: a region update is the point where the raw Raft `leader_id` used
+        // to be published into the resolved-ts cache. While an election is still
+        // pending, `leader_id` is already `INVALID_ID` here even though the cache holds
+        // the old leader, so the tuple `consume_leader_info` compares would be poisoned
+        // without any published leadership change. Read-only: it decides when the test
+        // may inspect the window, it never writes state.
+        fail_point!(
+            "set_region_publishes_raw_leader_id",
+            self.leader_id() == raft::INVALID_ID
+                && self.read_progress.dump_leader_info().0.get_peer_id() != raft::INVALID_ID,
+            |_| {}
+        );
+
+        self.read_progress.update_region(self.region());
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
