@@ -89,12 +89,13 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             src_logical_rows_copy.extend_from_slice(&src_result.logical_rows);
 
             // Selection predicate evaluation cost is dominated by expression evaluation.
-            // Approximate work as rows * (number_of_rpn_nodes + number_of_column_refs),
-            // once per evaluated condition.
+            // Approximate work as rows * (expression work units + number of column refs),
+            // once per evaluated condition. The work count preserves logical operations
+            // represented by flattened short-circuit calls.
             let rows_u64 = src_logical_rows_copy.len() as u64;
-            let rpn_nodes_u64 = self.conditions[condition_index].node_count() as u64;
+            let expression_work_u64 = self.conditions[condition_index].work_count() as u64;
             let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
-            let weighted_nodes_u64 = rpn_nodes_u64.saturating_add(col_refs_u64);
+            let weighted_nodes_u64 = expression_work_u64.saturating_add(col_refs_u64);
             tidb_query_common::metrics::record_executor_work(
                 tidb_query_common::metrics::ExecutorName::batch_selection,
                 rows_u64.saturating_mul(weighted_nodes_u64),

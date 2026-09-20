@@ -63,9 +63,9 @@ It is a read-heavy hot path and directly impacts query latency.
   three-valued logic; short-circuit nesting is capped at 32. If the bit is
   absent or unknown to the server, the expression is not eligible/profitable,
   or the cap is exceeded, the existing eager `FnCall` path is used.
-- Skipped arguments produce no warnings or errors. Evaluated arguments still
-  follow SQL mode/evaluation flags; their warnings appear in
-  `SelectResponse`/`StreamResponse`, and their errors fail the request.
+- A skipped argument's expression function is not invoked, but referenced
+  columns are still decoded and eager fallback may still produce warnings or
+  errors. Existing SQL-mode warning and error behavior is preserved.
 
 ## Start Here
 
@@ -128,6 +128,10 @@ It is a read-heavy hot path and directly impacts query latency.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
+- RU-v2 batch-selection work uses expression work units plus column-reference
+  count. Expression work units expand flattened `AND`/`OR` chains back to their
+  conceptual binary logical operations, so flattening must not reduce
+  `tikv_coprocessor_executor_work_total_batch_selection`.
 - Triage starting points:
   `endpoint.rs`, `tracker.rs`, `readpool_impl.rs`, `metrics.rs`,
   `interceptors/deadline.rs`, `interceptors/concurrency_limiter.rs`.
@@ -143,8 +147,6 @@ It is a read-heavy hot path and directly impacts query latency.
 - If lock checking or extra snapshot access logic changes, review the change
   with `src/storage` and concurrency-manager semantics in mind, not as a
   coprocessor-only patch.
-- Changes to request flags or DAG expression evaluation must preserve the
-  compatibility fallback and response warning/error semantics described above.
 - If a new request type or major execution mode is added, document its parser,
   handler builder, resource admission path, and observability surface here.
 
@@ -167,7 +169,6 @@ It is a read-heavy hot path and directly impacts query latency.
 - Does it change read-pool wiring or per-request resource control?
 - Does it add extra allocation, parsing, or logging to the hot path?
 - Does it change handler stats collection or slow-log behavior?
-- Does it change request-semantic fallback or response warning/error behavior?
 
 ## Observability And Tests
 
