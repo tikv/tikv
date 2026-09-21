@@ -2,9 +2,10 @@
 
 //! Batched unary request collection, result merging, and response finalization.
 
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use ::tracker::{PollTimeTracker, TrackerToken, track};
+use async_stream::stream;
 use futures::{
     channel::oneshot,
     future::{self, Either},
@@ -212,31 +213,87 @@ pub(super) async fn collect_batch_task_outputs_concurrently(
     (output, completed_outputs)
 }
 
-/// Collects the top output before the batch outputs, stopping at the deadline.
+/// Shared execution budget for the top task and children in a serial batch.
 ///
-/// The caller must provide lazily scheduled tasks in a sequential stream to
-/// ensure that at most one read-pool task from this request is active at a
-/// time.
+/// Reserves one share for finalization to help return completed results before
+/// the client times out. Finalization keeps the original request deadline.
+/// Uses whole milliseconds to match `max_execution_duration_ms`. Rounds down
+/// the reserved share so a 1 ms budget stays 1 ms instead of becoming zero,
+/// which would select the configured default timeout.
+pub(super) fn serial_batch_task_budget(request_budget: Duration, task_count: usize) -> Duration {
+    let budget_ms = request_budget.as_millis() as u64;
+    Duration::from_millis(budget_ms - budget_ms / (task_count as u64 + 1))
+}
+
+/// Runs the batch tasks one at a time until `deadline`, yielding one output per
+/// task in order. Each task is `(task_id, output)`, and a task starts when its
+/// output is first polled, as `ReadPoolHandle::spawn` makes it.
+///
+/// The outputs of the tasks that complete in time are kept. The first task that
+/// does not is abandoned, and it and the tasks after it, which never start, are
+/// answered as deadline exceeded, so the client retries exactly those.
+pub(super) fn serial_batch_task_outputs<F>(
+    tasks: Vec<(u64, F)>,
+    deadline: Deadline,
+) -> impl Stream<Item = BatchTaskOutput>
+where
+    F: Future<Output = BatchTaskOutput> + Send,
+{
+    stream! {
+        let mut tasks = tasks.into_iter();
+        for (task_id, output) in &mut tasks {
+            // The timeout polls once before arming its timer, so a task must
+            // find time left before it starts.
+            let remaining = deadline.remaining_duration();
+            let completed = if remaining.is_zero() {
+                None
+            } else {
+                async_timeout(output, remaining).await.ok()
+            };
+            match completed {
+                Some(batch_output) => yield batch_output,
+                None => {
+                    yield deadline_exceeded_output(task_id);
+                    break;
+                }
+            }
+        }
+        for (task_id, _) in tasks {
+            yield deadline_exceeded_output(task_id);
+        }
+    }
+}
+
+/// Collects the top output before the batch outputs within a shared deadline.
+///
+/// The caller must provide lazily scheduled tasks in a sequential stream using
+/// the same deadline, so no child starts after the top task times out.
 pub(super) async fn collect_batch_task_outputs_sequentially(
-    top_output: impl Future<Output = HandlerOutput>,
-    batch_outputs: impl Stream<Item = BatchTaskOutput> + Send,
+    top_output: impl Future<Output = HandlerOutput> + Send,
+    batch_outputs: impl Stream<Item = BatchTaskOutput>,
     deadline: Deadline,
 ) -> (HandlerOutput, Vec<BatchTaskOutput>) {
-    let output = top_output.await;
-    let collected = match deadline.check() {
-        // The timeout polls once before arming its timer, so an already
-        // expired deadline must be caught before the first child is submitted.
-        Err(_) => None,
-        Ok(()) => async_timeout(batch_outputs.collect(), deadline.remaining_duration())
-            .await
-            .ok(),
+    // Admission and queueing do not observe the task's deadline. Bound the
+    // caller's wait too, just as the serial stream does for child tasks.
+    let remaining = deadline.remaining_duration();
+    let completed = if remaining.is_zero() {
+        None
+    } else {
+        async_timeout(top_output, remaining).await.ok()
     };
-    match collected {
-        Some(batch_outputs) => (output, batch_outputs),
-        None => (
-            HandlerOutput::ready(make_error_response(Error::DeadlineExceeded)),
-            Vec::new(),
-        ),
+    let output = completed
+        .unwrap_or_else(|| HandlerOutput::ready(make_error_response(Error::DeadlineExceeded)));
+    (output, batch_outputs.collect().await)
+}
+
+/// The output of a batched task that the batch ran out of time for.
+fn deadline_exceeded_output(task_id: u64) -> BatchTaskOutput {
+    let mut response = coppb::StoreBatchTaskResponse::new();
+    response.set_task_id(task_id);
+    make_error_batch_response(&mut response, Error::DeadlineExceeded);
+    BatchTaskOutput {
+        response: response.into(),
+        mergeable_result: None,
     }
 }
 
@@ -471,6 +528,14 @@ mod tests {
             response: response.into(),
             mergeable_result: None,
         }
+    }
+
+    fn server_is_busy_reason(output: &BatchTaskOutput) -> &str {
+        output
+            .response
+            .get_region_error()
+            .get_server_is_busy()
+            .get_reason()
     }
 
     fn tracked_future<T>(
@@ -950,15 +1015,22 @@ mod tests {
             max_active.clone(),
         );
         let batch_tasks = vec![
-            tracked_future(batch_output(2), active.clone(), max_active.clone()),
-            tracked_future(batch_output(3), active.clone(), max_active.clone()),
+            (
+                2,
+                tracked_future(batch_output(2), active.clone(), max_active.clone()),
+            ),
+            (
+                3,
+                tracked_future(batch_output(3), active.clone(), max_active.clone()),
+            ),
         ];
-        let batch_outputs = stream::iter(batch_tasks).then(|task| task);
+        let deadline = Deadline::from_now(Duration::from_secs(60));
+        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline);
 
         let (_, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
             top,
             batch_outputs,
-            Deadline::from_now(Duration::from_secs(60)),
+            deadline,
         ));
 
         assert_eq!(batch_outputs.len(), 2);
@@ -969,29 +1041,69 @@ mod tests {
     fn test_collect_batch_task_outputs_sequentially_at_deadline() {
         let top = future::ready(HandlerOutput::ready(coppb::Response::default()));
         // The second task never completes, so the deadline passes during it.
-        let batch_outputs = stream::iter([
-            future::ready(batch_output(2)).boxed(),
-            future::pending().boxed(),
-            future::ready(batch_output(4)).boxed(),
-        ])
-        .then(|task| task);
+        let batch_tasks = vec![
+            (2, future::ready(batch_output(2)).boxed()),
+            (3, future::pending().boxed()),
+            (4, future::ready(batch_output(4)).boxed()),
+        ];
+        let deadline = Deadline::from_now(Duration::from_millis(50));
+        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline);
 
         let (output, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
             top,
             batch_outputs,
-            Deadline::from_now(Duration::from_millis(500)),
+            deadline,
         ));
 
-        // The whole batch fails, including the task that completed.
+        // The completed task is kept; the running task and the one never
+        // started are reported for retry.
+        assert!(!unary_response_has_error(&output.response));
+        let task_ids: Vec<_> = batch_outputs
+            .iter()
+            .map(|output| output.response.get_task_id())
+            .collect();
+        assert_eq!(task_ids, vec![2, 3, 4]);
+        assert!(!batch_response_has_error(&batch_outputs[0].response));
         assert_eq!(
-            output
-                .response
-                .get_region_error()
-                .get_server_is_busy()
-                .get_reason(),
+            server_is_busy_reason(&batch_outputs[1]),
             "deadline is exceeded"
         );
-        assert!(batch_outputs.is_empty());
+        assert_eq!(
+            server_is_busy_reason(&batch_outputs[2]),
+            "deadline is exceeded"
+        );
+    }
+
+    #[test]
+    fn test_serial_batch_task_outputs_after_deadline() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let batch_tasks = vec![(
+            2,
+            tracked_future(batch_output(2), active, max_active.clone()),
+        )];
+
+        let batch_outputs: Vec<_> = block_on(
+            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::ZERO)).collect(),
+        );
+
+        // No task starts once the deadline has passed.
+        assert_eq!(max_active.load(Ordering::SeqCst), 0);
+        assert_eq!(batch_outputs.len(), 1);
+        assert_eq!(
+            server_is_busy_reason(&batch_outputs[0]),
+            "deadline is exceeded"
+        );
+    }
+
+    #[test]
+    fn test_serial_batch_task_budget() {
+        let ms = Duration::from_millis;
+        // One of `task_count + 1` shares is held back, in whole milliseconds.
+        assert_eq!(serial_batch_task_budget(ms(60_000), 1), ms(30_000));
+        assert_eq!(serial_batch_task_budget(ms(60_000), 8), ms(53_334));
+        // A short budget is not rounded down to zero, which means no budget.
+        assert_eq!(serial_batch_task_budget(ms(1), 8), ms(1));
     }
 
     #[test]
