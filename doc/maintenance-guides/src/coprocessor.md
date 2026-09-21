@@ -124,9 +124,10 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   three-valued logic; short-circuit nesting is capped at 32. If the bit is
   absent or unknown to the server, the expression is not eligible/profitable,
   or the cap is exceeded, the existing eager `FnCall` path is used.
-- A skipped argument's expression function is not invoked, but referenced
-  columns are still decoded and eager fallback may still produce warnings or
-  errors. Existing SQL-mode warning and error behavior is preserved.
+- In short-circuit mode, skipped argument functions are not invoked, so their
+  warnings/errors are suppressed, although referenced columns may still be
+  eagerly decoded; when unavailable, the existing eager path and SQL-mode
+  warning/error behavior are preserved.
 
 ## Start Here
 
