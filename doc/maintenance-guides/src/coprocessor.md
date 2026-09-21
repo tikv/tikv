@@ -37,12 +37,21 @@ It is a read-heavy hot path and directly impacts query latency.
   `Request::execute_batch_tasks_serially`, the top task and batched tasks are
   polled one at a time so batching does not increase scan concurrency. This
   relies on the `ReadPoolHandle::spawn` contract: on both backends a task is
-  admitted and enqueued only when the returned future is first polled. Because
-  neither admission nor queueing observes the deadline, serial collection is
-  bounded by the top task's deadline: on expiry the stream is dropped, which
-  abandons the in-flight child and never submits the rest, and only a
-  top-level timeout is returned. When the field is unset, batched tasks retain
-  the legacy concurrent polling behavior.
+  admitted and enqueued only when the returned future is first polled. The top
+  task and children share a shorter execution deadline, computed before parsing
+  from `serial_batch_task_budget`, while finalization keeps the original request
+  deadline. Every task's internal deadline matches this shared deadline. Because
+  neither admission nor queueing observes the deadline, the sequential collector
+  bounds the top wait and the serial stream (`serial_batch_task_outputs`) bounds
+  child waits: no task starts without time left, and the first task that runs out
+  of time is abandoned. An abandoned task still waiting for admission is dropped;
+  one already in the pool fails its next deadline check. The tasks that completed
+  are kept, and the abandoned and unstarted ones receive deadline-exceeded
+  responses in their respective top or child response slots so the client retries
+  only those. The finalization reserve remains best effort because running tasks
+  check deadlines cooperatively. When the field is unset or no children are
+  supplied, timeout behavior is unchanged; batched tasks retain the legacy
+  concurrent polling behavior.
   TiDB correlates child responses by task ID, so scheduling does not depend on
   response order.
 - A successful mergeable batched result is folded into an error-free mergeable
@@ -58,9 +67,9 @@ It is a read-heavy hot path and directly impacts query latency.
   stays accounted until the response drops.
 - Data, acknowledgments, response-byte accounting, and memory tracing are
   published only after the final deadline check. Admission failure, deadline
-  expiry, or failure to serialize a top result that already consumed child
-  results returns no partial data or acknowledgments, allowing every task to be
-  retried safely.
+  expiry during finalization, or failure to serialize a top result that
+  already consumed child results returns no partial data or acknowledgments,
+  allowing every task to be retried safely.
 
 The main contracts live in `HandlerOutput` and `MergeableResult` in
 `src/coprocessor/mod.rs`; orchestration is in `src/coprocessor/endpoint.rs`;
@@ -108,7 +117,13 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   finalization.
 - `ReqContextInner::new` is where deadline, bypass/access locks, and derived
   lower/upper bounds are normalized. Reviewers should treat changes there as
-  cross-cutting request-semantic changes.
+  cross-cutting request-semantic changes. One path rewrites the deadline
+  afterwards: a serial batch lowers `max_execution_duration_ms` before parsing,
+  then overwrites the parsed deadline of the top task and every child with the
+  shared serial deadline (`parse_and_handle_unary_request`,
+  `process_batch_tasks`) so they all expire at the same instant. The override
+  happens before a task is scheduled, and handlers are built later from the
+  overridden context.
 - `endpoint.rs::parse_request_and_check_memory_locks` is the main admission and
   normalization contract. Request parsing, memory-lock checks, API-version
   dispatch, and handler construction are deliberately coupled there.
@@ -285,7 +300,8 @@ Companion docs:
 - DAG request:
   built-in coprocessor request for pushed-down query execution
 - ReqContext:
-  immutable runtime request context shared through execution
+  runtime request context shared through execution; immutable once the request
+  is scheduled (a serial batch overrides its deadline before that)
 - Light task threshold:
   the execution-time budget before a coprocessor future must acquire a
   semaphore permit in the Yatp path

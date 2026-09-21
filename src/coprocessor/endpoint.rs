@@ -802,21 +802,27 @@ impl<E: Engine> Endpoint<E> {
         };
         let execute_batch_tasks_serially =
             req.get_execute_batch_tasks_serially() && has_batch_tasks;
-        // Serial collection and result merging bound their waits by the top
-        // task's deadline. The fallback starts before parsing so a failure
-        // cannot reset the timeout.
-        let fallback_deadline = Deadline::from_now(super::max_execution_duration(
-            req.get_context(),
-            self.max_handle_duration,
-        ));
+        // Finalization keeps the original request budget. Start its fallback
+        // before parsing so a failure cannot reset the timeout.
+        let request_budget =
+            super::max_execution_duration(req.get_context(), self.max_handle_duration);
+        let fallback_deadline = Deadline::from_now(request_budget);
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
+        // Top and child tasks share a shorter execution deadline, leaving the
+        // rest of the original budget for returning completed results.
+        let serial_deadline = execute_batch_tasks_serially.then(|| {
+            let budget = serial_batch_task_budget(request_budget, req.get_tasks().len());
+            req.mut_context()
+                .set_max_execution_duration_ms(budget.as_millis() as u64);
+            Deadline::new(fallback_deadline.inner() - (request_budget - budget))
+        });
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
         let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
         // Boxed so only batched requests carry the per-task machinery.
         let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
             has_batch_tasks.then(|| {
-                self.process_batch_tasks(&mut req, &peer, output_mode, execute_batch_tasks_serially)
+                self.process_batch_tasks(&mut req, &peer, output_mode, serial_deadline)
                     .boxed()
             });
         set_tls_tracker_token(tracker);
@@ -829,8 +835,11 @@ impl<E: Engine> Endpoint<E> {
         let mut top_task_id = None;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| {
+            .map(|mut r| {
                 top_task_deadline = Some(r.req_ctx.deadline);
+                if let Some(deadline) = serial_deadline {
+                    Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                }
                 top_task_id = Some(r.req_ctx.build_task_id());
                 top_task_semaphore_group = r.semaphore_group;
                 self.schedule_unary_request(r, output_mode)
@@ -839,7 +848,11 @@ impl<E: Engine> Endpoint<E> {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
-        let batch_deadline = top_task_deadline.unwrap_or(fallback_deadline);
+        let batch_deadline = if serial_deadline.is_some() {
+            fallback_deadline
+        } else {
+            top_task_deadline.unwrap_or(fallback_deadline)
+        };
         let batch_finalizer = batch_finalizer_context.map(|request_context| {
             self.build_batch_merge_finalizer(
                 request_context,
@@ -866,13 +879,9 @@ impl<E: Engine> Endpoint<E> {
                 // Boxed: the collector holds the top future and the stream
                 // twice over in its layout.
                 Some(batch_outputs) => {
-                    let collect = if execute_batch_tasks_serially {
-                        collect_batch_task_outputs_sequentially(
-                            top_output,
-                            batch_outputs,
-                            batch_deadline,
-                        )
-                        .boxed()
+                    let collect = if let Some(deadline) = serial_deadline {
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
+                            .boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -920,15 +929,16 @@ impl<E: Engine> Endpoint<E> {
     }
 
     // All batched coprocessor tasks are prepared up front. Serial execution
-    // streams them lazily so `ReadPoolHandle::spawn` enqueues only one child at
-    // a time; otherwise `FuturesOrdered` preserves the legacy concurrent
-    // scheduling behavior. Output materialization is controlled independently.
+    // runs them one at a time within `serial_deadline`, so
+    // `ReadPoolHandle::spawn` enqueues only one child at a time; otherwise
+    // `FuturesOrdered` preserves the legacy concurrent scheduling behavior.
+    // Output materialization is controlled independently.
     fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
         output_mode: UnaryOutputMode,
-        execute_serially: bool,
+        serial_deadline: Option<Deadline>,
     ) -> impl Stream<Item = BatchTaskOutput> {
         // Without merging, every task serializes its result inside its own
         // read pool task; with it, results stay unserialized for
@@ -959,12 +969,15 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok(r) => {
+                Ok(mut r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     let tracker_guard = DeferContext::new(move || {
                         GLOBAL_TRACKERS.remove(cur_tracker);
                     });
                     set_tls_tracker_token(cur_tracker);
+                    if let Some(deadline) = serial_deadline {
+                        Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                    }
                     let fut = self.schedule_unary_request(r, output_mode);
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
@@ -1029,12 +1042,11 @@ impl<E: Engine> Endpoint<E> {
                 }
             }
         }
-        if execute_serially {
-            Either::Left(stream::iter(batch_futs).then(|(_, task)| task))
-        } else {
-            Either::Right(stream::FuturesOrdered::from_iter(
+        match serial_deadline {
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            None => Either::Right(stream::FuturesOrdered::from_iter(
                 batch_futs.into_iter().map(|(_, fut)| fut),
-            ))
+            )),
         }
     }
 
