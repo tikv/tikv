@@ -213,6 +213,13 @@ pub struct Config {
     /// shared semaphore.
     #[online_config(skip)]
     pub end_point_max_bg_concurrency: Option<usize>,
+    /// Number of schema descriptions each coprocessor read-pool thread keeps
+    /// in its schema cache. Coprocessor requests carry the full schema of the
+    /// table or index they scan; the cache lets requests against an unchanged
+    /// schema reuse the executor metadata derived from it instead of
+    /// rebuilding it per request. `0` disables the cache.
+    #[online_config(skip)]
+    pub end_point_schema_cache_capacity: usize,
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
@@ -347,6 +354,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_max_bg_concurrency: None,
+            end_point_schema_cache_capacity: tidb_query_executors::DEFAULT_SCHEMA_CACHE_CAPACITY,
             end_point_perf_level: PerfLevel::Uninitialized,
             end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),

@@ -107,6 +107,12 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
         })
     }
 
+    /// Returns the scanning implementation. Test-only.
+    #[cfg(test)]
+    pub(crate) fn imp(&self) -> &I {
+        &self.imp
+    }
+
     /// Fills a column vector and returns whether or not all ranges are drained.
     ///
     /// The columns are ensured to be regular even if there are errors during

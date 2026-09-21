@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
@@ -24,7 +29,10 @@ use tidb_query_datatype::{
 use tipb::{ColumnInfo, FieldType, TableScan};
 use txn_types::TimeStamp;
 
-use super::util::scan_executor::*;
+use super::util::{
+    scan_executor::*,
+    schema_cache::{SchemaCache, hash_columns_info},
+};
 use crate::interface::*;
 
 pub struct BatchTableScanExecutor<S: Storage, F: KvFormat>(
@@ -55,7 +63,111 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
     ) -> Result<Self> {
-        let is_column_filled = vec![false; columns_info.len()];
+        let source = TableScanSource {
+            columns_info,
+            primary_column_ids,
+            primary_prefix_column_ids,
+        };
+        let meta = TABLE_SCAN_SCHEMA_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .get_or_derive(source, TableScanMeta::derive)
+        })?;
+
+        let is_key_only = meta.is_key_only;
+        let load_commit_ts = meta.load_commit_ts;
+        let no_common_handle = meta.primary_column_ids.is_empty();
+        let imp = TableScanExecutorImpl {
+            context: EvalContext::new(config),
+            is_column_filled: vec![false; meta.schema.len()],
+            meta,
+        };
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            executor_name: ExecutorName::batch_table_scan,
+            imp,
+            storage,
+            key_ranges,
+            is_backward,
+            is_key_only,
+            accept_point_range: no_common_handle,
+            is_scanned_range_aware,
+            load_commit_ts,
+        })?;
+        Ok(Self(wrapper))
+    }
+
+    /// Returns the schema metadata this executor runs with.
+    #[cfg(test)]
+    pub(crate) fn meta(&self) -> &Arc<TableScanMeta> {
+        &self.0.imp().meta
+    }
+}
+
+thread_local! {
+    /// Schema metadata shared by table scans on this thread. See
+    /// `util::schema_cache`.
+    static TABLE_SCAN_SCHEMA_CACHE: RefCell<SchemaCache<TableScanSource, TableScanMeta>> =
+        RefCell::new(SchemaCache::new());
+}
+
+/// The part of a table scan request that `TableScanMeta` is derived from.
+///
+/// Equal sources derive equal metadata, which is what makes sharing one
+/// `TableScanMeta` between requests through the schema cache sound.
+#[derive(PartialEq)]
+struct TableScanSource {
+    columns_info: Vec<ColumnInfo>,
+    primary_column_ids: Vec<i64>,
+    primary_prefix_column_ids: Vec<i64>,
+}
+
+impl Hash for TableScanSource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_columns_info(&self.columns_info, state);
+        self.primary_column_ids.hash(state);
+        self.primary_prefix_column_ids.hash(state);
+    }
+}
+
+/// Request-independent metadata derived from the schema of a table scan.
+///
+/// Instances are immutable and shared between executors on the same thread
+/// through `TABLE_SCAN_SCHEMA_CACHE`.
+pub struct TableScanMeta {
+    /// The schema of the output. All of the output come from specific columns
+    /// in the underlying storage.
+    schema: Vec<FieldType>,
+
+    /// The default value of corresponding columns in the schema. When column
+    /// data is missing, the default value will be used to fill the output.
+    columns_default_value: Vec<Vec<u8>>,
+
+    /// The output position in the schema giving the column id.
+    column_id_index: HashMap<i64, usize>,
+
+    /// Vec of indices in output row to put the handle. The indices must be
+    /// sorted in the vec.
+    handle_indices: HandleIndicesVec,
+
+    /// Vec of Primary key column's IDs.
+    primary_column_ids: Vec<i64>,
+
+    /// Whether KV values are not needed at all (iff only PK handles are
+    /// requested).
+    is_key_only: bool,
+
+    /// Whether the `_tidb_commit_ts` extra column is requested.
+    load_commit_ts: bool,
+}
+
+impl TableScanMeta {
+    fn derive(source: &TableScanSource) -> Result<Self> {
+        let TableScanSource {
+            columns_info,
+            primary_column_ids,
+            primary_prefix_column_ids,
+        } = source;
+
         let mut is_key_only = true;
         let mut handle_indices = HandleIndicesVec::new();
         let mut schema = Vec::with_capacity(columns_info.len());
@@ -65,13 +177,13 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
         let primary_prefix_column_ids_set =
             primary_prefix_column_ids.iter().collect::<HashSet<_>>();
-        for (index, mut ci) in columns_info.into_iter().enumerate() {
+        for (index, ci) in columns_info.iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
-            schema.push(field_type_from_column_info(&ci));
+            schema.push(field_type_from_column_info(ci));
 
             // - Prepare column default value (will be used to fill missing column later).
-            columns_default_value.push(ci.take_default_val());
+            columns_default_value.push(ci.get_default_val().to_vec());
 
             // - Store the index of the PK handles.
             // - Check whether or not we don't need KV values (iff PK handle is given).
@@ -93,28 +205,15 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         }
 
         let load_commit_ts = column_id_index.contains_key(&EXTRA_COMMIT_TS_COL_ID);
-        let no_common_handle = primary_column_ids.is_empty();
-        let imp = TableScanExecutorImpl {
-            context: EvalContext::new(config),
+        Ok(Self {
             schema,
             columns_default_value,
             column_id_index,
             handle_indices,
-            primary_column_ids,
-            is_column_filled,
-        };
-        let wrapper = ScanExecutor::new(ScanExecutorOptions {
-            executor_name: ExecutorName::batch_table_scan,
-            imp,
-            storage,
-            key_ranges,
-            is_backward,
+            primary_column_ids: primary_column_ids.clone(),
             is_key_only,
-            accept_point_range: no_common_handle,
-            is_scanned_range_aware,
             load_commit_ts,
-        })?;
-        Ok(Self(wrapper))
+        })
     }
 }
 
@@ -182,23 +281,9 @@ struct TableScanExecutorImpl {
     // TODO: Rename EvalContext to ExecContext.
     context: EvalContext,
 
-    /// The schema of the output. All of the output come from specific columns
-    /// in the underlying storage.
-    schema: Vec<FieldType>,
-
-    /// The default value of corresponding columns in the schema. When column
-    /// data is missing, the default value will be used to fill the output.
-    columns_default_value: Vec<Vec<u8>>,
-
-    /// The output position in the schema giving the column id.
-    column_id_index: HashMap<i64, usize>,
-
-    /// Vec of indices in output row to put the handle. The indices must be
-    /// sorted in the vec.
-    handle_indices: HandleIndicesVec,
-
-    /// Vec of Primary key column's IDs.
-    primary_column_ids: Vec<i64>,
+    /// Schema-derived metadata, shared with other executors scanning the
+    /// same schema.
+    meta: Arc<TableScanMeta>,
 
     /// A vector of flags indicating whether corresponding column is filled in
     /// `next_batch`. It is a struct level field in order to prevent repeated
@@ -232,7 +317,7 @@ impl TableScanExecutorImpl {
             let (val, new_remaining) = datum::split_datum(remaining, false)?;
             // Note: The produced columns may be not in the same length if there is error
             // due to corrupted data. It will be handled in `ScanExecutor`.
-            let some_index = self.column_id_index.get(&column_id);
+            let some_index = self.meta.column_id_index.get(&column_id);
             if let Some(index) = some_index {
                 let index = *index;
                 if !self.is_column_filled[index] {
@@ -268,14 +353,14 @@ impl TableScanExecutorImpl {
         };
 
         let row = RowSlice::from_bytes(value)?;
-        for (col_id, idx) in &self.column_id_index {
+        for (col_id, idx) in &self.meta.column_id_index {
             if self.is_column_filled[*idx] {
                 continue;
             }
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
                 let mut buffer_to_write = columns[*idx].mut_raw().begin_concat_extend();
                 buffer_to_write
-                    .write_v2_as_datum(&row.values()[start..offset], &self.schema[*idx])?;
+                    .write_v2_as_datum(&row.values()[start..offset], &self.meta.schema[*idx])?;
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
             } else if row.search_in_null_ids(*col_id) {
@@ -294,7 +379,7 @@ impl TableScanExecutorImpl {
 impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
-        &self.schema
+        &self.meta.schema
     }
 
     #[inline]
@@ -305,7 +390,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     /// Constructs empty columns, with PK in decoded format and the rest in raw
     /// format.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
-        let columns_len = self.schema.len();
+        let columns_len = self.meta.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
         // If there are any PK columns, for each of them, fill non-PK columns before it
@@ -318,15 +403,17 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // 2nd turn: [non-pk, non-pk, pk]
         // 3rd turn: [pk]
         let physical_table_id_column_idx = self
+            .meta
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
             .copied();
         let commit_ts_column_idx = self
+            .meta
             .column_id_index
             .get(&table::EXTRA_COMMIT_TS_COL_ID)
             .copied();
         let mut last_index = 0usize;
-        for handle_index in &self.handle_indices {
+        for handle_index in &self.meta.handle_indices {
             // `handle_indices` is expected to be sorted.
             assert!(*handle_index >= last_index);
 
@@ -381,7 +468,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
 
-        let columns_len = self.schema.len();
+        let columns_len = self.meta.schema.len();
         let mut decoded_columns = 0;
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -393,11 +480,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             }
         }
 
-        if !self.handle_indices.is_empty() {
+        if !self.meta.handle_indices.is_empty() {
             // In this case, An int handle is expected.
             let handle = table::decode_int_handle(key)?;
 
-            for handle_index in &self.handle_indices {
+            for handle_index in &self.meta.handle_indices {
                 // TODO: We should avoid calling `push_int` repeatedly. Instead we should
                 // specialize a `&mut Vec` first. However it is hard to program
                 // due to lifetime restriction.
@@ -407,12 +494,12 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                     self.is_column_filled[*handle_index] = true;
                 }
             }
-        } else if !self.primary_column_ids.is_empty() {
+        } else if !self.meta.primary_column_ids.is_empty() {
             // Otherwise, if `primary_column_ids` is not empty, we try to extract the values
             // of the columns from the common handle.
             let mut handle = table::decode_common_handle(key)?;
-            for primary_id in self.primary_column_ids.iter() {
-                let index = self.column_id_index.get(primary_id);
+            for primary_id in self.meta.primary_column_ids.iter() {
+                let index = self.meta.column_id_index.get(primary_id);
                 let (datum, remain) = datum::split_datum(handle, false)?;
                 handle = remain;
 
@@ -431,6 +518,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         }
 
         if let Some(idx) = self
+            .meta
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
         {
@@ -438,7 +526,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             columns[*idx].mut_decoded().push_int(Some(table_id));
             self.is_column_filled[*idx] = true;
         }
-        if let Some(idx) = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID) {
+        if let Some(idx) = self
+            .meta
+            .column_id_index
+            .get(&table::EXTRA_COMMIT_TS_COL_ID)
+        {
             if let Some(ts) = commit_ts {
                 columns[*idx]
                     .mut_decoded()
@@ -458,10 +550,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
-                let default_value = if !self.columns_default_value[i].is_empty() {
+                let default_value = if !self.meta.columns_default_value[i].is_empty() {
                     // default value is provided, use the default value
-                    self.columns_default_value[i].as_slice()
-                } else if !self.schema[i]
+                    self.meta.columns_default_value[i].as_slice()
+                } else if !self.meta.schema[i]
                     .as_accessor()
                     .flag()
                     .contains(tidb_query_datatype::FieldTypeFlag::NOT_NULL)
@@ -784,6 +876,60 @@ mod tests {
             helper.expect_table_values(col_idxs, start_row, expect_rows, result.physical_columns);
             start_row += expect_rows;
         }
+    }
+
+    #[test]
+    fn test_schema_meta_is_shared_between_executors() {
+        use crate::util::schema_cache::schema_cache_capacity;
+
+        let helper = TableScanTestHelper::new();
+        let build = |columns_info: Vec<ColumnInfo>| {
+            BatchTableScanExecutor::<_, ApiV1>::new(
+                helper.store(),
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                vec![helper.whole_table_range()],
+                vec![],
+                false,
+                false,
+                vec![],
+            )
+            .unwrap()
+        };
+
+        // Two executors built from equal column infos share one derived
+        // schema; a request that differs in any schema-relevant field (here
+        // the default value of `Bar`) gets its own.
+        let a = build(helper.columns_info.clone());
+        let b = build(helper.columns_info.clone());
+        let mut other_columns = helper.columns_info.clone();
+        other_columns[2].set_default_val(
+            datum::encode_value(&mut EvalContext::default(), &[Datum::F64(9.5)]).unwrap(),
+        );
+        let mut c = build(other_columns);
+
+        if schema_cache_capacity() > 0 {
+            assert!(Arc::ptr_eq(a.meta(), b.meta()));
+        }
+        assert!(!Arc::ptr_eq(a.meta(), c.meta()));
+
+        // The executor with the different default must not be served the
+        // cached metadata of the first one: row 4 has `Bar` missing.
+        let mut result = block_on(c.next_batch(10));
+        assert_eq!(result.physical_columns.rows_len(), 5);
+        result.physical_columns[2]
+            .ensure_all_decoded_for_test(&mut EvalContext::default(), &helper.field_types[2])
+            .unwrap();
+        assert_eq!(
+            result.physical_columns[2].decoded().to_real_vec(),
+            &[
+                Real::new(5.2).ok(),
+                None,
+                Real::new(9.5).ok(),
+                Real::new(0.1).ok(),
+                Real::new(9.5).ok()
+            ]
+        );
     }
 
     #[test]
