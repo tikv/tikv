@@ -39,8 +39,8 @@ It is a read-heavy hot path and directly impacts query latency.
   relies on the `ReadPoolHandle::spawn` contract: on both backends a task is
   admitted and enqueued only when the returned future is first polled. The top
   task and children share a shorter execution deadline, computed before parsing
-  from `serial_batch_task_budget`, while finalization keeps the original request
-  deadline. Every task's internal deadline matches this shared deadline. Because
+  from `serial_batch_task_budget`, leaving a best-effort margin for finalization.
+  Every task's internal deadline matches this shared deadline. Because
   neither admission nor queueing observes the deadline, the sequential collector
   bounds the top wait and the serial stream (`serial_batch_task_outputs`) bounds
   child waits: no task starts without time left, and the first task that runs out
@@ -49,9 +49,9 @@ It is a read-heavy hot path and directly impacts query latency.
   are kept, and the abandoned and unstarted ones receive deadline-exceeded
   responses in their respective top or child response slots so the client retries
   only those. The finalization reserve remains best effort because running tasks
-  check deadlines cooperatively. When the field is unset or no children are
-  supplied, timeout behavior is unchanged; batched tasks retain the legacy
-  concurrent polling behavior.
+  check deadlines cooperatively and finalization has no deadline. When the field
+  is unset, batched tasks retain the legacy concurrent polling behavior. Requests
+  without children keep their original execution timeout.
   TiDB correlates child responses by task ID, so scheduling does not depend on
   response order.
 - A successful mergeable batched result is folded into an error-free mergeable
@@ -59,17 +59,34 @@ It is a read-heavy hot path and directly impacts query latency.
   `data_merged_into_response`, and keeps its execution details. Failed or
   non-mergeable tasks keep normal per-task responses.
 - Final merging and serialization run in the read pool under the request's
-  deadline, resource-control settings, selected semaphore group, and tracker.
+  selected semaphore group and tracker, but without an execution deadline or
+  resource-group admission. Completed work is not discarded merely because the
+  execution budget expires while waiting for the pool, acquiring a permit,
+  merging, or serializing. Every result was already admitted and charged when
+  produced; the merge's own CPU is not charged to the group's limiter.
+  For the same reason finalization is queued as delivery of completed work,
+  ahead of new scans: at high command priority, which pins the top yatp level,
+  and with the highest resource-group override priority, which places it in
+  the top scheduling tier so a throttled group's completed results are not
+  starved behind other groups' scans in the priority queue. The request's
+  group name is kept, so the merge's CPU still advances that group's virtual
+  time and its later tasks are scheduled correspondingly later. Pool-full
+  rejection remains possible and returns no partial data.
+  This applies to both serial and concurrent batches with merging enabled.
+  Pool and semaphore waits have no time limit, so they may retain buffered
+  results after the client times out. Dropping the caller cancels a merge still
+  queued in the pool. Once the pool task takes the results, dropping the caller
+  does not interrupt permit acquisition or finalization.
   Outputs are buffered until finalization, so they contribute to peak request
   memory; each buffered output rides in its memory-trace guard, and attachment
   rebuilds the combined response's guard (adopting a batch response's node when
   the top response is untracked, e.g. a top task error) so the retained data
   stays accounted until the response drops.
-- Data, acknowledgments, response-byte accounting, and memory tracing are
-  published only after the final deadline check. Admission failure, deadline
-  expiry during finalization, or failure to serialize a top result that
-  already consumed child results returns no partial data or acknowledgments,
-  allowing every task to be retried safely.
+- Data and acknowledgments are published together after materialization;
+  response bytes are accounted only when the caller accepts the response.
+  Pool rejection or failure to serialize a top result that already consumed
+  child results returns no partial data or acknowledgments, allowing every task
+  to be retried safely.
 
 The main contracts live in `HandlerOutput` and `MergeableResult` in
 `src/coprocessor/mod.rs`; orchestration is in `src/coprocessor/endpoint.rs`;
@@ -186,7 +203,11 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 - Batched unary result merging must preserve task identity, retry semantics,
-  deadline enforcement, response-byte accounting, and memory tracing.
+  response-byte accounting, and memory tracing. Execution deadlines stop scans
+  and serial collection, not finalization of completed results. Finalization
+  is delivery of admitted work, not new work: it neither waits for
+  resource-group admission nor queues below other groups' new scans, and its
+  CPU stays charged to the request's group.
 - Serial batch execution must keep at most one task from the request active
   without changing result-merging or response-order semantics.
 
