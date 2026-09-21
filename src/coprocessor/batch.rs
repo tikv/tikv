@@ -966,6 +966,35 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_batch_task_outputs_sequentially_at_deadline() {
+        let top = future::ready(HandlerOutput::ready(coppb::Response::default()));
+        // The second task never completes, so the deadline passes during it.
+        let batch_outputs = stream::iter([
+            future::ready(batch_output(2)).boxed(),
+            future::pending().boxed(),
+            future::ready(batch_output(4)).boxed(),
+        ])
+        .then(|task| task);
+
+        let (output, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
+            top,
+            batch_outputs,
+            Deadline::from_now(Duration::from_millis(500)),
+        ));
+
+        // The whole batch fails, including the task that completed.
+        assert_eq!(
+            output
+                .response
+                .get_region_error()
+                .get_server_is_busy()
+                .get_reason(),
+            "deadline is exceeded"
+        );
+        assert!(batch_outputs.is_empty());
+    }
+
+    #[test]
     fn test_merge_batch_task_responses_merge() {
         // Successful mergeable results are merged into the top result and
         // acknowledged data-less while keeping their own execution details.
