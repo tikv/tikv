@@ -805,8 +805,10 @@ impl<E: Engine> Endpoint<E> {
         // Serial collection and result merging bound their waits by the top
         // task's deadline. The fallback starts before parsing so a failure
         // cannot reset the timeout.
-        let fallback_deadline =
-            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
+        let fallback_deadline = Deadline::from_now(super::max_execution_duration(
+            req.get_context(),
+            self.max_handle_duration,
+        ));
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
@@ -1013,21 +1015,26 @@ impl<E: Engine> Endpoint<E> {
                         }
                     };
 
-                    batch_futs.push(future::Either::Left(fut));
+                    batch_futs.push((task_id, future::Either::Left(fut)));
                 }
-                Err(e) => batch_futs.push(future::Either::Right(async move {
-                    make_error_batch_response(&mut response, e);
-                    BatchTaskOutput {
-                        response: response.into(),
-                        mergeable_result: None,
-                    }
-                })),
+                Err(e) => {
+                    let fut = async move {
+                        make_error_batch_response(&mut response, e);
+                        BatchTaskOutput {
+                            response: response.into(),
+                            mergeable_result: None,
+                        }
+                    };
+                    batch_futs.push((task_id, future::Either::Right(fut)));
+                }
             }
         }
         if execute_serially {
-            Either::Left(stream::iter(batch_futs).then(|task| task))
+            Either::Left(stream::iter(batch_futs).then(|(_, task)| task))
         } else {
-            Either::Right(stream::FuturesOrdered::from_iter(batch_futs))
+            Either::Right(stream::FuturesOrdered::from_iter(
+                batch_futs.into_iter().map(|(_, fut)| fut),
+            ))
         }
     }
 
