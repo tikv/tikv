@@ -639,6 +639,9 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+[gc.auto-compaction]
+redundant-bytes-threshold = "129MB"
+
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"

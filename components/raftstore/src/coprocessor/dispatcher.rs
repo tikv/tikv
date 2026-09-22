@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
+use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Some, sync::Arc};
 
 use engine_traits::{CfName, KvEngine};
 use kvproto::{
@@ -14,7 +14,10 @@ use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
 
-use super::{split_observer::SplitObserver, *};
+use super::{
+    split_observer::{NoValidSplitKeyNotifier, NoValidSplitKeyNotifierRegistry, SplitObserver},
+    *,
+};
 use crate::store::BucketRange;
 
 /// A handle for coprocessor to schedule some command back to raftstore.
@@ -318,6 +321,7 @@ where
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     message_observers: Vec<Entry<BoxMessageObserver>>,
+    no_valid_split_key_notifier: NoValidSplitKeyNotifierRegistry,
     // TODO: add endpoint
 }
 
@@ -336,6 +340,7 @@ impl<E: KvEngine> Default for Registry<E> {
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
             message_observers: Default::default(),
+            no_valid_split_key_notifier: Default::default(),
         }
     }
 }
@@ -490,12 +495,20 @@ impl<E: KvEngine> CoprocessorHost<E> {
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
-        registry.register_split_check_observer(
-            400,
-            BoxSplitCheckObserver::new(TableCheckObserver::default()),
+        registry.register_split_check_observer(400, BoxSplitCheckObserver::new(TableCheckObserver));
+        registry.register_admin_observer(
+            100,
+            BoxAdminObserver::new(SplitObserver::new(
+                registry.no_valid_split_key_notifier.clone(),
+            )),
         );
-        registry.register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
         CoprocessorHost { registry, cfg }
+    }
+
+    /// Installs a best-effort notifier for split requests that have no valid
+    /// split key. All clones of this host share the installed notifier.
+    pub fn set_no_valid_split_key_notifier(&self, notifier: Arc<dyn NoValidSplitKeyNotifier>) {
+        self.registry.no_valid_split_key_notifier.set(notifier);
     }
 
     pub fn on_empty_cmd(&self, region: &Region, index: u64, term: u64) {

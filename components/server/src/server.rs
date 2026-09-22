@@ -1035,9 +1035,11 @@ where
         }
 
         // Start auto compaction
-        if let Err(e) = gc_worker
-            .start_auto_compaction(self.pd_client.clone(), self.region_info_accessor.clone())
-        {
+        if let Err(e) = gc_worker.start_auto_compaction(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone(),
+            self.coprocessor_host.clone().unwrap(),
+        ) {
             fatal!("failed to start auto_compaction on storage, error: {}", e);
         }
 
