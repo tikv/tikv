@@ -25,11 +25,11 @@ use tikv_util::{
     time::Instant,
 };
 
-/// CPU utilization a node is assumed to reach once foreground pressure is
-/// engaged. `resource_group.rs` measures the overshoot from
-/// `fg_cpu_throttle_threshold` up to this when sizing the noisy group set,
-/// and tests pass it as a `cpu_score` guaranteed to engage regardless of the
-/// configured threshold.
+/// A `cpu_score` well above any sane `fg_cpu_throttle_threshold`, so a test
+/// can engage foreground pressure without restating the threshold. Nothing
+/// outside tests assumes a peak: the live path sizes its response from the
+/// score it actually measured.
+#[cfg(test)]
 pub(crate) const PEAK_CPU_PCT: f64 = 90.0;
 
 /// Shortest interval [`ThreadGroupCpuTracker::measure_cpu_cores`] will measure
