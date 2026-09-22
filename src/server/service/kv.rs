@@ -1648,7 +1648,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1782,7 +1781,6 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -1837,9 +1835,6 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                             tracker.write_scan_detail(scan_detail_v2);
                         });
                     }
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
-                    });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
                 }
@@ -2401,7 +2396,6 @@ macro_rules! txn_command_future {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
                 tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
-                tracker.write_ru_v2($resp.mut_exec_details_v2().mut_ru_v2());
             });
         });
     };
@@ -2413,7 +2407,6 @@ macro_rules! txn_command_future {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
                 tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
-                tracker.write_ru_v2($resp.mut_exec_details_v2().mut_ru_v2());
             });
         });
     };
@@ -2811,73 +2804,6 @@ mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
-
-    #[test]
-    fn test_kv_get_sets_ru_v2_processed_keys() {
-        let storage = crate::storage::TestStorageBuilderApiV1::new(
-            crate::storage::lock_manager::MockLockManager::new(),
-        )
-        .build()
-        .unwrap();
-        let mut req = GetRequest::default();
-        req.set_context(Context::default());
-        req.set_key(b"ruv2_get".to_vec());
-        req.set_version(10);
-        let resp = block_on(future_get(&storage, req)).unwrap();
-        assert_eq!(
-            resp.get_exec_details_v2()
-                .get_ru_v2()
-                .get_storage_processed_keys_get(),
-            1
-        );
-    }
-
-    #[test]
-    fn test_kv_batch_get_sets_ru_v2_processed_keys() {
-        let storage = crate::storage::TestStorageBuilderApiV1::new(
-            crate::storage::lock_manager::MockLockManager::new(),
-        )
-        .build()
-        .unwrap();
-        let mut req = BatchGetRequest::default();
-        req.set_context(Context::default());
-        req.set_version(10);
-        req.mut_keys().push(b"ruv2_batch_get_1".to_vec());
-        req.mut_keys().push(b"ruv2_batch_get_2".to_vec());
-        let resp = block_on(future_batch_get(&storage, req)).unwrap();
-        assert_eq!(
-            resp.get_exec_details_v2()
-                .get_ru_v2()
-                .get_storage_processed_keys_batch_get(),
-            2
-        );
-    }
-
-    #[test]
-    fn test_prewrite_sets_ru_v2_write_bytes() {
-        let storage = crate::storage::TestStorageBuilderApiV1::new(
-            crate::storage::lock_manager::MockLockManager::new(),
-        )
-        .build()
-        .unwrap();
-        let mut req = PrewriteRequest::default();
-        req.set_context(Context::default());
-        req.set_start_version(10);
-        req.set_primary_lock(b"ruv2_prewrite".to_vec());
-        req.set_lock_ttl(3000);
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(b"ruv2_prewrite".to_vec());
-        mutation.set_value(b"v".to_vec());
-        req.mut_mutations().push(mutation);
-        let resp = block_on(future_prewrite(&storage, req)).unwrap();
-        assert!(
-            resp.get_exec_details_v2()
-                .get_ru_v2()
-                .get_raftstore_store_write_trigger_wb_bytes()
-                > 0
-        );
-    }
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {

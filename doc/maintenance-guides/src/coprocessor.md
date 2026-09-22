@@ -219,10 +219,6 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
-- RU-v2 batch-selection work uses expression work units plus column-reference
-  count. Expression work units expand flattened `AND`/`OR` chains back to their
-  conceptual binary logical operations, so flattening must not reduce
-  `tikv_coprocessor_executor_work_total_batch_selection`.
 - Triage starting points:
   `endpoint.rs`, `tracker.rs`, `readpool_impl.rs`, `metrics.rs`,
   `interceptors/deadline.rs`, `interceptors/concurrency_limiter.rs`.

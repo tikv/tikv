@@ -1087,7 +1087,10 @@ impl<E: Engine> Endpoint<E> {
 
                 match result {
                     Err(e) => {
-                        let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
+                        let (exec_details, mut exec_details_v2) = tracker.get_item_exec_details();
+                        exec_details_v2
+                            .mut_ru_v2()
+                            .set_coprocessor_response_bytes(0);
                         record_logical_read_bytes(
                             exec_details_v2
                                 .get_scan_detail_v2()
@@ -1110,7 +1113,12 @@ impl<E: Engine> Endpoint<E> {
                                 .coprocessor_response_bytes
                                 .saturating_add(resp_size);
                         });
-                        let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
+                        let (exec_details, mut exec_details_v2) = tracker.get_item_exec_details();
+                        // The tracker keeps the request total, while each streaming response
+                        // must carry only its own bytes so clients can sum responses once.
+                        exec_details_v2
+                            .mut_ru_v2()
+                            .set_coprocessor_response_bytes(resp_size);
                         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
@@ -2580,6 +2588,18 @@ mod tests {
         }
         responses.push(Err(box_err!("foo")));
 
+        let prev_tracker = ::tracker::get_tls_tracker_token();
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id: 0,
+            resource_group_tag: vec![],
+            begin: std::time::Instant::now(),
+            request_type: RequestType::CoprocessorDag,
+            cid: 0,
+            is_external_req: false,
+        }));
+        set_tls_tracker_token(tracker);
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = block_on_stream(
             copr.handle_stream_request(ParseCopRequestResult::default_for_test(handler_builder))
@@ -2587,12 +2607,28 @@ mod tests {
         )
         .collect::<Result<Vec<_>>>()
         .unwrap();
+        set_tls_tracker_token(prev_tracker);
+        let tracker = GLOBAL_TRACKERS.remove(tracker).unwrap();
+        assert_eq!(tracker.metrics.coprocessor_response_bytes, 15);
         assert_eq!(resp_vec.len(), 6);
         for (i, resp) in resp_vec.iter().enumerate().take(5) {
             assert_eq!(resp.get_data(), [1, 2, i as u8]);
+            assert_eq!(
+                resp.get_exec_details_v2()
+                    .get_ru_v2()
+                    .get_coprocessor_response_bytes(),
+                3
+            );
         }
         assert_eq!(resp_vec[5].get_data().len(), 0);
         assert!(!resp_vec[5].get_other_error().is_empty());
+        assert_eq!(
+            resp_vec[5]
+                .get_exec_details_v2()
+                .get_ru_v2()
+                .get_coprocessor_response_bytes(),
+            0
+        );
     }
 
     #[test]
