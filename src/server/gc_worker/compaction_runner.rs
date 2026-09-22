@@ -5,21 +5,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,
-    sync::{Arc, Condvar, Mutex, mpsc},
+    sync::{mpsc, Arc, Condvar, Mutex},
     thread::{Builder as ThreadBuilder, JoinHandle},
     time::{Duration, Instant},
     vec::Vec,
 };
 
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, MvccProperties, Range,
-    TableProperties, TablePropertiesCollection, UserCollectedProperties,
+    KvEngine, ManualCompactionOptions, MvccProperties, Range, TableProperties,
+    TablePropertiesCollection, UserCollectedProperties, CF_DEFAULT, CF_WRITE,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::coprocessor::{RegionInfoProvider, split_observer::NoValidSplitKeyNotifier};
+use raftstore::coprocessor::{split_observer::NoValidSplitKeyNotifier, RegionInfoProvider};
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, warn};
 use txn_types::TimeStamp;
 

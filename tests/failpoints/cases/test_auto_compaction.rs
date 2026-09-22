@@ -2,14 +2,14 @@
 
 use std::{
     sync::{
-        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard,
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{CF_DEFAULT, CF_WRITE, MiscExt};
+use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::*;
 use raftstore::store::Callback;
 use test_raftstore::*;
