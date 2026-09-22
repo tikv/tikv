@@ -19,16 +19,8 @@ use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 use prometheus::*;
 use prometheus_static_metric::*;
-<<<<<<< HEAD
-use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, warn};
-=======
 use raftstore::coprocessor::{RegionInfoProvider, split_observer::NoValidSplitKeyNotifier};
-use tikv_util::{
-    box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::COMPACTION_RUNNER_THREAD, warn,
-};
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
+use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, warn};
 use txn_types::TimeStamp;
 
 use super::{

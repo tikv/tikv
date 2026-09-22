@@ -1,11 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-<<<<<<< HEAD
-use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
-=======
 use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Some, sync::Arc};
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
 
 use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
