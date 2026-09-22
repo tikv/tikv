@@ -1,11 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-<<<<<<< HEAD
-use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
-=======
 use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Some, sync::Arc};
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
 
 use engine_traits::{CfName, KvEngine};
 use kvproto::{
@@ -324,20 +320,8 @@ where
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
-<<<<<<< HEAD
     message_observers: Vec<Entry<BoxMessageObserver>>,
-=======
-    raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
-    region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
-    destroy_peer_observers: Vec<Entry<BoxDestroyPeerObserver>>,
-    transfer_leader_observers: Vec<Entry<BoxTransferLeaderObserver>>,
     no_valid_split_key_notifier: NoValidSplitKeyNotifierRegistry,
-    // For now, `write_batch_observer` and `snapshot_observer` can only have one
-    // observer solely because of simplicity. However, it is possible to have
-    // multiple observers in the future if needed.
-    write_batch_observer: Option<BoxWriteBatchObserver>,
-    snapshot_observer: Option<BoxSnapshotObserver>,
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
     // TODO: add endpoint
 }
 
@@ -355,17 +339,8 @@ impl<E: KvEngine> Default for Registry<E> {
             read_index_observers: Default::default(),
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
-<<<<<<< HEAD
             message_observers: Default::default(),
-=======
-            raft_message_observers: Default::default(),
-            region_heartbeat_observers: Default::default(),
-            destroy_peer_observers: Default::default(),
-            transfer_leader_observers: Default::default(),
             no_valid_split_key_notifier: Default::default(),
-            write_batch_observer: None,
-            snapshot_observer: None,
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
         }
     }
 }
@@ -520,13 +495,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
-<<<<<<< HEAD
-        registry.register_split_check_observer(
-            400,
-            BoxSplitCheckObserver::new(TableCheckObserver::default()),
-        );
-        registry.register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
-=======
         registry.register_split_check_observer(400, BoxSplitCheckObserver::new(TableCheckObserver));
         registry.register_admin_observer(
             100,
@@ -534,7 +502,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 registry.no_valid_split_key_notifier.clone(),
             )),
         );
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
         CoprocessorHost { registry, cfg }
     }
 

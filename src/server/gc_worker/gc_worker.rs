@@ -25,7 +25,7 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -1265,6 +1265,7 @@ impl<E: Engine> GcWorker<E> {
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             compaction_runner_handle: Arc::new(Mutex::new(None)),
+            compaction_control: Arc::new(CompactionControl::default()),
             feature_gate,
             region_info_provider,
         }
@@ -1313,9 +1314,16 @@ impl<E: Engine> GcWorker<E> {
         &self,
         safe_point_provider: S,
         region_info_provider: R,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Result<()> {
         let mut handle = self.compaction_runner_handle.lock().unwrap();
         assert!(handle.is_none(), "compaction runner already started");
+
+        // Cloned coprocessor hosts share this notifier registry. The split
+        // observer only sets a coalesced wake-up bit; it never submits a
+        // compaction task to the GC or raftstore cleanup workers.
+        CompactionControl::initialize_metrics();
+        coprocessor_host.set_no_valid_split_key_notifier(self.compaction_control.clone());
 
         let kv_engine = match self.engine.kv_engine() {
             Some(engine) => engine,
@@ -1325,15 +1333,7 @@ impl<E: Engine> GcWorker<E> {
             }
         };
 
-<<<<<<< HEAD
-        let compaction_runner = CompactionRunner::new(
-=======
-        // Initialize the global MVCC read tracker with config manager
-        use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
-        init_mvcc_read_tracker(self.config_manager.clone());
-
         let compaction_runner = CompactionRunner::new_with_control(
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
             safe_point_provider,
             region_info_provider,
             kv_engine,
@@ -1350,57 +1350,7 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-<<<<<<< HEAD
     pub fn start(&mut self, store_id: u64) -> Result<()> {
-=======
-    pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
-        self.worker_scheduler.clone()
-    }
-}
-
-impl<E: Engine> GcWorker<E> {
-    pub fn new(
-        engine: E,
-        flow_info_sender: Sender<FlowInfo>,
-        cfg: GcConfig,
-        feature_gate: FeatureGate,
-        region_info_provider: Arc<dyn RegionInfoProvider>,
-    ) -> Self {
-        let worker_builder = WorkerBuilder::new(GC_WORKER_THREAD)
-            .pending_capacity(GC_MAX_PENDING_TASKS)
-            .thread_count(cfg.num_threads);
-        let worker = worker_builder.create().lazy_build(GC_WORKER_THREAD);
-        let worker_scheduler = worker.scheduler();
-        GcWorker {
-            engine,
-            flow_info_sender: Some(flow_info_sender),
-            config_manager: GcWorkerConfigManager(
-                Arc::new(VersionTrack::new(cfg)),
-                Some(worker.pool()),
-            ),
-            refs: Arc::new(AtomicUsize::new(1)),
-            worker: Arc::new(Mutex::new(worker)),
-            worker_scheduler,
-            gc_manager_handle: Arc::new(Mutex::new(None)),
-            compaction_runner_handle: Arc::new(Mutex::new(None)),
-            compaction_control: Arc::new(CompactionControl::default()),
-            feature_gate,
-            region_info_provider,
-        }
-    }
-
-    pub fn start(
-        &mut self,
-        store_id: u64,
-        coprocessor_host: CoprocessorHost<E::Local>,
-    ) -> Result<()> {
-        // Cloned coprocessor hosts share this notifier registry. The split
-        // observer only sets a coalesced wake-up bit; it never submits a
-        // compaction task to the GC or raftstore cleanup workers.
-        CompactionControl::initialize_metrics();
-        coprocessor_host.set_no_valid_split_key_notifier(self.compaction_control.clone());
-
->>>>>>> 51b411a728 (gc_worker, raftstore: prioritize large unsplittable Regions for auto-compaction (#20051))
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,

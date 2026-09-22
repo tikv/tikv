@@ -487,9 +487,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                 match write_type {
                     WriteType::Put => {
                         self.props.num_puts += 1;
-                        if Write::has_short_value(value)
-                            .is_ok_and(|has_short_value| !has_short_value)
-                        {
+                        if matches!(Write::has_short_value(value), Ok(false)) {
                             self.props.num_default_puts += 1;
                             if self.row_versions > 1 {
                                 self.props.num_stale_default_puts += 1;
