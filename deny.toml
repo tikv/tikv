@@ -147,6 +147,8 @@ exceptions = [
 ]
 
 [sources]
+# The PoC pins the shared Analyze protocol in this fork.
+allow-git = ["https://github.com/0xPoe/tipb.git"]
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }

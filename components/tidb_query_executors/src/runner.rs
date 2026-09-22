@@ -232,6 +232,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeCteSource => {
                     return Err(other_err!("TypeCteSource executor not implemented"));
                 }
+                ExecType::TypeExplainForConnection => {
+                    return Err(other_err!("ExplainForConnection executor not implemented"));
+                }
             }
         }
 
