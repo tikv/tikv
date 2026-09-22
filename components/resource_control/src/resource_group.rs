@@ -32,7 +32,6 @@ use crate::{
     metrics,
     metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::{ResourceLimiter, ResourceType},
-    score::PEAK_CPU_PCT,
 };
 
 // a read task cost at least 50us.
@@ -888,6 +887,12 @@ impl ResourceGroupManager {
     /// let a caller mint a new label value -- and so a new permanently
     /// retained metric series, or a new `ru_trackers` entry -- on every
     /// request.
+    ///
+    /// The lookup is case-sensitive while `resource_groups` is keyed by the
+    /// lowercased name, so a name differing only in case collapses to the
+    /// default group rather than matching its own, as `get_resource_group`
+    /// would. Returning a borrow of the caller's name is what keeps this off
+    /// the allocation path, so normalizing the case here is not free.
     pub fn bounded_group_name<'a>(&self, group: &'a str) -> &'a str {
         if self.resource_groups.contains_key(group) {
             group
@@ -1043,7 +1048,7 @@ impl ResourceGroupManager {
         // `under_pressure` — wiping it on a quiet tick would leave that clock
         // without a verdict mid-ratchet. `reset_group_priorities` clears it.
         if under_pressure {
-            *self.noisy_groups.write() = self.select_noisy_groups();
+            *self.noisy_groups.write() = self.select_noisy_groups(cpu_score);
         }
 
         self.adjust_group_throttling(cpu_score, under_pressure);
@@ -1109,7 +1114,15 @@ impl ResourceGroupManager {
 
     /// Picks the groups responsible for the current overload: the biggest
     /// movers, taken until the relief they provide covers the overshoot.
-    fn select_noisy_groups(&self) -> HashSet<String> {
+    ///
+    /// `cpu_score` is this tick's score, the same one the actuators get. How
+    /// far it sits above the throttle threshold is how much of the node's
+    /// attributed usage has to be reclaimed, so a tick barely over the
+    /// threshold names only the worst offender while a saturated one reaches
+    /// further down the ranking. Sizing it from a fixed assumed peak instead
+    /// made every engaged tick target the same share -- over-selecting near
+    /// the threshold, under-selecting near saturation.
+    fn select_noisy_groups(&self, cpu_score: f64) -> HashSet<String> {
         let cfg = self.config.value();
         let survey = self.survey_groups(1.0 + cfg.baseline_burst_pct / 100.0);
         // Groups already being held stay named. They sit inside their gate
@@ -1117,7 +1130,7 @@ impl ResourceGroupManager {
         // overwrite this wholesale, so dropping them would release them.
         let mut noisy = survey.held.clone();
 
-        let overshoot_pct = (PEAK_CPU_PCT - cfg.fg_cpu_throttle_threshold).max(0.0);
+        let overshoot_pct = (cpu_score - cfg.fg_cpu_throttle_threshold).max(0.0);
         let noisy_tenants = survey.take_biggest_movers(survey.total_usage * overshoot_pct / 100.0);
 
         for tenant in &noisy_tenants {
@@ -1194,6 +1207,11 @@ impl ResourceGroupManager {
     /// [`Self::select_noisy_groups`] are limited; a group over its own
     /// baseline that is not among the biggest movers is left alone.
     ///
+    /// The decrease has no floor at the group's own baseline -- a named group
+    /// is cut one step per tick for as long as it stays named, stopping only
+    /// at a hard 1 RU/s. `baseline_burst_pct` is the gate for *being* named,
+    /// not a target to settle on.
+    ///
     /// Ramp-up: once CPU drops below the leeway threshold, recover one step
     /// per tick until the limit is infinite again.
     fn adjust_group_throttling(&self, cpu_score: f64, under_pressure: bool) {
@@ -1201,7 +1219,6 @@ impl ResourceGroupManager {
 
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
         let leeway_threshold = throttle_threshold * LEEWAY_FACTOR;
-        let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
 
         // Live pressure, not the cache being non-empty: the cache outlives the
         // episode and says only *whom* to act on.
@@ -1213,30 +1230,21 @@ impl ResourceGroupManager {
                     continue;
                 };
                 let mut guard = entry.lock().unwrap();
-                // The quiet-tick baseline, so the throttle floor cannot drift
-                // up with the load being shed.
-                let hist = guard.0.effective_baseline();
-                // No zero special case: a zero baseline is a target of zero,
-                // not a reason to skip. A group with no history of its own,
-                // and every group under `current-usage` detection, is
-                // throttled on this same path -- the target simply stops
-                // clamping the decrease, so a named group keeps being cut
-                // while it stays named.
-                let burst_target = hist * burst_factor;
                 let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
                 let base = if current_limit.is_infinite() {
                     guard.0.current_rate()
                 } else {
                     current_limit
                 };
-                if base > burst_target {
-                    let rate = (base * THROTTLE_DECREASE_FACTOR).max(burst_target);
-                    guard.0.ramp_up_epochs = 0;
-                    guard
-                        .1
-                        .get_limiter(ResourceType::Cpu)
-                        .set_rate_limit(rate.max(1.0));
-                }
+                // No floor at the group's own burst target. Nothing in the
+                // decrease is conditional on the baseline: a named group is
+                // cut one step per tick for as long as it stays named,
+                // whether or not it has history of its own. The selector
+                // credits a named group with its whole share, so a floor
+                // here would promise relief the actuator could not deliver.
+                let rate = (base * THROTTLE_DECREASE_FACTOR).max(1.0);
+                guard.0.ramp_up_epochs = 0;
+                guard.1.get_limiter(ResourceType::Cpu).set_rate_limit(rate);
             }
         }
 
@@ -2087,7 +2095,10 @@ pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
-    use crate::resource_limiter::ResourceType::{Cpu, Io};
+    use crate::{
+        resource_limiter::ResourceType::{Cpu, Io},
+        score::PEAK_CPU_PCT,
+    };
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
@@ -2686,7 +2697,7 @@ pub(crate) mod tests {
                 .update_over_baseline_ticks(burst_factor, loaded, cleared);
         }
         if under_pressure {
-            *mgr.noisy_groups.write() = mgr.select_noisy_groups();
+            *mgr.noisy_groups.write() = mgr.select_noisy_groups(cpu_score);
         }
         mgr.adjust_group_throttling(cpu_score, under_pressure);
     }
@@ -2720,7 +2731,7 @@ pub(crate) mod tests {
     /// Runs detection and stores its verdict as a tick would, but without the
     /// tracker refresh, which would overwrite a staged rate.
     fn stage_noisy(mgr: &ResourceGroupManager) {
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups();
+        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
     }
 
     /// Marks `name` as having been over its target for long enough to be
@@ -2783,7 +2794,7 @@ pub(crate) mod tests {
         // uds_006 is the group already under backpressure.
         set_backpressure(&mgr, "uds_006", true, true);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             selected.contains("uds_006") && selected.len() == 1,
             "only the group already held is named: the load it is giving back \
@@ -2805,12 +2816,51 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "default", 25.4, 118.2, t0);
         set_backpressure(&mgr, "uds_006", true, true);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             selected.contains("uds_006") && selected.len() == 1,
             "the held group covers the target whether or not it is still over \
              its gate, so default is not taken with it: {selected:?}"
         );
+    }
+
+    #[test]
+    fn test_the_target_tracks_how_far_over_the_threshold_the_tick_is() {
+        // Five comparable peers, so no one of them can cover the target on
+        // its own and the size of the target is what decides how far down the
+        // ranking the loop reaches. 450 of attributed usage against the
+        // default 70 threshold.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        for (name, current) in [
+            ("a", 100.0),
+            ("b", 95.0),
+            ("c", 90.0),
+            ("d", 85.0),
+            ("e", 80.0),
+        ] {
+            seed_tracker(&mgr, name, 10.0, current, t0);
+        }
+
+        // Barely over: 2 points of overshoot asks for 9 of the 450, which the
+        // worst offender alone more than covers.
+        let selected = mgr.select_noisy_groups(72.0);
+        assert_eq!(
+            selected.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["a"],
+            "a tick just over the threshold names only the worst offender: \
+             {selected:?}"
+        );
+
+        // Saturated: 30 points asks for 135, which takes a second group.
+        let selected = mgr.select_noisy_groups(100.0);
+        assert_eq!(
+            selected.len(),
+            2,
+            "a saturated tick has to reach further down the ranking: \
+             {selected:?}"
+        );
+        assert!(selected.contains("a") && selected.contains("b"));
     }
 
     #[test]
@@ -2825,7 +2875,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "tail_a", 0.1, 0.9, t0); // excess 0.8
         seed_tracker(&mgr, "tail_b", 0.0, 0.3, t0); // excess 0.3
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert_eq!(
             selected.iter().map(String::as_str).collect::<Vec<_>>(),
             vec!["head"],
@@ -2845,7 +2895,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "small_a", 0.235, 0.288, t0);
         seed_tracker(&mgr, "small_b", 0.187, 0.225, t0);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(selected.contains("ramping"), "{:?}", selected);
         assert_eq!(
             selected.len(),
@@ -2861,7 +2911,7 @@ pub(crate) mod tests {
         let mgr = ResourceGroupManager::new(Config::default());
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "fresh", 0.0, 500.0, t0);
-        assert!(mgr.select_noisy_groups().contains("fresh"));
+        assert!(mgr.select_noisy_groups(PEAK_CPU_PCT).contains("fresh"));
         assert_eq!(baseline_of(&mgr, "fresh"), Some(0.0));
 
         // First selection wins; a later historical does not displace it.
@@ -2872,7 +2922,7 @@ pub(crate) mod tests {
             .unwrap()
             .0
             .cached_historical_rate = 100.0;
-        assert!(mgr.select_noisy_groups().contains("fresh"));
+        assert!(mgr.select_noisy_groups(PEAK_CPU_PCT).contains("fresh"));
         assert_eq!(baseline_of(&mgr, "fresh"), Some(0.0));
     }
 
@@ -2886,7 +2936,7 @@ pub(crate) mod tests {
         let mgr = ResourceGroupManager::new(Config::default());
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "evicted", 100.0, 1000.0, t0);
-        mgr.select_noisy_groups();
+        mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert_eq!(baseline_of(&mgr, "evicted"), Some(100.0));
         metrics::GROUP_RU_BASELINE
             .with_label_values(&["evicted"])
@@ -2918,7 +2968,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "noisy", 100.0, 1000.0, t0);
         seed_tracker(&mgr, "small", 100.0, 130.0, t0);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             selected.contains("noisy") && !selected.contains("small"),
             "{selected:?}"
@@ -2936,7 +2986,7 @@ pub(crate) mod tests {
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "noisy", 100.0, 1000.0, t0);
 
-        assert!(mgr.select_noisy_groups().contains("noisy"));
+        assert!(mgr.select_noisy_groups(PEAK_CPU_PCT).contains("noisy"));
         assert_eq!(baseline_of(&mgr, "noisy"), Some(100.0));
         set_backpressure(&mgr, "noisy", true, true);
 
@@ -2950,7 +3000,7 @@ pub(crate) mod tests {
             .cached_historical_rate = 1000.0;
 
         assert!(
-            mgr.select_noisy_groups().contains("noisy"),
+            mgr.select_noisy_groups(PEAK_CPU_PCT).contains("noisy"),
             "latched group must stay selected after its baseline drifts up"
         );
         assert_eq!(baseline_of(&mgr, "noisy"), Some(100.0));
@@ -2965,7 +3015,7 @@ pub(crate) mod tests {
         let mgr = ResourceGroupManager::new(Config::default());
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "noisy", 100.0, 1000.0, t0);
-        assert!(mgr.select_noisy_groups().contains("noisy"));
+        assert!(mgr.select_noisy_groups(PEAK_CPU_PCT).contains("noisy"));
         assert_eq!(baseline_of(&mgr, "noisy"), Some(100.0));
         set_backpressure(&mgr, "noisy", true, true);
 
@@ -2980,7 +3030,7 @@ pub(crate) mod tests {
             tr.0.cached_historical_rate = 900.0;
             tr.0.cached_current_rate = 100.0;
         }
-        let noisy = mgr.select_noisy_groups();
+        let noisy = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             noisy.contains("noisy"),
             "a held group stays named however far its rate has come back down"
@@ -3073,13 +3123,13 @@ pub(crate) mod tests {
         let mgr = ResourceGroupManager::new(Config::default());
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "noisy", 100.0, 1000.0, t0);
-        assert!(mgr.select_noisy_groups().contains("noisy"));
+        assert!(mgr.select_noisy_groups(PEAK_CPU_PCT).contains("noisy"));
         set_backpressure(&mgr, "noisy", true, true);
 
         // A small group is now marginally over its own baseline.
         seed_tracker(&mgr, "small", 10.0, 20.0, t0);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(selected.contains("noisy"), "{:?}", selected);
         assert!(
             !selected.contains("small"),
@@ -3100,7 +3150,7 @@ pub(crate) mod tests {
             seed_tracker(&mgr, name, 80.0, 100.0, t0);
         }
 
-        assert_eq!(mgr.select_noisy_groups().len(), 1);
+        assert_eq!(mgr.select_noisy_groups(PEAK_CPU_PCT).len(), 1);
     }
 
     #[test]
@@ -3114,7 +3164,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
         seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(selected.contains("noisy"), "biggest mover must be selected");
         assert!(
             !selected.contains("mild"),
@@ -3135,7 +3185,7 @@ pub(crate) mod tests {
         seed_tracker(&mgr, "mild", 500.0, 1000.0, t0);
         seed_tracker(&mgr, "steady", 1000.0, 1000.0, t0);
 
-        let selected = mgr.select_noisy_groups();
+        let selected = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             selected.contains("mild"),
             "the only candidate must still be penalized"
@@ -3725,7 +3775,7 @@ pub(crate) mod tests {
         assert_eq!(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
             1.0,
-            "a zero target leaves nothing to stop the ratchet"
+            "nothing stops the ratchet while the group stays named"
         );
     }
 
@@ -3751,17 +3801,15 @@ pub(crate) mod tests {
         let now = t0 + 85;
         // Spike confined to the last tick, so it does not also raise hist.
         stage_open_bucket(&mgr, "g1", 20_000);
-        // A target now comes only from a sampled quiet window, so freeze one:
-        // with no baseline the ratchet has nothing to stop at and runs to the
-        // floor, which `test_a_zero_baseline_ratchets_to_the_floor` covers.
-        let quiet_baseline = {
+        // Sample a quiet baseline, to show the decrease is not floored at it.
+        {
             let entry = mgr.ru_trackers.get("g1").unwrap();
             let mut guard = entry.lock().unwrap();
             guard.0.refresh_cached_historical_rate(t0, now);
             let hist = guard.0.cached_historical_rate;
+            assert!(hist > 1.0, "the baseline has to be above the hard floor");
             guard.0.quiet_baseline = Some(hist);
-            hist
-        };
+        }
 
         // First tick: no limit set yet (starts at INFINITY), so the base is
         // the measured current rate, tightened by one step — not an
@@ -3787,7 +3835,7 @@ pub(crate) mod tests {
         // Second tick, same inputs: base is now the persisted current_limit
         // from tick 1 (not a freshly measured/interpolated value), so it
         // tightens another step relative to itself rather than staying put
-        // or jumping to burst_target.
+        // or staying put.
         mgr.online_adjust_resource_quota_at(90.0, now);
         let after_tick2 = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
         assert!(
@@ -3797,16 +3845,15 @@ pub(crate) mod tests {
             after_tick1 * 0.85
         );
 
-        // Repeated ticks converge to and stop at burst_target = hist * 1.2,
-        // never going below it.
+        // A group's own baseline is not a floor: while it stays named the
+        // decrease keeps going, down to the hard 1 RU/s floor and no further.
         for _ in 0..60 {
             mgr.online_adjust_resource_quota_at(90.0, now);
         }
-        let floored = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
-        let burst_target = quiet_baseline * 1.2;
-        assert!(
-            (floored - burst_target).abs() < burst_target * 0.01,
-            "should converge to and stop at burst_target ({burst_target}), got {floored}"
+        assert_eq!(
+            limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            1.0,
+            "only the hard floor stops the ratchet"
         );
     }
 
@@ -4140,7 +4187,7 @@ pub(crate) mod tests {
             tick(&mgr, 50.0);
         }
         assert!(
-            mgr.select_noisy_groups().is_empty(),
+            mgr.select_noisy_groups(PEAK_CPU_PCT).is_empty(),
             "neither tenant is noisy once the load is back down"
         );
         assert!(limit_of(&mgr, "tenant1").is_infinite());
@@ -4222,7 +4269,7 @@ pub(crate) mod tests {
             "the limit is handed back"
         );
         assert!(
-            mgr.select_noisy_groups().is_empty(),
+            mgr.select_noisy_groups(PEAK_CPU_PCT).is_empty(),
             "and nobody is noisy any more"
         );
     }
@@ -4283,7 +4330,7 @@ pub(crate) mod tests {
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "spike", 100.0, 1000.0, t0);
 
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups();
+        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             mgr.noisy_groups().contains("spike"),
             "named on the first tick"
@@ -4292,7 +4339,7 @@ pub(crate) mod tests {
 
         // Next tick: the throttle has worked and it is back inside its gate.
         set_sampled_rate(&mgr, "spike", 100.0);
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups();
+        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             mgr.noisy_groups().contains("spike"),
             "still held, so the cache must still name it"
@@ -4317,7 +4364,7 @@ pub(crate) mod tests {
         }
         set_backpressure(&mgr, "culprit", true, true);
 
-        let noisy = mgr.select_noisy_groups();
+        let noisy = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(noisy.contains("culprit"), "held, so named: {noisy:?}");
         assert!(
             !noisy.contains("neighbour"),
@@ -4446,12 +4493,12 @@ pub(crate) mod tests {
 
         tick();
         assert!(
-            mgr.select_noisy_groups().is_empty(),
+            mgr.select_noisy_groups(PEAK_CPU_PCT).is_empty(),
             "one tick over target is not evidence"
         );
 
         tick();
-        let noisy = mgr.select_noisy_groups();
+        let noisy = mgr.select_noisy_groups(PEAK_CPU_PCT);
         assert!(
             noisy.contains("spike") && noisy.len() == 1,
             "two consecutive ticks must blame the group, got {noisy:?}"
