@@ -288,6 +288,10 @@ pub struct Config {
     pub merge_max_log_gap: u64,
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
+    /// Maximum time to wait in WaitMergeSource before assuming the source
+    /// apply delegate is gone and destroying the target delegate.
+    #[online_config(hidden)]
+    pub merge_source_wait_timeout: ReadableDuration,
 
     #[online_config(hidden)]
     pub use_delete_range: bool,
@@ -605,6 +609,7 @@ impl Default for Config {
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
+            merge_source_wait_timeout: ReadableDuration::secs(60),
             use_delete_range: false,
             snap_generator_pool_size: 2,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
@@ -885,6 +890,10 @@ impl Config {
 
         if self.merge_check_tick_interval.as_millis() == 0 {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
+        }
+
+        if self.merge_source_wait_timeout.as_millis() == 0 {
+            return Err(box_err!("raftstore.merge-source-wait-timeout can't be 0."));
         }
 
         if let Some(timeout) = self.disk_hang_timeout {
