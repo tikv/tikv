@@ -426,6 +426,38 @@ pub trait DebugExecutor {
         }
     }
 
+    /// Dump mvcc infos for all keys in the range of the given region.
+    fn dump_mvccs_infos_by_region(
+        &self,
+        region_id: u64,
+        limit: u64,
+        cfs: Vec<&str>,
+        start_ts: Option<u64>,
+        commit_ts: Option<u64>,
+    ) {
+        let region = match self.get_region_info(region_id).region_local_state {
+            Some(state) => state.get_region().clone(),
+            None => {
+                eprintln!("region {} doesn't exist on this store", region_id);
+                tikv_util::logger::exit_process_gracefully(-1);
+            }
+        };
+        let from = keys::data_key(region.get_start_key());
+        let to = if region.get_end_key().is_empty() {
+            Vec::new()
+        } else {
+            keys::data_key(region.get_end_key())
+        };
+        if to.is_empty() && limit == 0 {
+            eprintln!(
+                "the end key of region {} is unbounded, please specify --limit",
+                region_id
+            );
+            tikv_util::logger::exit_process_gracefully(-1);
+        }
+        self.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+    }
+
     fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str) {
         if !ALL_CFS.contains(&cf) {
             eprintln!("CF \"{}\" doesn't exist.", cf);
