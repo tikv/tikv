@@ -2,7 +2,10 @@
 
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -136,6 +139,12 @@ impl ResourceLimiter {
         let _ = self.egress_limiter.consume(bytes, false);
     }
 
+    /// Sets the background egress rate in bytes/s, as `bg-egress-limit`
+    /// does through `GroupQuotaAdjustWorker`. For tests outside this crate.
+    pub fn set_egress_limit_for_test(&self, bytes_per_sec: f64) {
+        self.egress_limiter.set_rate_limit(bytes_per_sec);
+    }
+
     /// Returns the current token-bucket debt the caller should wait before
     /// entering the thread pool. Reads accumulated debt via `consume(0, ...)`
     /// which returns the existing debt when the rate limit is finite, without
@@ -159,8 +168,9 @@ impl ResourceLimiter {
             true,
             is_read, // skip_compaction_pressure = true for reads (skip write_io_limiter)
         );
-        // egress debt is kept out of `consume` on purpose: only coprocessor responses
-        // build it, and delaying the next background read is what bounds it.
+        // egress debt is kept out of `consume` on purpose: only background read
+        // responses (coprocessor and KV reads) build it, and delaying the next
+        // background read is what bounds it.
         // Other users of the background limiter, such as Backup and ImportSST
         // via `LimitedFuture` and background writes via the scheduler, must not
         // pay for it.
@@ -214,6 +224,23 @@ impl ResourceLimiter {
             write_consumed,
             request_count,
         }
+    }
+}
+
+/// Charges the response size of a background read to the background egress
+/// token bucket, so that a large background scan cannot take the whole outbound
+/// network allowance of the node from foreground reads. Callers charge the
+/// same bytes they report through `record_network_out_bytes`.
+///
+/// This only builds debt, it never sleeps here: the response buffer and the
+/// read-pool slot are released as usual, and the next background read pays the
+/// debt at the admission gate. Foreground requests are not charged, and the
+/// call is a no-op unless `resource-control.bg-egress-limit` is set.
+pub fn charge_background_egress(resource_limiter: &Option<Arc<ResourceLimiter>>, bytes: u64) {
+    if let Some(limiter) = resource_limiter
+        && limiter.is_background()
+    {
+        limiter.consume_egress(bytes);
     }
 }
 

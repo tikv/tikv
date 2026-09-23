@@ -11,7 +11,7 @@ use futures::{
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, kvrpcpb::CommandPri};
-use resource_control::{ResourceLimiter, TaskMetadata};
+use resource_control::{ResourceLimiter, TaskMetadata, charge_background_egress};
 use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{deadline::Deadline, defer, future::async_timeout};
@@ -20,7 +20,7 @@ use tokio::{sync::Semaphore, task::yield_now};
 use super::{
     Error, HandlerOutput, HandlerOutputState, MergeableResult, ResponseMaterializationFailure,
     TracedResponse,
-    endpoint::{charge_background_egress, make_error_batch_response, make_error_response},
+    endpoint::{make_error_batch_response, make_error_response},
     metrics::record_coprocessor_response_size,
 };
 use crate::read_pool::ReadPoolHandle;
