@@ -349,6 +349,17 @@ fn row_sample_memory_usage(row: &[Vec<u8>]) -> usize {
     row.iter().map(Vec::capacity).sum()
 }
 
+// Use the same integer rounding for NULL counts and sizes, without overflowing
+// the product on large tables.
+fn rescale_sampled_value(sampled: i64, total_row_count: u64, sample_count: u64) -> i64 {
+    if sampled <= 0 || sample_count == 0 {
+        return 0;
+    }
+    let scaled = (sampled as u128 * total_row_count as u128 + sample_count as u128 / 2)
+        / sample_count as u128;
+    scaled.min(i64::MAX as u128) as i64
+}
+
 impl BaseRowSampleCollector {
     fn new(max_fm_sketch_size: usize, col_and_group_len: usize) -> BaseRowSampleCollector {
         BaseRowSampleCollector {
@@ -441,17 +452,23 @@ impl BaseRowSampleCollector {
     }
 
     pub fn fill_proto(&mut self, proto_collector: &mut tipb::RowSampleCollector) {
-        proto_collector.set_null_counts(self.null_count.clone());
         proto_collector.set_count(self.count as i64);
         if let Some(count) = self.ndv_sample_count {
             proto_collector.set_ndv_sample_count(count as i64);
         }
+        // Scale only the response, after any TiKV batch merge. TiDB can keep
+        // adding these population estimates through its existing merge path.
+        let scale = |value| match self.ndv_sample_count {
+            Some(samples) => rescale_sampled_value(value, self.count, samples),
+            None => value,
+        };
+        proto_collector.set_null_counts(self.null_count.iter().copied().map(scale).collect());
+        proto_collector.set_total_size(self.total_sizes.iter().copied().map(scale).collect());
         let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        proto_collector.set_total_size(self.total_sizes.clone());
     }
 
     fn release_reported_memory_usage(&mut self) {
@@ -1290,8 +1307,11 @@ mod tests {
             let resp: tipb::AnalyzeColumnsResp = result.into();
             let collector = resp.get_row_collector();
             assert_eq!(collector.get_count(), 40);
-            assert_eq!(collector.get_null_counts(), &[3]);
-            assert_eq!(collector.get_total_size(), &[30]);
+            assert_eq!(collector.get_null_counts(), &[if sampled { 17 } else { 3 }]);
+            assert_eq!(
+                collector.get_total_size(),
+                &[if sampled { 171 } else { 30 }]
+            );
             let mut samples: Vec<_> = collector
                 .get_samples()
                 .iter()

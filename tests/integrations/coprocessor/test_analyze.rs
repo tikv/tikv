@@ -367,13 +367,16 @@ fn test_analyze_sampling_bernoulli() {
         if ndv_rate == f64::MIN_POSITIVE {
             assert_eq!(selected, 0);
         }
-        // The sketch and size count only the selected values.
+        // The sketch counts selected values; size describes the full population.
         assert_eq!(
             collector.get_fm_sketch()[0].get_hashset().len(),
             selected as usize
         );
         assert!(collector.get_fm_sketch()[0].get_multi_hashset().is_empty());
-        assert_eq!(collector.get_total_size()[0], 8 * selected);
+        assert_eq!(
+            collector.get_total_size()[0],
+            if selected == 0 { 0 } else { 72 }
+        );
         assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
         assert_eq!(
             collector.get_null_counts()[1],
