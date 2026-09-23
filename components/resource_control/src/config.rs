@@ -3,9 +3,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::ReadableSize;
-
-use crate::ResourceGroupManager;
+use tikv_util::config::{ReadableSize, VersionTrack};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -304,12 +302,12 @@ impl TryFrom<ConfigValue> for PriorityCtlStrategy {
 }
 
 pub struct ResourceContrlCfgMgr {
-    resource_ctl: Arc<ResourceGroupManager>,
+    config: Arc<VersionTrack<Config>>,
 }
 
 impl ResourceContrlCfgMgr {
-    pub fn new(resource_ctl: Arc<ResourceGroupManager>) -> Self {
-        Self { resource_ctl }
+    pub fn new(config: Arc<VersionTrack<Config>>) -> Self {
+        Self { config }
     }
 }
 
@@ -317,12 +315,10 @@ impl ConfigManager for ResourceContrlCfgMgr {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         let cfg_str = format!("{:?}", change);
         // `ConfigController::update` already validated the whole TikvConfig,
-        // including this submodule, before dispatching.
-        let res = self.resource_ctl.get_config().update(|c| c.update(change));
+        // including this submodule, before dispatching. Values the hot path
+        // caches outside this lock are picked up by the next control tick.
+        let res = self.config.update(|c| c.update(change));
         if res.is_ok() {
-            // The per-request path reads some of these from a cache outside
-            // the config lock.
-            self.resource_ctl.refresh_cached_config();
             tikv_util::info!("update resource control config"; "change" => cfg_str);
         }
         res
@@ -424,8 +420,8 @@ mod tests {
 
     #[test]
     fn test_config_manager_applies_valid_update() {
-        let resource_ctl = Arc::new(ResourceGroupManager::new(Config::default()));
-        let mut mgr = ResourceContrlCfgMgr::new(resource_ctl.clone());
+        let config = Arc::new(VersionTrack::new(Config::default()));
+        let mut mgr = ResourceContrlCfgMgr::new(config.clone());
 
         let mut change = ConfigChange::new();
         change.insert(
@@ -434,28 +430,6 @@ mod tests {
         );
         mgr.dispatch(change).unwrap();
 
-        assert_eq!(
-            resource_ctl.get_config().value().fg_cpu_throttle_threshold,
-            90.0
-        );
-    }
-
-    /// The per-request path reads the arrival cost from a cache outside the
-    /// config lock, so dispatching a change has to refresh it -- otherwise the
-    /// knob would not take effect until the next 10s control tick.
-    #[test]
-    fn test_config_manager_refreshes_cached_request_base_cost() {
-        let resource_ctl = Arc::new(ResourceGroupManager::new(Config::default()));
-        let mut mgr = ResourceContrlCfgMgr::new(resource_ctl.clone());
-
-        let mut change = ConfigChange::new();
-        change.insert("request_base_cost_micros".to_owned(), ConfigValue::U64(0));
-        mgr.dispatch(change).unwrap();
-
-        assert_eq!(
-            resource_ctl.get_config().value().request_base_cost_micros,
-            0
-        );
-        assert_eq!(resource_ctl.cached_request_base_cost_micros(), 0);
+        assert_eq!(config.value().fg_cpu_throttle_threshold, 90.0);
     }
 }
