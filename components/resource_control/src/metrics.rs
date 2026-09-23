@@ -66,7 +66,7 @@ lazy_static! {
 
     pub static ref GROUP_RU_BASELINE: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_group_ru_baseline",
-        "Quiet-window baseline per resource group, as CPU utilization %. 0 means no quiet window has elapsed yet, which is also what the eligibility gate compares against, so any traffic is over it",
+        "Quiet-window baseline per resource group, as CPU utilization %. 0 means no quiet window has elapsed yet; whether that makes the group ineligible or judged on raw usage depends on resource-control.noisy-detection",
         &["resource_group"]
     )
     .unwrap();
@@ -111,6 +111,13 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref EFFECTIVE_NOISY_DETECTION: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_effective_noisy_detection",
+        "Noisy-detection policy in force right now, 1 for the active one. Tracks online config changes; whether an individual group is falling back to current usage for want of a baseline is visible in tikv_resource_control_group_ru_baseline, which reads 0 for such a group",
+        &["policy"]
+    )
+    .unwrap();
+
     pub static ref RESOURCE_SCORE_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_resource_score",
         "Common 0-100 resource-pressure score computed by compute_resource_scores, per resource type (cpu, io, compaction)",
@@ -139,4 +146,15 @@ pub fn deregister_metrics(name: &str) {
     _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&["background"]);
     _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&["background"]);
     _ = ADMISSION_DELAY_DURATION.remove_label_values(&["background"]);
+}
+
+/// Publishes `policy` as the one in force, zeroing the others so a panel that
+/// sums the series cannot show two policies at once after a config change.
+pub fn report_effective_noisy_detection(policy: crate::config::NoisyDetection) {
+    use crate::config::NoisyDetection::*;
+    for candidate in [Baseline, BaselineFallbackCurrentUsage, CurrentUsage] {
+        EFFECTIVE_NOISY_DETECTION
+            .with_label_values(&[&candidate.to_string()])
+            .set(i64::from(candidate == policy));
+    }
 }

@@ -202,16 +202,36 @@ limit, -15% per engaged tick, +10% per tick on recovery) and
 
 Baselines are *quiet-window* frozen, not rolling: a group's baseline updates
 only while the node is quiet, so the reference does not drift upward during the
-overload it is meant to explain. A group with no history has a baseline of
-zero, which makes any traffic count as excess — deliberate, since excluding it
-hid the culprit during its ramp.
+overload it is meant to explain.
 
-`noisy_detection` (`NoisyDetection`, default `baseline`) picks the ranking key:
+What a *missing* baseline means is the operator's call, and it is the only
+thing separating the first two policies below. `NoisyDetection::gate_baseline`
+is the single place that decides it; everything else — the eligibility gate,
+the sustained-tick counter, and the excess used for ranking — reads through it.
+
+`noisy_detection` (`NoisyDetection`, default `baseline-fallback-current-usage`)
+picks the ranking key:
 
 - `baseline` — furthest above its own quiet baseline. Names the group that
-  changed.
+  changed. A group whose quiet window has not elapsed has no baseline and is
+  never a candidate, so an overload driven entirely by a group with no history
+  goes unattributed and nothing is throttled.
+- `baseline-fallback-current-usage` — as `baseline`, except a missing baseline
+  reads as zero, so every bit of such a group's usage counts as excess and it
+  ranks on current usage. Keeps a node with no history protected, which is why
+  it is the default: excluding a fresh group hid the culprit during its ramp.
 - `current-usage` — largest consumer right now, no history. Nothing to go
   stale, but the legitimately largest tenant is blamed every time.
+
+Baselines are recorded under every policy, including `current-usage`, so a
+switch takes effect on the next tick rather than waiting a quiet window for
+history to reappear.
+
+`tikv_resource_control_effective_noisy_detection{policy=...}` reads 1 for the
+policy in force, which is how you confirm an online change landed. It is the
+configured policy: the fallback is per group, not node-wide, and a group
+currently falling back is the one whose
+`tikv_resource_control_group_ru_baseline` reads 0.
 
 Accounting knob: `request_base_cost_micros` (default 40µs) is a fixed arrival
 charge, added to a group's foreground tracker once per request at the gRPC
