@@ -177,6 +177,24 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
+## How resource control decides which resource groups caused a foreground CPU
+## overload, and so which ones it throttles and deprioritizes.
+## Value options:
+## - "baseline". Blame the groups furthest above their own quiet-window baseline,
+##               so a group that is simply large is not blamed for an overload
+##               that another group caused.
+## - "current-usage". Blame the largest consumers right now, ignoring history.
+# noisy-detection = "baseline"
+
+## RU charged to a resource group for every request that arrives, in addition to
+## the CPU that request's execution consumes, in microseconds.
+## Charged at the gRPC handler entry, before admission control, so a request that
+## is rejected pays it too: a rejection consumes no read pool CPU, so without this
+## a throttled group's measured usage falls as it is rejected, which relaxes the
+## throttle while the group keeps loading the node.
+## Set to 0 to disable.
+# request-base-cost-micros = 40
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
