@@ -182,19 +182,6 @@ pub enum NoisyDetection {
     CurrentUsage,
 }
 
-impl NoisyDetection {
-    /// The baseline to judge a group against, given the one it has recorded.
-    /// `None` means this policy makes the group ineligible: only `Baseline`
-    /// does that, and only for a group whose quiet window has not elapsed.
-    pub fn gate_baseline(self, quiet_baseline: Option<f64>) -> Option<f64> {
-        match self {
-            Self::Baseline => quiet_baseline,
-            Self::BaselineFallbackCurrentUsage => Some(quiet_baseline.unwrap_or(0.0)),
-            Self::CurrentUsage => Some(0.0),
-        }
-    }
-}
-
 impl fmt::Display for NoisyDetection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match *self {
@@ -337,30 +324,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_gate_baseline_is_what_separates_the_policies() {
-        // Only strict `baseline` bars a group that has no baseline yet.
-        assert_eq!(NoisyDetection::Baseline.gate_baseline(None), None);
-        assert_eq!(
-            NoisyDetection::BaselineFallbackCurrentUsage.gate_baseline(None),
-            Some(0.0)
-        );
-        assert_eq!(NoisyDetection::CurrentUsage.gate_baseline(None), Some(0.0));
-
-        // With one recorded, only `current-usage` still ignores it.
-        assert_eq!(
-            NoisyDetection::Baseline.gate_baseline(Some(42.0)),
-            Some(42.0)
-        );
-        assert_eq!(
-            NoisyDetection::BaselineFallbackCurrentUsage.gate_baseline(Some(42.0)),
-            Some(42.0)
-        );
-        assert_eq!(
-            NoisyDetection::CurrentUsage.gate_baseline(Some(42.0)),
-            Some(0.0)
-        );
-    }
 
     #[test]
     fn test_validate_rejects_out_of_range_cpu_thresholds() {
