@@ -246,9 +246,14 @@ async fn save_backup_file_worker<EK: KvEngine>(
     rx: async_channel::Receiver<InMemBackupFiles<EK>>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
+    cancel: Arc<AtomicBool>,
     codec: KeyValueCodec,
 ) {
     while let Ok(msg) = rx.recv().await {
+        if cancel.load(Ordering::SeqCst) {
+            warn!("backup task has been canceled before saving files"; "region" => ?msg.region);
+            return;
+        }
         let files = if msg.files.need_flush_keys() {
             match with_resource_limiter(
                 msg.files.save(&storage),
@@ -295,6 +300,10 @@ async fn save_backup_file_worker<EK: KvEngine>(
             Ok(vec![])
         };
         let mut response = BackupResponse::default();
+        let saved_files = match &files {
+            Ok(files) => files.clone(),
+            Err(_) => vec![],
+        };
         match files {
             Err(e) => {
                 error_unknown!(?e; "backup region failed";
@@ -316,8 +325,21 @@ async fn save_backup_file_worker<EK: KvEngine>(
             "start_key" => &log_wrappers::Value::key(&msg.start_key),
             "end_key" => &log_wrappers::Value::key(&msg.end_key),);
             if e.is_disconnected() {
+                cleanup_saved_backup_files(&storage, saved_files);
                 return;
             }
+        }
+    }
+}
+
+fn cleanup_saved_backup_files(storage: &dyn ExternalStorage, files: Vec<File>) {
+    for file in files {
+        let file_name = file.get_name().to_owned();
+        let result =
+            tokio::task::block_in_place(|| Handle::current().block_on(storage.delete(&file_name)));
+        if let Err(err) = result {
+            error_unknown!(?err; "backup failed to clean saved file after response disconnect";
+                "file" => file_name,);
         }
     }
 }
@@ -1222,6 +1244,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 rx.clone(),
                 resp.clone(),
                 backend.clone(),
+                request.cancel.clone(),
                 codec,
             ));
         }
@@ -1394,14 +1417,17 @@ pub mod tests {
         storage::{
             RocksEngine, TestEngineBuilder,
             kv::LocalTablets,
-            txn::tests::{must_commit, must_prewrite_put},
+            txn::{
+                TxnEntry,
+                tests::{must_commit, must_prewrite_put},
+            },
         },
     };
     use tikv_util::{
         config::ReadableSize, info, store::new_peer, thread_name_prefix::BACKUP_WORKER_THREAD,
     };
     use tokio::time;
-    use txn_types::SHORT_VALUE_MAX_LEN;
+    use txn_types::{OldValue, SHORT_VALUE_MAX_LEN};
 
     use super::*;
 
@@ -1560,6 +1586,91 @@ pub mod tests {
         let unique = path.join(tmp_suffix);
         fs::create_dir_all(&unique).unwrap();
         unique
+    }
+
+    #[test]
+    fn test_save_worker_removes_files_when_response_channel_is_disconnected() {
+        let (tmp, endpoint) = new_endpoint();
+        let storage_dir = make_unique_dir(tmp.path());
+        let backend = make_local_backend(&storage_dir);
+        let storage = external_storage::create_storage(&backend, Default::default()).unwrap();
+        let storage = Arc::<dyn ExternalStorage>::from(storage);
+
+        let mut cipher = CipherInfo::default();
+        cipher.set_cipher_type(EncryptionMethod::Plaintext);
+        let mut writer = BackupWriter::new(
+            endpoint.engine.get_rocksdb(),
+            "disconnected-response",
+            None,
+            0,
+            Limiter::new(f64::INFINITY),
+            144 * 1024 * 1024,
+            cipher,
+        )
+        .unwrap();
+        let raw_key = b"cleanup-key";
+        let raw_value = b"cleanup-value";
+        let start_ts = TimeStamp::new(10);
+        let commit_ts = TimeStamp::new(20);
+        writer
+            .write(
+                vec![TxnEntry::Commit {
+                    default: (vec![], vec![]),
+                    write: (
+                        Key::from_raw(raw_key).append_ts(commit_ts).into_encoded(),
+                        txn_types::Write::new(
+                            txn_types::WriteType::Put,
+                            start_ts,
+                            Some(raw_value.to_vec()),
+                        )
+                        .as_ref()
+                        .to_bytes(),
+                    ),
+                    old_value: OldValue::None,
+                }]
+                .into_iter(),
+                true,
+            )
+            .unwrap();
+
+        let mut region = metapb::Region::default();
+        region.set_id(42);
+        region.mut_peers().push(new_peer(1, 1));
+        let queued_file = InMemBackupFiles {
+            files: KvWriter::Txn(writer),
+            start_key: raw_key.to_vec(),
+            end_key: b"cleanup-key\x00".to_vec(),
+            start_version: TimeStamp::zero(),
+            end_version: TimeStamp::new(100),
+            region,
+            resource_limiter: None,
+        };
+
+        let (save_tx, save_rx) = async_channel::bounded(1);
+        save_tx.try_send(queued_file).unwrap();
+        drop(save_tx);
+
+        let (resp_tx, resp_rx) = unbounded();
+        drop(resp_rx);
+
+        endpoint.io_pool.block_on(save_backup_file_worker(
+            save_rx,
+            resp_tx,
+            storage,
+            Arc::new(AtomicBool::new(false)),
+            KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
+        ));
+
+        let ssts = fs::read_dir(&storage_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("sst"))
+            .collect::<Vec<_>>();
+        assert!(
+            ssts.is_empty(),
+            "save worker must not leave files whose metadata cannot be delivered: {:?}",
+            ssts
+        );
     }
 
     #[test]
