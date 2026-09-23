@@ -914,17 +914,8 @@ impl ResourceGroupManager {
         self.record_ru_consumption(&self.bounded_group_name(group), micros);
     }
 
-    /// Re-read the config values the per-request path keeps cached outside the
-    /// config lock. Called from the config dispatcher so a change applies at
-    /// once, and again each tick so a config written straight through
-    /// `VersionTrack` -- tests, and any future path that bypasses the
-    /// dispatcher -- cannot leave the cache stale.
-    /// The cached arrival cost, for asserting the cache tracks the config.
-    #[cfg(test)]
-    pub fn cached_request_base_cost_micros(&self) -> u64 {
-        self.request_base_cost_micros.load(Ordering::Relaxed)
-    }
-
+    /// Re-reads the config values the request path caches outside the lock.
+    /// Called once per control tick, so a change lands within one tick.
     pub fn refresh_cached_config(&self) {
         self.request_base_cost_micros.store(
             self.config.value().request_base_cost_micros,
