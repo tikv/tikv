@@ -751,17 +751,21 @@ impl ResourceGroupManager {
 
     /// Maps a client name onto the configured groups: safe as a label or key.
     pub fn bounded_group_name<'a>(&self, group: &'a str) -> Cow<'a, str> {
-        if self.resource_groups.contains_key(group) {
-            return Cow::Borrowed(group);
-        }
-        // Keys are lowercased; only a name with uppercase pays the copy.
+        // Keys are stored lowercased, so a name that is not already lowercase
+        // can only match after normalizing -- and a raw lookup on it never hits.
         if group.bytes().any(|b| b.is_ascii_uppercase()) {
             let lowered = group.to_ascii_lowercase();
-            if self.resource_groups.contains_key(&lowered) {
-                return Cow::Owned(lowered);
-            }
+            return if self.resource_groups.contains_key(&lowered) {
+                Cow::Owned(lowered)
+            } else {
+                Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME)
+            };
         }
-        Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME)
+        if self.resource_groups.contains_key(group) {
+            Cow::Borrowed(group)
+        } else {
+            Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME)
+        }
     }
 
     /// Charges `group` the fixed arrival cost, whether it runs or not.
