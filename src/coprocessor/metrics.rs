@@ -388,16 +388,10 @@ pub fn tls_collect_read_flow(
     });
 }
 
-pub fn tls_collect_query(
-    region_id: u64,
-    peer: &metapb::Peer,
-    start_key: &[u8],
-    end_key: &[u8],
-    reverse_scan: bool,
-) {
+pub fn tls_collect_query(region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
     TLS_COP_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        let key_range = build_key_range(start_key, end_key, reverse_scan);
+        let key_range = build_key_range(start_key, end_key, false);
         m.local_read_stats
             .add_query_num(region_id, peer, key_range, QueryKind::Coprocessor);
     });
