@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Cow,
     convert::TryFrom,
     future::Future,
     sync::{
@@ -197,10 +198,10 @@ async fn admission_and_enqueue(
                 let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
                 let label = match resource_manager.as_deref() {
                     Some(rm) => rm.bounded_group_name(name),
-                    None => DEFAULT_RESOURCE_GROUP_NAME,
+                    None => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
                 };
                 UNIFIED_READ_POOL_FULL_REJECTED
-                    .with_label_values(&[label])
+                    .with_label_values(&[label.as_ref()])
                     .inc();
                 return Err(ReadPoolError::UnifiedReadPoolFull);
             }
@@ -469,13 +470,13 @@ impl ReadPoolHandle {
     /// With no resource manager there are no configured groups to validate
     /// against, so everything collapses to the default rather than letting an
     /// unvalidated name reach the label.
-    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> &'a str {
+    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> Cow<'a, str> {
         match self {
             ReadPoolHandle::Yatp {
                 resource_manager: Some(rm),
                 ..
             } => rm.bounded_group_name(resource_group),
-            _ => DEFAULT_RESOURCE_GROUP_NAME,
+            _ => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
         }
     }
 
@@ -503,7 +504,7 @@ impl ReadPoolHandle {
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
         let group = std::str::from_utf8(resource_group).unwrap_or_default();
         UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
-            .with_label_values(&[self.bounded_group_label(group)])
+            .with_label_values(&[self.bounded_group_label(group).as_ref()])
             .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,

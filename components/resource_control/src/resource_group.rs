@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Cow,
     cell::Cell,
     cmp::{max, min},
     collections::HashSet,
@@ -887,18 +888,20 @@ impl ResourceGroupManager {
     /// let a caller mint a new label value -- and so a new permanently
     /// retained metric series, or a new `ru_trackers` entry -- on every
     /// request.
-    ///
-    /// The lookup is case-sensitive while `resource_groups` is keyed by the
-    /// lowercased name, so a name differing only in case collapses to the
-    /// default group rather than matching its own, as `get_resource_group`
-    /// would. Returning a borrow of the caller's name is what keeps this off
-    /// the allocation path, so normalizing the case here is not free.
-    pub fn bounded_group_name<'a>(&self, group: &'a str) -> &'a str {
+    pub fn bounded_group_name<'a>(&self, group: &'a str) -> Cow<'a, str> {
         if self.resource_groups.contains_key(group) {
-            group
-        } else {
-            DEFAULT_RESOURCE_GROUP_NAME
+            return Cow::Borrowed(group);
         }
+        // `resource_groups` is keyed by the lowercased name, so a configured
+        // group named in another case only matches once normalized. Only a
+        // name that actually carries uppercase pays the allocation.
+        if group.bytes().any(|b| b.is_ascii_uppercase()) {
+            let lowered = group.to_ascii_lowercase();
+            if self.resource_groups.contains_key(&lowered) {
+                return Cow::Owned(lowered);
+            }
+        }
+        Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME)
     }
 
     /// Charge `group` the fixed cost of a request arriving, whether or not it
@@ -908,7 +911,7 @@ impl ResourceGroupManager {
         if micros == 0 {
             return;
         }
-        self.record_ru_consumption(self.bounded_group_name(group), micros);
+        self.record_ru_consumption(&self.bounded_group_name(group), micros);
     }
 
     /// Re-read the config values the per-request path keeps cached outside the
@@ -1549,7 +1552,7 @@ impl ResourceGroupManager {
         }
         // Only create a foreground limiter for known groups; unknown or removed
         // groups fall back to "default" to avoid leaking ru_trackers entries.
-        Some(self.get_foreground_group_limiter(self.bounded_group_name(rg)))
+        Some(self.get_foreground_group_limiter(&self.bounded_group_name(rg)))
     }
 
     // return a ResourceLimiter for background tasks only.
@@ -3952,6 +3955,31 @@ pub(crate) mod tests {
             &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
             &fg_limiter,
         ));
+    }
+
+    #[test]
+    fn test_bounded_group_name_matches_a_configured_group_in_any_case() {
+        let mgr = ResourceGroupManager::default();
+        mgr.add_resource_group(new_resource_group_ru(
+            "analytical".into(),
+            1000,
+            MEDIUM_PRIORITY,
+        ));
+
+        assert_eq!(mgr.bounded_group_name("analytical"), "analytical");
+        // A configured group named in another case has to normalize rather
+        // than collapse, or the arrival charge and the rejection labels land
+        // on "default" instead of the group that sent the request.
+        assert_eq!(mgr.bounded_group_name("ANALYTICAL"), "analytical");
+        assert_eq!(mgr.bounded_group_name("AnAlYtIcAl"), "analytical");
+        assert_eq!(mgr.bounded_group_name("nope"), DEFAULT_RESOURCE_GROUP_NAME);
+        assert_eq!(mgr.bounded_group_name(""), DEFAULT_RESOURCE_GROUP_NAME);
+
+        // The limiter follows the same mapping, so a mixed-case name does not
+        // open a second `ru_trackers` entry.
+        let lower = mgr.get_resource_limiter("analytical", "query", 0).unwrap();
+        let upper = mgr.get_resource_limiter("ANALYTICAL", "query", 0).unwrap();
+        assert!(Arc::ptr_eq(&lower, &upper));
     }
 
     #[test]
