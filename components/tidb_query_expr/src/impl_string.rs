@@ -890,30 +890,26 @@ fn trim<'a>(string: &'a [u8], pattern: &[u8], direction: TrimDirection) -> &'a [
     if pattern.is_empty() {
         return string;
     }
-    let pat_length = pattern.len();
-    let s_length = string.len();
 
-    let left_position = match direction {
-        TrimDirection::Trailing => 0,
-        _ => string
-            .chunks(pat_length)
-            .position(|chunk| chunk != pattern)
-            .map(|pos| pos * pat_length)
-            .unwrap_or(s_length - (s_length % pat_length)),
+    let trim_leading = |mut s: &'a [u8]| {
+        while s.starts_with(pattern) {
+            s = &s[pattern.len()..];
+        }
+        s
     };
 
-    let right_position = match direction {
-        TrimDirection::Leading => s_length,
-        _ => string
-            .rchunks(pat_length)
-            .position(|chunk| chunk != pattern)
-            .map(|pos| s_length - pos * pat_length)
-            .unwrap_or(s_length % pat_length),
+    let trim_trailing = |mut s: &'a [u8]| {
+        while s.ends_with(pattern) {
+            s = &s[..s.len() - pattern.len()];
+        }
+        s
     };
 
-    let right_position = right_position.max(left_position);
-
-    &string[left_position..right_position]
+    match direction {
+        TrimDirection::Leading => trim_leading(string),
+        TrimDirection::Trailing => trim_trailing(string),
+        TrimDirection::Both => trim_trailing(trim_leading(string)),
+    }
 }
 
 #[rpn_fn]
@@ -4068,6 +4064,9 @@ mod tests {
             (Some(""), Some("x"), Some("")),
             (Some("张三和张三"), Some("张三"), Some("和")),
             (Some("xxxbarxxxxx"), Some("x"), Some("bar")),
+            (Some("aaaaa"), Some("aaa"), Some("aa")),
+            (Some("ppp"), Some("pp"), Some("p")),
+            (Some("xyxyx"), Some("xyx"), Some("yx")),
         ];
 
         for (arg, pat, expect) in test_cases {
@@ -4127,6 +4126,24 @@ mod tests {
                 Some("x"),
                 Some(TrimDirection::Both as i64),
                 Some("bar"),
+            ),
+            (
+                Some("aaaaa"),
+                Some("aaa"),
+                Some(TrimDirection::Both as i64),
+                Some("aa"),
+            ),
+            (
+                Some("ppp"),
+                Some("pp"),
+                Some(TrimDirection::Both as i64),
+                Some("p"),
+            ),
+            (
+                Some("xyxyx"),
+                Some("xyx"),
+                Some(TrimDirection::Both as i64),
+                Some("yx"),
             ),
         ];
         for (arg, pat, direction, exp) in tests {
