@@ -338,7 +338,6 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
     assert!(!collector.has_ndv_sample_count());
 
-    // TiKV does not read ndv_rate yet, so every row still feeds the sketches.
     // Tiny rates round to a zero Bernoulli threshold. They exercise empty
     // samples without a random assertion or a test-only sampling path.
     let mut scanned_bytes = None;
@@ -362,10 +361,18 @@ fn test_analyze_sampling_bernoulli() {
         let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
         let collector = analyze_resp.get_row_collector();
         assert_eq!(collector.get_count(), 9);
-        assert!(!collector.has_ndv_sample_count());
+        assert!(collector.has_ndv_sample_count());
         assert_eq!(collector.get_samples().len(), histogram_count);
-        assert_eq!(collector.get_fm_sketch()[0].get_hashset().len(), 9);
-        assert_eq!(collector.get_total_size()[0], 72);
+        let selected = collector.get_ndv_sample_count();
+        if ndv_rate == f64::MIN_POSITIVE {
+            assert_eq!(selected, 0);
+        }
+        // The sketch and size count only the selected values.
+        assert_eq!(
+            collector.get_fm_sketch()[0].get_hashset().len(),
+            selected as usize
+        );
+        assert_eq!(collector.get_total_size()[0], 8 * selected);
         assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
         assert_eq!(
             collector.get_null_counts()[1],
