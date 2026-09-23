@@ -431,17 +431,28 @@ impl BaseRowSampleCollector {
     }
 
     pub fn fill_proto(&mut self, proto_collector: &mut tipb::RowSampleCollector) {
-        proto_collector.set_null_counts(self.null_count.clone());
         proto_collector.set_count(self.count as i64);
         if let Some(count) = self.ndv_sample_count {
             proto_collector.set_ndv_sample_count(count as i64);
         }
+        // Scale only the response, after any TiKV batch merge. TiDB can keep
+        // adding these population estimates through its existing merge path.
+        // Without selected rows the values are 0. The product is widened so
+        // that it cannot overflow.
+        let scale = |value: i64| match self.ndv_sample_count {
+            Some(samples) if samples > 0 => {
+                ((value as u128 * self.count as u128 + samples as u128 / 2) / samples as u128)
+                    as i64
+            }
+            _ => value,
+        };
+        proto_collector.set_null_counts(self.null_count.iter().copied().map(scale).collect());
+        proto_collector.set_total_size(self.total_sizes.iter().copied().map(scale).collect());
         let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        proto_collector.set_total_size(self.total_sizes.clone());
     }
 
     fn release_reported_memory_usage(&mut self) {
@@ -1330,8 +1341,11 @@ mod tests {
             let resp: tipb::AnalyzeColumnsResp = result.into();
             let collector = resp.get_row_collector();
             assert_eq!(collector.get_count(), 40);
-            assert_eq!(collector.get_null_counts(), &[3]);
-            assert_eq!(collector.get_total_size(), &[30]);
+            assert_eq!(collector.get_null_counts(), &[if sampled { 17 } else { 3 }]);
+            assert_eq!(
+                collector.get_total_size(),
+                &[if sampled { 171 } else { 30 }]
+            );
             let mut samples: Vec<_> = collector
                 .get_samples()
                 .iter()
