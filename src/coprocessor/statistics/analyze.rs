@@ -120,9 +120,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             ))
         };
         if self.ndv_rate.is_some() {
+            let base = collector.mut_base();
+            for sketch in &mut base.fm_sketches {
+                sketch.track_duplicates();
+            }
             // `Some` makes the response a sampled one: it sends the count of
             // selected rows also when that count is 0.
-            collector.mut_base().ndv_sample_count = Some(0);
+            base.ndv_sample_count = Some(0);
         }
         collector
     }
@@ -1313,6 +1317,9 @@ mod tests {
         collector.base.null_count[0] = null_count;
         collector.base.total_sizes[0] = total_size;
         collector.base.ndv_sample_count = ndv_sample_count;
+        if ndv_sample_count.is_some() {
+            collector.base.fm_sketches[0].track_duplicates();
+        }
         for hash in ndv_hashes {
             collector.base.fm_sketches[0].insert_hash_value(*hash);
         }
@@ -1376,7 +1383,10 @@ mod tests {
         assert_eq!(collector.get_null_counts(), &[3]);
         assert_eq!(collector.get_total_size(), &[32]);
         let sketch = &collector.get_fm_sketch()[0];
-        assert_eq!(sorted_hashset(sketch), vec![10, 20, 30]);
+        // Each input has the hash 10 one time, so the merge moves it to
+        // `multi_hashset`.
+        assert_eq!(sorted_hashset(sketch), vec![20, 30]);
+        assert_eq!(sketch.get_multi_hashset(), &[10]);
     }
 }
 

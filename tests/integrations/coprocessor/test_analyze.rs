@@ -376,9 +376,11 @@ fn test_analyze_sampling_bernoulli() {
         }
         if ndv_rate == all_rows_rate {
             assert_eq!(selected, 9);
-            // `count` has the values 1, 2, 3, and 4.
+            // Only a request that tracks repeated hashes fills the second
+            // set: `count` has 2, 3, and 4 one time each and 1 six times.
             let count_sketch = &collector.get_fm_sketch()[2];
-            assert_eq!(count_sketch.get_hashset().len(), 4);
+            assert_eq!(count_sketch.get_hashset().len(), 3);
+            assert_eq!(count_sketch.get_multi_hashset().len(), 1);
             assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
             assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
         }
@@ -396,6 +398,7 @@ fn test_analyze_sampling_bernoulli() {
             collector.get_fm_sketch()[0].get_hashset().len(),
             selected as usize
         );
+        assert!(collector.get_fm_sketch()[0].get_multi_hashset().is_empty());
         assert_eq!(collector.get_total_size()[0], 8 * selected);
         assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
         assert_eq!(

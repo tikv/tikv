@@ -30,16 +30,20 @@ use mur3::murmurhash3_x64_128;
 pub struct FmSketch {
     /// A binary mask used to track the maximum number of trailing zeroes in the
     /// hashed values. Also used to track the level of the sketch.
-    /// Every time the size of the hashset exceeds the maximum size, the mask
+    /// Every time the retained hashes exceed the maximum size, the mask
     /// will be moved to the next level.
     mask: u64,
-    /// The maximum size of the hashset. If the size exceeds this value, the
-    /// mask will be moved to the next level. And the hashset will only keep
-    /// the hashed values with trailing zeroes greater than or equal to the
-    /// new mask.
+    /// The maximum number of retained hashes, counting both sets in sampled
+    /// mode. If the count exceeds this value, the mask will be moved to the
+    /// next level. And only the hashed values with trailing zeroes greater
+    /// than or equal to the new mask are kept.
     max_size: usize,
-    /// A set to store unique hashed values.
+    /// All hashes in full-input mode; singleton hashes in sampled mode.
     hash_set: HashSet<u64>,
+    /// The hashes seen more than once. `None` keeps full-input mode free of
+    /// duplicate tracking. In sampled mode the two sets are disjoint and
+    /// share one mask and capacity bound.
+    multi_hash_set: Option<HashSet<u64>>,
 }
 
 impl FmSketch {
@@ -49,7 +53,14 @@ impl FmSketch {
             mask: 0,
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+            multi_hash_set: None,
         }
+    }
+
+    pub fn track_duplicates(&mut self) {
+        // A hash that is already in the sketch would count as seen one time.
+        debug_assert!(self.hash_set.is_empty());
+        self.multi_hash_set = Some(HashSet::default());
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
@@ -64,12 +75,23 @@ impl FmSketch {
         if (hash_val & self.mask) != 0 {
             return;
         }
+        if let Some(multi_hash_set) = &mut self.multi_hash_set {
+            if multi_hash_set.contains(&hash_val) {
+                return;
+            }
+            if self.hash_set.remove(&hash_val) {
+                multi_hash_set.insert(hash_val);
+                return;
+            }
+        }
         // Put the hashed value into the hashset.
         self.hash_set.insert(hash_val);
         // We track the unique hashed values level by level to ensure a minimum count of
         // distinct values at each level. This way, the final estimation is less
         // likely to be skewed by outliers.
-        if self.hash_set.len() > self.max_size {
+        if self.hash_set.len() + self.multi_hash_set.as_ref().map_or(0, HashSet::len)
+            > self.max_size
+        {
             // If the size of the hashset exceeds the maximum size, move the mask to the
             // next level.
             self.mask = (self.mask << 1) | 1;
@@ -79,8 +101,20 @@ impl FmSketch {
         }
     }
 
+    /// Records a hash that was seen more than once.
+    fn insert_repeated_hash(&mut self, hash_val: u64) {
+        // The first insert of a new hash puts it in `hash_set`, and the next
+        // insert moves it to `multi_hash_set`. Thus two inserts are necessary
+        // when the hash is new here, and they do no harm in the other cases.
+        self.insert_hash_value(hash_val);
+        self.insert_hash_value(hash_val);
+    }
+
     fn filter(&mut self) {
         self.hash_set.retain(|&x| x & self.mask == 0);
+        if let Some(multi_hash_set) = &mut self.multi_hash_set {
+            multi_hash_set.retain(|&x| x & self.mask == 0);
+        }
     }
 
     pub fn merge(&mut self, other: &FmSketch) {
@@ -91,6 +125,11 @@ impl FmSketch {
         for hash in &other.hash_set {
             self.insert_hash_value(*hash);
         }
+        if let Some(other_multi_hash_set) = &other.multi_hash_set {
+            for &hash in other_multi_hash_set {
+                self.insert_repeated_hash(hash);
+            }
+        }
     }
 }
 
@@ -100,6 +139,9 @@ impl From<FmSketch> for tipb::FmSketch {
         proto.set_mask(fm.mask);
         let hash = fm.hash_set.into_iter().collect();
         proto.set_hashset(hash);
+        if let Some(multi_hash_set) = fm.multi_hash_set {
+            proto.set_multi_hashset(multi_hash_set.into_iter().collect());
+        }
         proto
     }
 }
@@ -222,5 +264,47 @@ mod tests {
         receiver.merge(&small);
         assert!(receiver.mask >= small.mask);
         assert!(receiver.hash_set.iter().all(|h| h & receiver.mask == 0));
+
+        // `multi_hash_set` must survive both cross-input duplicates and a
+        // higher mask, regardless of which input is merged first.
+        //
+        // `whole` comes from the same insert code as the merge inputs, so a
+        // comparison with `whole` alone cannot detect a wrong rule that both
+        // sides share, for example a capacity that counts only one of the two
+        // sets. The literal values detect it. With a capacity of 2 the mask
+        // reaches 3, and only 0 and 64 pass that mask.
+        for (capacity, mask, singletons, repeated) in [
+            (2, 3, vec![], vec![0, 64]),
+            (16, 0, vec![2, 3], vec![0, 1, 64]),
+        ] {
+            let build = |values: &[u64]| {
+                let mut sketch = FmSketch::new(capacity);
+                sketch.track_duplicates();
+                for &value in values {
+                    sketch.insert_hash_value(value);
+                }
+                sketch
+            };
+            let whole = build(&[0, 1, 1, 2, 64, 0, 3, 64, 64]);
+            assert_eq!(whole.mask, mask);
+            assert_eq!(
+                whole.hash_set,
+                singletons.into_iter().collect::<HashSet<_>>()
+            );
+            assert_eq!(whole.multi_hash_set, Some(repeated.into_iter().collect()));
+            let left = build(&[0, 1, 1, 2, 64]);
+            let right = build(&[0, 3, 64, 64]);
+            for (mut first, second) in [(left.clone(), right.clone()), (right, left)] {
+                first.merge(&second);
+                assert_eq!(first.mask, whole.mask);
+                assert_eq!(first.hash_set, whole.hash_set);
+                assert_eq!(first.multi_hash_set, whole.multi_hash_set);
+                assert!(
+                    first
+                        .hash_set
+                        .is_disjoint(first.multi_hash_set.as_ref().unwrap())
+                );
+            }
+        }
     }
 }
