@@ -712,7 +712,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             "end_key" => log_wrappers::Value::key(&end_key),
             "policy" => ?policy,
         );
-        CHECK_SPILT_COUNTER.all.inc();
+        CHECK_SPLIT_COUNTER.all.inc();
         let mut host = self
             .coprocessor
             .new_split_checker_host(region, tablet, reason, policy);
@@ -848,14 +848,14 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             };
             self.router
                 .ask_split(region_id, region_epoch, split_keys, source.into());
-            CHECK_SPILT_COUNTER.success.inc();
+            CHECK_SPLIT_COUNTER.success.inc();
         } else {
             debug!(
                 "no need to send, split key not found";
                 "region_id" => region_id,
             );
 
-            CHECK_SPILT_COUNTER.ignore.inc();
+            CHECK_SPLIT_COUNTER.ignore.inc();
         }
     }
 
@@ -1054,7 +1054,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         end_key: &[u8],
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Result<Vec<Vec<u8>>> {
-        let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
+        let timer = CHECK_SPLIT_HISTOGRAM.start_coarse_timer();
         let mut buckets = Vec::new();
         let mut bucket = Bucket::default();
         let empty_bucket = vec![];
