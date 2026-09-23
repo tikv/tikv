@@ -146,11 +146,11 @@ mod tests {
     fn test_shared_lock_declaration_validation_only_exempts_legacy() {
         let mut legacy = Context::default();
         assert!(validate_shared_lock_declaration(&legacy, false).is_err());
-        assert!(validate_shared_lock_declaration(&legacy, true).is_ok());
+        validate_shared_lock_declaration(&legacy, true).unwrap();
         legacy.set_txn_protocol_version(1);
         assert!(validate_shared_lock_declaration(&legacy, true).is_err());
         legacy.set_txn_protocol_version(TXN_PROTOCOL_VERSION_SHARED_LOCK);
-        assert!(validate_shared_lock_declaration(&legacy, false).is_ok());
+        validate_shared_lock_declaration(&legacy, false).unwrap();
     }
 
     #[test]
