@@ -447,17 +447,29 @@ impl BaseRowSampleCollector {
     }
 
     pub fn fill_proto(&mut self, proto_collector: &mut tipb::RowSampleCollector) {
-        proto_collector.set_null_counts(self.null_count.clone());
         proto_collector.set_count(self.count as i64);
         if let Some(count) = self.ndv_sample_count {
             proto_collector.set_ndv_sample_count(count as i64);
         }
+        // Scale only the response, after any TiKV batch merge. TiDB can keep
+        // adding these population estimates through its existing merge path.
+        //     estimate = value * (visible rows / selected rows)
+        // Without selected rows the values are 0. The product is widened so
+        // that it cannot overflow.
+        let scale = |value: i64| match self.ndv_sample_count {
+            Some(samples) if samples > 0 => {
+                ((value as u128 * self.count as u128 + samples as u128 / 2) / samples as u128)
+                    as i64
+            }
+            _ => value,
+        };
+        proto_collector.set_null_counts(self.null_count.iter().copied().map(scale).collect());
+        proto_collector.set_total_size(self.total_sizes.iter().copied().map(scale).collect());
         let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        proto_collector.set_total_size(self.total_sizes.clone());
     }
 
     fn release_reported_memory_usage(&mut self) {
@@ -1380,8 +1392,12 @@ mod tests {
         // separately.
         assert_eq!(collector.get_count(), 40);
         assert_eq!(collector.get_ndv_sample_count(), 7);
-        assert_eq!(collector.get_null_counts(), &[3]);
-        assert_eq!(collector.get_total_size(), &[32]);
+        // The 7 selected rows have 3 NULLs and 32 bytes. The response scales
+        // both to the 40 visible rows: 120 / 7 rounds to 17, and 1280 / 7
+        // rounds to 183. A truncating division gives 182, so the size also
+        // checks the rounding.
+        assert_eq!(collector.get_null_counts(), &[17]);
+        assert_eq!(collector.get_total_size(), &[183]);
         let sketch = &collector.get_fm_sketch()[0];
         // Each input has the hash 10 one time, so the merge moves it to
         // `multi_hashset`.
