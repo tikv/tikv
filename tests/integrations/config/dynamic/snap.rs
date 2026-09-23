@@ -67,6 +67,9 @@ fn start_server(
             snap_worker_scheduler,
             server_config.clone(),
             ResourceQuota::new(None),
+            tikv::server::config::TxnProtocolAdmissionConfig::new(
+                server_config.value().enable_txn_protocol_admission,
+            ),
             Box::new(MockCfgManager),
         )),
     );

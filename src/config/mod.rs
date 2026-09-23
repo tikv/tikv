@@ -6869,6 +6869,9 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        let txn_protocol_admission = crate::server::config::TxnProtocolAdmissionConfig::new(
+            cfg.server.enable_txn_protocol_admission,
+        );
         let cop_manager = MockCfgManager(Box::new(|_| {}));
         cfg_controller.register(
             Module::Server,
@@ -6876,6 +6879,7 @@ mod tests {
                 scheduler,
                 version_tracker.clone(),
                 ResourceQuota::new(None),
+                txn_protocol_admission.clone(),
                 Box::new(cop_manager),
             )),
         );
@@ -6896,6 +6900,13 @@ mod tests {
             .unwrap();
         cfg.server.raft_msg_max_batch_size = 32;
         assert_eq_debug(&cfg_controller.get_current(), &cfg);
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("server.enable-txn-protocol-admission", "false")
+            .unwrap();
+        cfg.server.enable_txn_protocol_admission = false;
+        assert!(!txn_protocol_admission.is_enabled());
         check_cfg(&cfg);
     }
 
@@ -6946,6 +6957,9 @@ mod tests {
                 scheduler,
                 version_tracker.clone(),
                 ResourceQuota::new(None),
+                crate::server::config::TxnProtocolAdmissionConfig::new(
+                    cfg.server.enable_txn_protocol_admission,
+                ),
                 Box::new(cop_manager),
             )),
         );

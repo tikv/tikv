@@ -173,6 +173,7 @@ pub enum ErrorHeaderKind {
     RegionNotFound,
     KeyNotInRegion,
     EpochNotMatch,
+    TxnProtocolIncompatible,
     ServerIsBusy,
     StaleCommand,
     StoreNotMatch,
@@ -198,6 +199,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::RegionNotFound => "region_not_found",
             ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
             ErrorHeaderKind::EpochNotMatch => "epoch_not_match",
+            ErrorHeaderKind::TxnProtocolIncompatible => "txn_protocol_incompatible",
             ErrorHeaderKind::ServerIsBusy => "server_is_busy",
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
@@ -235,6 +237,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::KeyNotInRegion
     } else if header.has_epoch_not_match() {
         ErrorHeaderKind::EpochNotMatch
+    } else if header.has_incompatible_request() {
+        ErrorHeaderKind::TxnProtocolIncompatible
     } else if header.has_server_is_busy() {
         ErrorHeaderKind::ServerIsBusy
     } else if header.has_stale_command() {
@@ -272,6 +276,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 
 pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
     match e {
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::IncompatibleRequest(incompatible),
+        ))))) => Some(incompatible.clone().into_region_error()),
         // TODO: use `Error::cause` instead.
         Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
@@ -637,6 +644,21 @@ mod test {
 
     use super::*;
     use crate::storage::types::MvccInfo;
+
+    #[test]
+    fn test_extract_txn_protocol_incompatible_request() {
+        let incompatible = crate::storage::txn_protocol::IncompatibleRequest::global_admission(3);
+        let error = Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::IncompatibleRequest(incompatible),
+        )));
+
+        let header = extract_region_error_from_error(&error).unwrap();
+        assert!(header.has_incompatible_request());
+        assert_eq!(
+            get_error_kind_from_header(&header),
+            ErrorHeaderKind::TxnProtocolIncompatible
+        );
+    }
 
     #[test]
     fn test_extract_key_error_write_conflict() {

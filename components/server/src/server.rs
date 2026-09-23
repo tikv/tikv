@@ -956,6 +956,7 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                server.txn_protocol_admission_config(),
                 copr_config_manager,
             )),
         );
