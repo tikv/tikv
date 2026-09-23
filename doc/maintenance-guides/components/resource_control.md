@@ -90,6 +90,8 @@ Hot contracts to review carefully:
   background quota adjustment and foreground/read-pool throttling
 - expose a read-pool CPU-pressure/target-CPU contract that `src/read_pool.rs`
   consumes to drive unified-read-pool scale in/out
+- name the groups responsible for a foreground overload, and drive both
+  actuators from that one verdict
 
 ## Important Design Points
 
@@ -144,21 +146,23 @@ changes to either side must keep the other consistent:
 
 - `online_adjust_resource_quota(cpu_score)` — called once per tick from
   `worker.rs` with the shared `cpu_score` from `score::compute_resource_scores`.
-  Internally refreshes `read_pool_cpu_pressure` (a `[0, 1]` fraction, `0` when
-  foreground is not under pressure) and `read_pool_scale_up_allowed` (whether
-  CPU is comfortably idle enough to let the read pool grow back toward its
-  max).
+  Runs detection (see "Noisy-Group Selection") and then refreshes
+  `read_pool_cpu_pressure` (`1.0` or `0.0` — a flag, not a varying fraction,
+  because the read pool only tests it against zero) and
+  `read_pool_scale_up_allowed` (whether CPU is comfortably idle enough to let
+  the read pool grow back toward its max).
 - `compute_read_pool_target_cpu(read_pool_cpu, interval_secs)` — the read
-  pool's actual scale-down input. Records `read_pool_cpu` into a historical
+  pool's actual scale-down input. Records `read_pool_cpu` into the pool's
   tracker and returns either `f64::INFINITY` (no ceiling — caller's own
-  ceiling wins) or a target below `read_pool_cpu` that slides toward the
-  historical-CPU floor as pressure increases. This only ever scales down; the
-  read pool itself converts the target into a thread count and owns scale-up.
+  ceiling wins) or a target below `read_pool_cpu`, stepped down per engaged
+  tick and floored at the pool's quiet-window CPU.
+- The floor is the *quiet-window* freeze, not the live historical average. The
+  average keeps recording the overload, so it rises as load is shed and floats
+  the floor up under the ratchet. Until there has been a quiet tick the floor
+  is `MIN_READ_POOL_TARGET_CORES` (1 core), which is also what stops the
+  ratchet compounding toward zero. Same mechanism as a group's baseline.
 - `read_pool_scale_up_allowed()` — read pool consults this before growing its
   thread count back up.
-- `read_pool_cpu_floor(read_pool_cpu, interval_secs)` — lower-level primitive
-  behind `compute_read_pool_target_cpu`; records usage into the historical
-  tracker and returns the floor CPU on its own.
 
 Invariant: `compute_read_pool_target_cpu` must never return a target above
 `read_pool_cpu` when pressure is engaged; a caller `min()`-ing this into its
@@ -167,6 +171,54 @@ value. If you change the pressure/threshold math in `resource_group.rs`,
 re-check the read-pool scaling tests in `src/read_pool.rs` (search for
 `online_adjust_resource_quota`, `read_pool_cpu_pressure`,
 `read_pool_scale_up_allowed`).
+
+## Noisy-Group Selection
+
+Detection runs once per tick in `online_adjust_resource_quota_at`, before
+either actuator, so both act on the same verdict against one set of
+measurements. The verdict is a set of group names, published by
+`noisy_groups()` and consumed by `adjust_group_throttling` (per-group CPU rate
+limit, -15% per engaged tick, +10% per tick on recovery) and
+`deprioritize_over_quota_groups` (read-scheduler phase).
+
+`select_noisy_groups(cpu_score)`:
+
+- `survey_groups` makes one pass over the per-group trackers. A group is a
+  candidate when it is above its own baseline by more than `baseline_burst_pct`
+  (default 20%) and has been for `MIN_ENGAGE_TICKS` ticks.
+- Candidates rank by *excess* (rate above baseline) — what identifies the group
+  that changed, not the group that is merely large. Ties break on name, since
+  candidates arrive in `DashMap` order and would otherwise vary per restart.
+- `take_biggest_movers` takes from the top until credited relief covers
+  `total_usage * (cpu_score - fg_cpu_throttle_threshold) / 100` — a tick barely
+  over the threshold names only the worst offender, a saturated one reaches
+  further down. Candidates below `TAIL_EXCESS_RATIO` (10%) of the top excess
+  are spared, and the top candidate is always taken unless something is
+  already held.
+- Groups an actuator is already holding stay named — they sit inside their gate
+  only because they are held there — and their whole share is credited against
+  the target rather than inflating one the innocent tail would be taken to
+  meet.
+
+Baselines are *quiet-window* frozen, not rolling: a group's baseline updates
+only while the node is quiet, so the reference does not drift upward during the
+overload it is meant to explain. A group with no history has a baseline of
+zero, which makes any traffic count as excess — deliberate, since excluding it
+hid the culprit during its ramp.
+
+`noisy_detection` (`NoisyDetection`, default `baseline`) picks the ranking key:
+
+- `baseline` — furthest above its own quiet baseline. Names the group that
+  changed.
+- `current-usage` — largest consumer right now, no history. Nothing to go
+  stale, but the legitimately largest tenant is blamed every time.
+
+Accounting knob: `request_base_cost_micros` (default 40µs) is a fixed arrival
+charge, added to a group's foreground tracker once per request at the gRPC
+handler entry — before admission control, so a rejected request still pays, and
+skipped for background-routed requests, which their background limiter meters.
+It is cached outside the config lock and re-read by `refresh_cached_config` on
+each control tick, so a config change lands within one tick.
 
 ## Critical Invariants
 
@@ -221,10 +273,12 @@ Start triage with:
   foreground/read-pool throttling in `resource_group.rs` — since they share
   the same `cpu_score`/`io_score`/`compaction_score` computation
 - Read-pool coupling changes (`online_adjust_resource_quota`,
-  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`,
-  `read_pool_cpu_floor`):
+  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`):
   inspect both `resource_group.rs` and `src/read_pool.rs`; update this guide's
   "Cross-Component Contract" section in the same change
+- Detection changes (`select_noisy_groups`, `survey_groups`, quiet baselines,
+  `noisy_detection`): inspect both actuators — `adjust_group_throttling` and
+  `deprioritize_over_quota_groups` — since they consume one shared verdict
 
 ## Review Checklist
 
@@ -238,16 +292,19 @@ Start triage with:
   (`worker.rs`) and foreground/read-pool (`resource_group.rs`) consumers as
   intended?
 - Does it touch the read-pool coupling API (`online_adjust_resource_quota`,
-  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`,
-  `read_pool_cpu_floor`)? If so, is `src/read_pool.rs` updated and are its
-  scaling tests still valid?
+  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`)? If so, is
+  `src/read_pool.rs` updated and are its scaling tests still valid?
+- Does it change who gets blamed for an overload (candidacy, ranking, the
+  target, or the quiet baseline)? If so, does a test pin *which* group is
+  picked, not just how many?
 
 ## Observability And Tests
 
 - Metrics live under `metrics.rs` and within the group/limiter code.
 - Many unit tests are inline in:
   `future.rs`, `service.rs`, `worker.rs`, `channel.rs`, `resource_limiter.rs`,
-  and `score.rs`.
+  `score.rs`, and — for detection, throttling and the read-pool contract —
+  `resource_group.rs`.
 - Changes should usually be validated together with the call sites in
   `src/server`, `src/storage`, `components/batch-system`, and (for
   pressure-scoring / read-pool coupling changes) `src/read_pool.rs`.
@@ -263,6 +320,10 @@ Start triage with:
   next tick's CPU delta baseline (see `score.rs`)
 - read-pool scale-down target computed from stale or unrecorded
   `read_pool_cpu` history, causing the read pool to over- or under-shrink
+- a floor taken from live average CPU instead of the quiet window, which rises
+  as load is shed and so floats up under the ratchet
+- blame that lands on a group whose baseline is stale, or on the largest tenant
+  rather than the one that changed
 
 ## Reading Map And Companion Docs
 
@@ -290,7 +351,18 @@ Companion docs:
 - RU:
   request unit used for resource accounting
 - Baseline:
-  historical usage reference for fairness and admission control
+  a group's usage reference, frozen from quiet windows rather than rolling, so
+  it does not drift up during the overload it is meant to explain. The read
+  pool's own floor is the same mechanism on the pool's tracker.
+- Excess:
+  a group's rate above its own baseline — the ranking key for blame, since it
+  identifies the group that *changed* rather than the group that is large
+- Noisy group:
+  a group this tick blamed for the foreground overload; see
+  "Noisy-Group Selection"
+- Held group:
+  a group an actuator is already holding (finite CPU rate limit or scheduler
+  backpressure). Stays named, and its share counts toward the target
 - Admission control:
   delay or reject logic under pressure
 - Virtual time:
@@ -300,8 +372,9 @@ Companion docs:
   by background quota adjustment and foreground/read-pool throttling
 - Pressure fraction:
   a score mapped to `[0, 1]` via `score::pressure_fraction` against a
-  caller-supplied `(start, end)` threshold range; drives both background
-  throttling and read-pool target-CPU scaling
+  caller-supplied `(start, end)` threshold range; drives background quota
+  adjustment in `worker.rs`. Foreground/read-pool throttling does not use it —
+  it engages on a flag and steps by a fixed -15% per tick
 - Read-pool target CPU:
   the scale-down ceiling `resource_group.rs::compute_read_pool_target_cpu`
   hands to `src/read_pool.rs`; `INFINITY` means no pressure-driven ceiling
