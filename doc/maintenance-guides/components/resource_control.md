@@ -205,9 +205,12 @@ only while the node is quiet, so the reference does not drift upward during the
 overload it is meant to explain.
 
 What a *missing* baseline means is the operator's call, and it is the only
-thing separating the first two policies below. `NoisyDetection::gate_baseline`
-is the single place that decides it; everything else — the eligibility gate,
-the sustained-tick counter, and the excess used for ranking — reads through it.
+thing separating the first two policies below. `candidate_baseline` is the sole
+interpreter of `noisy_detection`: it answers both "is this group a candidate"
+and "what baseline is its excess charged against". `refresh_trackers` gathers
+statistics only and never sees the policy — it advances two policy-free
+counters, `over_baseline_ticks` and `active_ticks`, and each policy reads
+whichever one it rests on. A new policy is therefore one arm in one `match`.
 
 `noisy_detection` (`NoisyDetection`, default `baseline-fallback-current-usage`)
 picks the ranking key:
