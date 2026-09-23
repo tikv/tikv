@@ -119,8 +119,7 @@ lazy_static! {
     .unwrap();
 }
 
-/// Drops the per-tick gauges for an evicted tracker; without this they keep
-/// reporting its last value. Gauges only, so a returning group is not a reset.
+/// Drops an evicted tracker's gauges, which would keep its last value.
 pub fn deregister_tracker_gauges(name: &str) {
     _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
     _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);

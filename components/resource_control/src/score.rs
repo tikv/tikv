@@ -25,10 +25,7 @@ use tikv_util::{
     time::Instant,
 };
 
-/// A `cpu_score` well above any sane `fg_cpu_throttle_threshold`, so a test
-/// can engage foreground pressure without restating the threshold. Nothing
-/// outside tests assumes a peak: the live path sizes its response from the
-/// score it actually measured.
+/// A `cpu_score` above any sane threshold, for tests that engage pressure.
 #[cfg(test)]
 pub(crate) const PEAK_CPU_PCT: f64 = 90.0;
 

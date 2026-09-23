@@ -31,18 +31,7 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
-    /// When true, enables fair two-phase scheduling for reads: groups whose
-    /// current-minute RU rate exceeds their historical baseline are placed in
-    /// phase 1 (deprioritised in the yatp priority queue) relative to groups
-    /// within their baseline (phase 0). Protects sustained workloads from
-    /// sudden traffic spikes without hard-rejecting requests.
-    ///
-    /// Requires `readpool.unified.auto-adjust-pool-size` to be enabled, which
-    /// is *not* the default. A group is deprioritised while the unified read
-    /// pool is scaled in and released once the pool recovers to its configured
-    /// size, so with auto-adjustment off the pool never moves and no group is
-    /// ever deprioritised. This is not rejected at config load, for backward
-    /// compatibility, so enabling this alone silently has no effect.
+    /// Two-phase read scheduling. Needs readpool.unified.auto-adjust-pool-size.
     pub enable_fair_scheduling: bool,
     /// When true, enables Tier-1 admission control for reads: high-priority
     /// read requests from groups that are over their RU baseline are shed
@@ -72,24 +61,7 @@ pub struct Config {
     /// (SchedTooBusy) rather than delayed. Set to 0 to disable the limit
     /// (unlimited delayed requests). Default: 10_000.
     pub admission_max_delayed_count: u64,
-    /// RU charged to a group for every request that arrives, on top of the CPU
-    /// that request's execution consumes.
-    ///
-    /// Charged at gRPC handler entry, before admission control, so a rejected
-    /// request pays it too. That is the point: a rejection consumes no read
-    /// pool CPU, so without this it is free, and throttling a group drops its
-    /// measured RU, which relaxes the throttle while the group keeps loading
-    /// the node. No request is free in reality -- each costs the gRPC
-    /// transport a message in and a message out, which resource control
-    /// cannot otherwise see. Foreground RU is CPU microseconds, so this is in
-    /// microseconds. Set to 0 to disable.
-    ///
-    /// The default is taken from published gRPC performance benchmarks: a
-    /// tuned server costs on the order of 45-65us of CPU for a small unary
-    /// call on one allocated core (grpc_bench). That is a floor, not this
-    /// cluster's real cost -- measured client-attributable gRPC CPU is nearer
-    /// 140us per request -- chosen so this term stays small beside the ~180us
-    /// a read already consumes in the read pool.
+    /// RU per arriving request, charged at handler entry so rejections pay.
     pub request_base_cost_micros: u64,
 }
 
@@ -181,9 +153,7 @@ impl Config {
             .into());
         }
 
-        // Arrival is a fraction of a request's cost, never a multiple of one.
-        // The cap keeps a fat-fingered value from swamping measured execution
-        // CPU, which would throttle every group by request rate alone.
+        // A cap: arrival is a fraction of a request's cost, not a multiple.
         if self.request_base_cost_micros > MAX_REQUEST_BASE_COST_MICROS {
             return Err(format!(
                 "resource-control.request-base-cost-micros must not exceed {}, but got {}",
@@ -200,14 +170,10 @@ impl Config {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NoisyDetection {
-    /// Blame the groups furthest above their own quiet-window baseline. Picks
-    /// out the group that *changed*, so a tenant that is simply large is not
-    /// blamed for an overload someone else caused.
+    /// Blame the group furthest above its own baseline: the one that changed.
     #[default]
     Baseline,
-    /// Blame the groups consuming most right now, ignoring history. No
-    /// baseline to go stale or to be measured wrong, but a tenant that is
-    /// legitimately the largest is the one blamed every time.
+    /// Blame the largest consumer right now, ignoring history.
     CurrentUsage,
 }
 
@@ -314,9 +280,7 @@ impl ResourceContrlCfgMgr {
 impl ConfigManager for ResourceContrlCfgMgr {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         let cfg_str = format!("{:?}", change);
-        // `ConfigController::update` already validated the whole TikvConfig,
-        // including this submodule, before dispatching. Values the hot path
-        // caches outside this lock are picked up by the next control tick.
+        // Validated upstream; cached copies follow on the next tick.
         let res = self.config.update(|c| c.update(change));
         if res.is_ok() {
             tikv_util::info!("update resource control config"; "change" => cfg_str);
