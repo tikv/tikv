@@ -58,32 +58,28 @@ impl FmSketch {
     }
 
     pub fn insert_hash_value(&mut self, hash_val: u64) {
-        // If the hashed value is already covered by the mask, we can skip it.
-        // This is because the number of trailing zeroes in the hashed value is less
-        // than the mask.
-        if (hash_val & self.mask) != 0 {
+        if hash_val & self.mask != 0 {
             return;
         }
-        // Put the hashed value into the hashset.
         self.hash_set.insert(hash_val);
-        // We track the unique hashed values level by level to ensure a minimum count of
-        // distinct values at each level. This way, the final estimation is less
-        // likely to be skewed by outliers.
+        self.shrink();
+    }
+
+    fn shrink(&mut self) {
         if self.hash_set.len() > self.max_size {
-            // If the size of the hashset exceeds the maximum size, move the mask to the
-            // next level.
-            let mask = (self.mask << 1) | 1;
-            // Clean up the hashset by removing the hashed values with trailing zeroes less
-            // than the new mask.
-            self.hash_set.retain(|&x| x & mask == 0);
-            self.mask = mask;
+            self.mask = (self.mask << 1) | 1;
+            self.filter();
         }
+    }
+
+    fn filter(&mut self) {
+        self.hash_set.retain(|&x| x & self.mask == 0);
     }
 
     pub fn merge(&mut self, other: &FmSketch) {
         if self.mask < other.mask {
             self.mask = other.mask;
-            self.hash_set.retain(|&x| x & self.mask == 0);
+            self.filter();
         }
         for hash in &other.hash_set {
             self.insert_hash_value(*hash);
