@@ -23,7 +23,9 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, charge_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -1385,25 +1387,6 @@ macro_rules! make_error_response_common {
         };
         COPR_REQ_ERROR.with_label_values(&[$tag]).inc();
     }};
-}
-
-/// Charges the response size of a background request to the background egress
-/// token bucket, so that a large background scan cannot take the whole outbound
-/// network allowance of the node from foreground reads.
-///
-/// This only builds debt, it never sleeps here: the response buffer and the
-/// read-pool slot are released as usual, and the next background request pays
-/// the debt at the admission gate. Foreground requests are not charged, and the
-/// call is a no-op unless `resource-control.bg-egress-limit` is set.
-pub(super) fn charge_background_egress(
-    resource_limiter: &Option<Arc<ResourceLimiter>>,
-    resp_size: u64,
-) {
-    if let Some(limiter) = resource_limiter {
-        if limiter.is_background() {
-            limiter.consume_egress(resp_size);
-        }
-    }
 }
 
 pub(super) fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
