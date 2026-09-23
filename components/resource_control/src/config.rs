@@ -31,7 +31,6 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
-    /// Two-phase read scheduling. Needs readpool.unified.auto-adjust-pool-size.
     pub enable_fair_scheduling: bool,
     /// When true, enables Tier-1 admission control for reads: high-priority
     /// read requests from groups that are over their RU baseline are shed
