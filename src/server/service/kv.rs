@@ -233,138 +233,6 @@ fn validate_resolve_lock_req(req: &ResolveLockRequest) -> Option<&'static str> {
     None
 }
 
-fn batch_txn_protocol_error(
-    req: &batch_commands_request::Request,
-    caller: CallerInfo<'_>,
-    admission_config: &TxnProtocolAdmissionConfig,
-) -> Option<batch_commands_response::Response> {
-    macro_rules! reject {
-        ($request:expr, $response:ident, $command:ident, $variant:path) => {
-            invalid_txn_request_response($request, caller, TxnRpcCommand::$command)
-                .map(|response| batch_commands_response::Response {
-                    cmd: Some($variant(response)),
-                    ..Default::default()
-                })
-                .or_else(|| {
-                    check_txn_protocol_admission(
-                        $request.get_context(),
-                        caller,
-                        TxnRpcCommand::$command,
-                        admission_config,
-                    )
-                    .map(|error| {
-                        let mut response = $response::default();
-                        response.set_region_error(error);
-                        batch_commands_response::Response {
-                            cmd: Some($variant(response)),
-                            ..Default::default()
-                        }
-                    })
-                })
-        };
-    }
-
-    match req.cmd.as_ref()? {
-        batch_commands_request::request::Cmd::Get(request) => reject!(
-            request,
-            GetResponse,
-            get,
-            batch_commands_response::response::Cmd::Get
-        ),
-        batch_commands_request::request::Cmd::Scan(request) => reject!(
-            request,
-            ScanResponse,
-            scan,
-            batch_commands_response::response::Cmd::Scan
-        ),
-        batch_commands_request::request::Cmd::BatchGet(request) => reject!(
-            request,
-            BatchGetResponse,
-            batch_get,
-            batch_commands_response::response::Cmd::BatchGet
-        ),
-        batch_commands_request::request::Cmd::ScanLock(request) => reject!(
-            request,
-            ScanLockResponse,
-            scan_lock,
-            batch_commands_response::response::Cmd::ScanLock
-        ),
-        batch_commands_request::request::Cmd::DeleteRange(request) => reject!(
-            request,
-            DeleteRangeResponse,
-            delete_range,
-            batch_commands_response::response::Cmd::DeleteRange
-        ),
-        batch_commands_request::request::Cmd::Prewrite(request) => reject!(
-            request,
-            PrewriteResponse,
-            prewrite,
-            batch_commands_response::response::Cmd::Prewrite
-        ),
-        batch_commands_request::request::Cmd::PessimisticLock(request) => reject!(
-            request,
-            PessimisticLockResponse,
-            pessimistic_lock,
-            batch_commands_response::response::Cmd::PessimisticLock
-        ),
-        batch_commands_request::request::Cmd::PessimisticRollback(request) => reject!(
-            request,
-            PessimisticRollbackResponse,
-            pessimistic_rollback,
-            batch_commands_response::response::Cmd::PessimisticRollback
-        ),
-        batch_commands_request::request::Cmd::BatchRollback(request) => reject!(
-            request,
-            BatchRollbackResponse,
-            batch_rollback,
-            batch_commands_response::response::Cmd::BatchRollback
-        ),
-        batch_commands_request::request::Cmd::ResolveLock(request) => reject!(
-            request,
-            ResolveLockResponse,
-            resolve_lock,
-            batch_commands_response::response::Cmd::ResolveLock
-        ),
-        batch_commands_request::request::Cmd::Commit(request) => reject!(
-            request,
-            CommitResponse,
-            commit,
-            batch_commands_response::response::Cmd::Commit
-        ),
-        batch_commands_request::request::Cmd::Cleanup(request) => reject!(
-            request,
-            CleanupResponse,
-            cleanup,
-            batch_commands_response::response::Cmd::Cleanup
-        ),
-        batch_commands_request::request::Cmd::TxnHeartBeat(request) => reject!(
-            request,
-            TxnHeartBeatResponse,
-            txn_heart_beat,
-            batch_commands_response::response::Cmd::TxnHeartBeat
-        ),
-        batch_commands_request::request::Cmd::CheckTxnStatus(request) => reject!(
-            request,
-            CheckTxnStatusResponse,
-            check_txn_status,
-            batch_commands_response::response::Cmd::CheckTxnStatus
-        ),
-        batch_commands_request::request::Cmd::CheckSecondaryLocks(request) => reject!(
-            request,
-            CheckSecondaryLocksResponse,
-            check_secondary_locks,
-            batch_commands_response::response::Cmd::CheckSecondaryLocks
-        ),
-        batch_commands_request::request::Cmd::Coprocessor(request) => reject!(
-            request,
-            Response,
-            coprocessor,
-            batch_commands_response::response::Cmd::Coprocessor
-        ),
-        _ => None,
-    }
-}
-
 trait TxnRequestValidation {
     type Response: Default;
 
@@ -698,10 +566,34 @@ macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, txn = $command: ident) => {
+        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail, txn = $command);
+    };
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt $(, txn = $command: ident)?) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             reject_if_cluster_id_mismatch!(req, self, ctx, sink);
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
+            $(
+                if let Some(response) = invalid_txn_request_response(
+                    &req,
+                    CallerInfo::Rpc(&ctx),
+                    TxnRpcCommand::$command,
+                ) {
+                    ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
+                    return;
+                }
+                if let Some(error) = check_txn_protocol_admission(
+                    req.get_context(),
+                    CallerInfo::Rpc(&ctx),
+                    TxnRpcCommand::$command,
+                    &self.txn_protocol_admission,
+                ) {
+                    let mut response = $resp_ty::default();
+                    response.set_region_error(error);
+                    ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
+                    return;
+                }
+            )?
             let begin_instant = Instant::now();
 
             let source = req.get_context().get_request_source().to_owned();
@@ -740,64 +632,6 @@ macro_rules! handle_request {
     }
 }
 
-macro_rules! handle_txn_request {
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $command: ident) => {
-        handle_txn_request!($fn_name, $future_name, $req_ty, $resp_ty, $command, no_time_detail);
-    };
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $command: ident, $time_detail: tt) => {
-        fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-            forward_unary!(self.proxy, $fn_name, ctx, req, sink);
-            if let Some(response) = invalid_txn_request_response(
-                &req,
-                CallerInfo::Rpc(&ctx),
-                TxnRpcCommand::$command,
-            ) {
-                ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
-                return;
-            }
-            if let Some(error) = check_txn_protocol_admission(
-                req.get_context(),
-                CallerInfo::Rpc(&ctx),
-                TxnRpcCommand::$command,
-                &self.txn_protocol_admission,
-            ) {
-                let mut response = $resp_ty::default();
-                response.set_region_error(error);
-                ctx.spawn(sink.success(response).unwrap_or_else(|_| {}),);
-                return;
-            }
-            let begin_instant = Instant::now();
-            let source = req.get_context().get_request_source().to_owned();
-            let resource_control_ctx = req.get_context().get_resource_control_context();
-            let mut resource_group_priority = ResourcePriority::unknown;
-            if let Some(resource_manager) = &self.resource_manager {
-                resource_manager.consume_penalty(resource_control_ctx);
-                resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
-            }
-            GRPC_RESOURCE_GROUP_COUNTER_VEC
-                .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
-                .inc();
-            let resp = $future_name(&self.storage, req);
-            let task = async move {
-                let resp = resp.await?;
-                let elapsed = begin_instant.saturating_elapsed();
-                set_total_time!(resp, elapsed, $time_detail);
-                sink.success(resp).await?;
-                GRPC_MSG_HISTOGRAM_STATIC.$fn_name.get(resource_group_priority).observe(elapsed.as_secs_f64());
-                record_request_source_metrics(source, elapsed);
-                ServerResult::Ok(())
-            }
-            .map_err(|e| {
-                log_net_error!(e, "kv rpc failed"; "request" => stringify!($fn_name));
-                GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
-            })
-            .map(|_| ());
-            ctx.spawn(task);
-        }
-    }
-}
-
 macro_rules! set_total_time {
     ($resp:ident, $duration:expr,no_time_detail) => {};
     ($resp:ident, $duration:expr,has_time_detail) => {
@@ -814,129 +648,129 @@ macro_rules! set_total_time {
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
-    handle_txn_request!(
+    handle_request!(
         kv_get,
         future_get,
         GetRequest,
         GetResponse,
-        get,
-        has_time_detail
+        has_time_detail,
+        txn = get
     );
-    handle_txn_request!(kv_scan, future_scan, ScanRequest, ScanResponse, scan);
-    handle_txn_request!(
+    handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse, txn = scan);
+    handle_request!(
         kv_prewrite,
         future_prewrite,
         PrewriteRequest,
         PrewriteResponse,
-        prewrite,
-        has_time_detail
+        has_time_detail,
+        txn = prewrite
     );
-    handle_txn_request!(
+    handle_request!(
         kv_pessimistic_lock,
         future_acquire_pessimistic_lock,
         PessimisticLockRequest,
         PessimisticLockResponse,
-        pessimistic_lock,
-        has_time_detail
+        has_time_detail,
+        txn = pessimistic_lock
     );
-    handle_txn_request!(
+    handle_request!(
         kv_pessimistic_rollback,
         future_pessimistic_rollback,
         PessimisticRollbackRequest,
         PessimisticRollbackResponse,
-        pessimistic_rollback,
-        has_time_detail
+        has_time_detail,
+        txn = pessimistic_rollback
     );
-    handle_txn_request!(
+    handle_request!(
         kv_commit,
         future_commit,
         CommitRequest,
         CommitResponse,
-        commit,
-        has_time_detail
+        has_time_detail,
+        txn = commit
     );
-    handle_txn_request!(
+    handle_request!(
         kv_cleanup,
         future_cleanup,
         CleanupRequest,
         CleanupResponse,
-        cleanup
+        txn = cleanup
     );
-    handle_txn_request!(
+    handle_request!(
         kv_batch_get,
         future_batch_get,
         BatchGetRequest,
         BatchGetResponse,
-        batch_get
+        txn = batch_get
     );
-    handle_txn_request!(
+    handle_request!(
         kv_batch_rollback,
         future_batch_rollback,
         BatchRollbackRequest,
         BatchRollbackResponse,
-        batch_rollback,
-        has_time_detail
+        has_time_detail,
+        txn = batch_rollback
     );
-    handle_txn_request!(
+    handle_request!(
         kv_txn_heart_beat,
         future_txn_heart_beat,
         TxnHeartBeatRequest,
         TxnHeartBeatResponse,
-        txn_heart_beat,
-        has_time_detail
+        has_time_detail,
+        txn = txn_heart_beat
     );
-    handle_txn_request!(
+    handle_request!(
         kv_check_txn_status,
         future_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse,
-        check_txn_status,
-        has_time_detail
+        has_time_detail,
+        txn = check_txn_status
     );
-    handle_txn_request!(
+    handle_request!(
         kv_check_secondary_locks,
         future_check_secondary_locks,
         CheckSecondaryLocksRequest,
         CheckSecondaryLocksResponse,
-        check_secondary_locks,
-        has_time_detail
+        has_time_detail,
+        txn = check_secondary_locks
     );
-    handle_txn_request!(
+    handle_request!(
         kv_scan_lock,
         future_scan_lock,
         ScanLockRequest,
         ScanLockResponse,
-        scan_lock,
-        has_time_detail
+        has_time_detail,
+        txn = scan_lock
     );
-    handle_txn_request!(
+    handle_request!(
         kv_resolve_lock,
         future_resolve_lock,
         ResolveLockRequest,
         ResolveLockResponse,
-        resolve_lock,
-        has_time_detail
+        has_time_detail,
+        txn = resolve_lock
     );
-    handle_txn_request!(
+    handle_request!(
         kv_delete_range,
         future_delete_range,
         DeleteRangeRequest,
         DeleteRangeResponse,
-        delete_range
+        txn = delete_range
     );
-    handle_txn_request!(
+    handle_request!(
         mvcc_get_by_key,
         future_mvcc_get_by_key,
         MvccGetByKeyRequest,
         MvccGetByKeyResponse,
-        mvcc_get_by_key
+        txn = mvcc_get_by_key
     );
-    handle_txn_request!(
+    handle_request!(
         mvcc_get_by_start_ts,
         future_mvcc_get_by_start_ts,
         MvccGetByStartTsRequest,
         MvccGetByStartTsResponse,
-        mvcc_get_by_start_ts
+        txn = mvcc_get_by_start_ts
     );
     handle_request!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
     handle_request!(
@@ -1600,29 +1434,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                // Keep cluster-ID strictness ahead of the transaction-protocol
-                // checks, so a child request addressed to another cluster
-                // follows the same stream-failing path as the unary RPCs
-                // instead of receiving a per-request protocol or validation
-                // error response while the stream stays alive.
-                if batch_request_matches_cluster_id(&req, cluster_id) {
-                    if let Some(resp) = batch_txn_protocol_error(
-                        &req,
-                        CallerInfo::Resolved(&peer),
-                        &txn_protocol_admission,
-                    ) {
-                        response_batch_commands_request(
-                            id,
-                            future::ok(resp),
-                            tx.clone(),
-                            Instant::now(),
-                            GrpcTypeKind::invalid,
-                            String::default(),
-                            ResourcePriority::unknown,
-                        );
-                        continue;
-                    }
-                }
                 if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
                     handle_batch_commands_request(
                         cluster_id,
@@ -1635,6 +1446,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         req,
                         &tx,
                         &resource_manager,
+                        &txn_protocol_admission,
                     )
                 {
                     let e = RpcStatus::with_message(
@@ -1642,9 +1454,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         server_err.to_string(),
                     );
                     return future::err(GrpcError::RpcFailure(e));
-                }
-                if let Some(batch) = batcher.as_mut() {
-                    batch.maybe_commit(&storage, &tx);
                 }
             }
             if let Some(batch) = batcher {
@@ -1898,37 +1707,6 @@ fn response_batch_commands_request<F, T>(
     poll_future_notify(task);
 }
 
-/// Returns whether a BatchCommands child request carries a cluster ID that
-/// matches `cluster_id`. A missing or zero cluster ID is treated as unknown and
-/// therefore admissible, which is the same rule used by
-/// `handle_cluster_id_mismatch!` and `reject_if_cluster_id_mismatch!`.
-fn batch_request_matches_cluster_id(
-    req: &batch_commands_request::Request,
-    cluster_id: u64,
-) -> bool {
-    let ctx = match req.cmd.as_ref() {
-        Some(batch_commands_request::request::Cmd::Get(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::Scan(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::BatchGet(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::ScanLock(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::DeleteRange(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::Prewrite(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::BatchRollback(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::ResolveLock(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::Commit(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::Cleanup(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::CheckSecondaryLocks(req)) => req.get_context(),
-        Some(batch_commands_request::request::Cmd::Coprocessor(req)) => req.get_context(),
-        _ => return true,
-    };
-    let req_cluster_id = ctx.get_cluster_id();
-    req_cluster_id == 0 || req_cluster_id == cluster_id
-}
-
 // If error is returned, there could be some unexpected errors like cluster id
 // mismatch.
 fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
@@ -1942,6 +1720,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
     resource_manager: &Option<Arc<ResourceGroupManager>>,
+    txn_protocol_admission: &TxnProtocolAdmissionConfig,
 ) -> Result<(), Error> {
     macro_rules! handle_cluster_id_mismatch {
         ($cluster_id:expr, $req:expr) => {
@@ -1969,8 +1748,46 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         };
     }
 
+    macro_rules! reject_txn_request {
+        ($req:expr, $response:ident, $command:ident, $variant:ident) => {
+            if let Some(response) = invalid_txn_request_response(
+                &$req,
+                CallerInfo::Resolved(peer),
+                TxnRpcCommand::$command,
+            )
+            .or_else(|| {
+                check_txn_protocol_admission(
+                    $req.get_context(),
+                    CallerInfo::Resolved(peer),
+                    TxnRpcCommand::$command,
+                    txn_protocol_admission,
+                )
+                .map(|error| {
+                    let mut response = $response::default();
+                    response.set_region_error(error);
+                    response
+                })
+            }) {
+                let response = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::$variant(response)),
+                    ..Default::default()
+                };
+                response_batch_commands_request(
+                    id,
+                    future::ok(response),
+                    tx.clone(),
+                    Instant::now(),
+                    GrpcTypeKind::invalid,
+                    String::default(),
+                    ResourcePriority::unknown,
+                );
+                return Ok(());
+            }
+        };
+    }
+
     macro_rules! handle_cmd {
-        ($($cmd: ident, $future_fn: ident ( $($arg: expr),* ), $metric_name: ident;)*) => {
+        ($($cmd: ident, $future_fn: ident ( $($arg: expr),* ), $metric_name: ident $(, txn = $txn_command:ident : $response:ident)?;)*) => {
             match req.cmd {
                 None => {
                     // For some invalid requests.
@@ -1980,6 +1797,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    reject_txn_request!(req, GetResponse, get, Get);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -2029,6 +1847,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    reject_txn_request!(req, Response, coprocessor, Coprocessor);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -2076,6 +1895,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    $(reject_txn_request!(req, $response, $txn_command, $cmd);)?
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -2098,19 +1918,19 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     }
 
     handle_cmd! {
-        Scan, future_scan(storage), kv_scan;
-        Prewrite, future_prewrite(storage), kv_prewrite;
-        Commit, future_commit(storage), kv_commit;
-        Cleanup, future_cleanup(storage), kv_cleanup;
-        BatchGet, future_batch_get(storage), kv_batch_get;
-        BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
-        TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
-        CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
-        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks;
-        ScanLock, future_scan_lock(storage), kv_scan_lock;
-        ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
+        Scan, future_scan(storage), kv_scan, txn = scan: ScanResponse;
+        Prewrite, future_prewrite(storage), kv_prewrite, txn = prewrite: PrewriteResponse;
+        Commit, future_commit(storage), kv_commit, txn = commit: CommitResponse;
+        Cleanup, future_cleanup(storage), kv_cleanup, txn = cleanup: CleanupResponse;
+        BatchGet, future_batch_get(storage), kv_batch_get, txn = batch_get: BatchGetResponse;
+        BatchRollback, future_batch_rollback(storage), kv_batch_rollback, txn = batch_rollback: BatchRollbackResponse;
+        TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat, txn = txn_heart_beat: TxnHeartBeatResponse;
+        CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status, txn = check_txn_status: CheckTxnStatusResponse;
+        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks, txn = check_secondary_locks: CheckSecondaryLocksResponse;
+        ScanLock, future_scan_lock(storage), kv_scan_lock, txn = scan_lock: ScanLockResponse;
+        ResolveLock, future_resolve_lock(storage), kv_resolve_lock, txn = resolve_lock: ResolveLockResponse;
         Gc, future_gc(), kv_gc;
-        DeleteRange, future_delete_range(storage), kv_delete_range;
+        DeleteRange, future_delete_range(storage), kv_delete_range, txn = delete_range: DeleteRangeResponse;
         PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
         FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
         BufferBatchGet, future_buffer_batch_get(storage), kv_buffer_batch_get;
@@ -2124,11 +1944,14 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
-        PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
-        PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
+        PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock, txn = pessimistic_lock: PessimisticLockResponse;
+        PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback, txn = pessimistic_rollback: PessimisticRollbackResponse;
         BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
     }
 
+    if let Some(batch) = batcher.as_mut() {
+        batch.maybe_commit(storage, tx);
+    }
     Ok(())
 }
 
@@ -3443,36 +3266,6 @@ mod tests {
         txn_info.set_txn(0);
         req.mut_txn_infos().push(txn_info);
         assert_eq!(validate_resolve_lock_req(&req), Some("zero_txn_info"));
-    }
-
-    #[test]
-    fn test_batch_request_matches_cluster_id() {
-        const CLUSTER_ID: u64 = 42;
-        let build_req = |cluster_id: u64| {
-            let mut get = GetRequest::default();
-            get.mut_context().cluster_id = cluster_id;
-            batch_commands_request::Request {
-                cmd: Some(batch_commands_request::request::Cmd::Get(get)),
-                ..Default::default()
-            }
-        };
-
-        // A missing or zero cluster ID is unknown and therefore admissible.
-        assert!(batch_request_matches_cluster_id(&build_req(0), CLUSTER_ID));
-        assert!(batch_request_matches_cluster_id(
-            &build_req(CLUSTER_ID),
-            CLUSTER_ID
-        ));
-        assert!(!batch_request_matches_cluster_id(
-            &build_req(CLUSTER_ID + 1),
-            CLUSTER_ID
-        ));
-        // A child request without a command has an empty context, so its
-        // cluster ID is unknown and therefore admissible as well.
-        assert!(batch_request_matches_cluster_id(
-            &batch_commands_request::Request::default(),
-            CLUSTER_ID
-        ));
     }
 
     #[test]
