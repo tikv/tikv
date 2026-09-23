@@ -193,13 +193,15 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         read_size += column_vals[i].len();
                     }
                     collector.mut_base().count += 1;
-                    collector.collect_column_group(
+                    let base = collector.mut_base();
+                    base.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
                         &self.columns_info,
                         &self.column_groups,
                     );
-                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    base.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    collector.sampling(&column_vals);
                 }
             }
 
@@ -246,19 +248,6 @@ trait RowSampleCollector: Any + Send {
     /// the same analyze request, so they always have the same concrete type
     /// and implementations may downcast `other` infallibly.
     fn merge_collector(&mut self, other: Box<dyn RowSampleCollector>);
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    );
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    );
     fn sampling(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
     #[cfg(test)]
@@ -474,30 +463,6 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         self.base.merge_from(&mut other.base);
     }
 
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    ) {
-        self.base.collect_column_group(
-            columns_val,
-            collation_keys_val,
-            columns_info,
-            column_groups,
-        );
-    }
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
-        self.sampling(columns_val);
-    }
     fn sampling(&mut self, data: &[Vec<u8>]) {
         let cur_rng = self.base.rng.gen_range(0.0, 1.0);
         if cur_rng >= self.sample_rate {
@@ -585,32 +550,6 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
 
         other.base.release_reported_memory_usage();
         self.base.merge_from(&mut other.base);
-    }
-
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    ) {
-        self.base.collect_column_group(
-            columns_val,
-            collation_keys_val,
-            columns_info,
-            column_groups,
-        );
-    }
-
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
-        self.sampling(columns_val);
     }
 
     fn sampling(&mut self, data: &[Vec<u8>]) {
