@@ -1579,15 +1579,13 @@ mod tests {
             5.6 * MICROS_PER_SEC,
         );
 
-        // Pressure = 106 (>= threshold * 1.5 = 105): pressure_ratio clamped to 1.0 →
-        // floor.
+        // Pressure clamped to 1.0 (>= threshold * 1.5), so: the floor.
         compaction_pending_bytes_ratio.store(106, Ordering::Relaxed);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(limiter.get_write_io_limiter().get_rate_limit(), floor);
 
-        // Pressure drops to 0 (< threshold): one THROTTLE_INCREASE_FACTOR step from
-        // floor.
+        // Pressure 0 (< threshold): one increase step up from the floor.
         compaction_pending_bytes_ratio.store(0, Ordering::Relaxed);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
