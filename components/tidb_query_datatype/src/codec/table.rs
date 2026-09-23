@@ -234,13 +234,15 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
     key
 }
 
-// `decode_index_key` decodes datums from an index key.
+// `decode_index_key` decodes datums from an index key. It transparently
+// handles descending-order columns (pingcap/tidb#2519) via
+// `decode_one_with_desc`, so callers do not need per-column desc metadata.
 pub fn decode_index_key(
     ctx: &mut EvalContext,
     encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
-    let mut buf = &encoded[PREFIX_LEN + ID_LEN..];
+    let mut buf: &[u8] = &encoded[PREFIX_LEN + ID_LEN..];
     let mut res = vec![];
 
     for info in infos {
@@ -250,9 +252,10 @@ pub fn decode_index_key(
                 log_wrappers::Value::key(encoded)
             ));
         }
-        let mut v = buf.read_datum()?;
+        let (mut v, rem) = datum::decode_one_with_desc(buf)?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
+        buf = rem;
     }
 
     Ok(res)
