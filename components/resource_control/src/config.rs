@@ -33,7 +33,9 @@ pub struct Config {
     /// background tasks on this node, aggregated over all background requests.
     /// This bounds the outbound bandwidth a large background scan takes from
     /// foreground reads, no matter how many clients scan the node at the same
-    /// time. Set to 0 (the default) to disable egress throttling.
+    /// time. It covers unary coprocessor and transactional KV read responses;
+    /// streaming coprocessor responses are neither charged nor paced. Set to 0
+    /// (the default) to disable egress throttling.
     pub bg_egress_limit: ReadableSize,
     /// When true, enables fair two-phase scheduling for reads: groups whose
     /// current-minute RU rate exceeds their historical baseline are placed in
