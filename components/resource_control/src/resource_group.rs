@@ -1200,9 +1200,13 @@ impl ResourceGroupManager {
                 });
             }
         }
-        survey
-            .candidates
-            .sort_unstable_by(|a, b| b.excess.total_cmp(&a.excess));
+        // Ties break on name: candidates arrive in DashMap order, so without a
+        // second key which of two equal movers is cut would vary per restart.
+        survey.candidates.sort_unstable_by(|a, b| {
+            b.excess
+                .total_cmp(&a.excess)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         survey
     }
 
@@ -3153,7 +3157,25 @@ pub(crate) mod tests {
             seed_tracker(&mgr, name, 80.0, 100.0, t0);
         }
 
-        assert_eq!(mgr.select_noisy_groups(PEAK_CPU_PCT).len(), 1);
+        // Tied on excess, so the name decides, and it decides the same way on
+        // every tick and every restart. The throttle then drops the cut
+        // group's excess, which hands the next tick to the next name.
+        for _ in 0..4 {
+            assert_eq!(
+                mgr.select_noisy_groups(PEAK_CPU_PCT),
+                HashSet::from(["g1".to_owned()]),
+            );
+        }
+
+        // Insertion order does not enter into it either.
+        let mgr = ResourceGroupManager::new(Config::default());
+        for name in ["g4", "g3", "g2", "g1"] {
+            seed_tracker(&mgr, name, 80.0, 100.0, t0);
+        }
+        assert_eq!(
+            mgr.select_noisy_groups(PEAK_CPU_PCT),
+            HashSet::from(["g1".to_owned()]),
+        );
     }
 
     #[test]
