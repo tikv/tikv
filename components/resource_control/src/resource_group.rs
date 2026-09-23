@@ -289,9 +289,6 @@ impl RuTracker {
     }
 
     /// Advances both candidacy counters; only a cleared score wipes them.
-    /// Policy-free by design: each counts a comparison that holds or does not
-    /// regardless of configuration, so `refresh_trackers` never needs to know
-    /// which policy is set. [`candidate_baseline`] picks the one it rests on.
     fn refresh_engagement_ticks(&mut self, burst_factor: f64, loaded: bool, cleared: bool) {
         let current = self.current_rate();
         let has_traffic = current > 0.0;
@@ -300,7 +297,12 @@ impl RuTracker {
         let over_baseline =
             has_traffic && current > self.quiet_baseline.unwrap_or(0.0) * burst_factor;
         Self::step_ticks(&mut self.active_ticks, has_traffic, loaded, cleared);
-        Self::step_ticks(&mut self.over_baseline_ticks, over_baseline, loaded, cleared);
+        Self::step_ticks(
+            &mut self.over_baseline_ticks,
+            over_baseline,
+            loaded,
+            cleared,
+        );
     }
 
     fn step_ticks(ticks: &mut u32, engaged: bool, loaded: bool, cleared: bool) {
@@ -4302,23 +4304,17 @@ pub(crate) mod tests {
         guard.0.over_baseline_ticks = 0;
 
         // Above the threshold: evidence.
-        guard
-            .0
-            .refresh_engagement_ticks(burst_factor, true, false);
+        guard.0.refresh_engagement_ticks(burst_factor, true, false);
         assert_eq!(guard.0.over_baseline_ticks, 1);
 
         // Below the threshold but above the leeway threshold: hold.
-        guard
-            .0
-            .refresh_engagement_ticks(burst_factor, false, false);
+        guard.0.refresh_engagement_ticks(burst_factor, false, false);
         assert_eq!(
             guard.0.over_baseline_ticks, 1,
             "the band between the thresholds must hold, not wipe"
         );
 
-        guard
-            .0
-            .refresh_engagement_ticks(burst_factor, true, false);
+        guard.0.refresh_engagement_ticks(burst_factor, true, false);
         assert!(
             guard.0.over_baseline_ticks >= MIN_ENGAGE_TICKS,
             "so the next loaded tick confirms instead of starting over"
@@ -4333,12 +4329,13 @@ pub(crate) mod tests {
         let burst_factor = 1.0 + mgr.get_config().value().baseline_burst_pct / 100.0;
         let entry = mgr.ru_trackers.get("spike").unwrap();
         let mut guard = entry.lock().unwrap();
-        assert!(guard.0.over_baseline_ticks >= MIN_ENGAGE_TICKS, "fixture starts blamed");
+        assert!(
+            guard.0.over_baseline_ticks >= MIN_ENGAGE_TICKS,
+            "fixture starts blamed"
+        );
 
         // Below leeway the node is fine, so the group is not worth blaming.
-        guard
-            .0
-            .refresh_engagement_ticks(burst_factor, false, true);
+        guard.0.refresh_engagement_ticks(burst_factor, false, true);
         assert_eq!(guard.0.over_baseline_ticks, 0);
     }
 
@@ -4398,12 +4395,13 @@ pub(crate) mod tests {
 
         let entry = mgr.ru_trackers.get("spike").unwrap();
         let mut guard = entry.lock().unwrap();
-        assert!(guard.0.over_baseline_ticks >= MIN_ENGAGE_TICKS, "fixture starts blamed");
+        assert!(
+            guard.0.over_baseline_ticks >= MIN_ENGAGE_TICKS,
+            "fixture starts blamed"
+        );
         // A quiet tick raised its baseline, so this tick is inside target.
         guard.0.quiet_baseline = Some(10_000.0);
-        guard
-            .0
-            .refresh_engagement_ticks(burst_factor, true, false);
+        guard.0.refresh_engagement_ticks(burst_factor, true, false);
         assert_eq!(
             guard.0.over_baseline_ticks, 0,
             "a tick inside the target must clear the count outright"

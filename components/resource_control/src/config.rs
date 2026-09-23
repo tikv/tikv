@@ -319,11 +319,9 @@ mod tests {
             let encoded = ConfigValue::from(policy);
             assert_eq!(NoisyDetection::try_from(encoded).unwrap(), policy);
         }
-        assert!(
-            NoisyDetection::try_from(ConfigValue::String("baseline-fallback".to_owned())).is_err()
-        );
+        // A prefix of a real value must not be accepted.
+        NoisyDetection::try_from(ConfigValue::String("baseline-fallback".to_owned())).unwrap_err();
     }
-
 
     #[test]
     fn test_validate_rejects_out_of_range_cpu_thresholds() {
