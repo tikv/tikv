@@ -256,8 +256,25 @@ fn invalid_txn_request_response<T: TxnRequestValidation>(
     })
 }
 
-macro_rules! txn_request_validation {
-    ($request:ty, $response:ty, $reason:expr, $setter:expr) => {
+macro_rules! impl_txn_request_validation {
+    ($request:ty => $response:ty,no_argument_check) => {
+        impl TxnRequestValidation for $request {
+            type Response = $response;
+
+            fn context(&self) -> &Context {
+                self.get_context()
+            }
+
+            fn invalid_reason(&self) -> Option<&'static str> {
+                None
+            }
+
+            fn set_invalid_error(_: &mut Self::Response, _: KeyError) {
+                unreachable!("requests without argument checks cannot have invalid errors")
+            }
+        }
+    };
+    ($request:ty => $response:ty,reason = $reason:expr,set_error = $setter:expr) => {
         impl TxnRequestValidation for $request {
             type Response = $response;
 
@@ -276,84 +293,71 @@ macro_rules! txn_request_validation {
     };
 }
 
-macro_rules! no_invalid_txn_request {
-    ($request:ty, $response:ty) => {
-        txn_request_validation!($request, $response, |_| None, |_, _| {});
-    };
-}
-
-no_invalid_txn_request!(GetRequest, GetResponse);
-no_invalid_txn_request!(ScanRequest, ScanResponse);
-no_invalid_txn_request!(BatchGetRequest, BatchGetResponse);
-no_invalid_txn_request!(ScanLockRequest, ScanLockResponse);
-no_invalid_txn_request!(DeleteRangeRequest, DeleteRangeResponse);
-no_invalid_txn_request!(MvccGetByKeyRequest, MvccGetByKeyResponse);
-no_invalid_txn_request!(MvccGetByStartTsRequest, MvccGetByStartTsResponse);
-no_invalid_txn_request!(Request, Response);
-txn_request_validation!(
-    PrewriteRequest,
-    PrewriteResponse,
-    |request: &PrewriteRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
-    |response: &mut PrewriteResponse, error| response.set_errors(vec![error].into())
+impl_txn_request_validation!(GetRequest => GetResponse, no_argument_check);
+impl_txn_request_validation!(ScanRequest => ScanResponse, no_argument_check);
+impl_txn_request_validation!(BatchGetRequest => BatchGetResponse, no_argument_check);
+impl_txn_request_validation!(ScanLockRequest => ScanLockResponse, no_argument_check);
+impl_txn_request_validation!(DeleteRangeRequest => DeleteRangeResponse, no_argument_check);
+impl_txn_request_validation!(MvccGetByKeyRequest => MvccGetByKeyResponse, no_argument_check);
+impl_txn_request_validation!(
+    MvccGetByStartTsRequest => MvccGetByStartTsResponse,
+    no_argument_check
 );
-txn_request_validation!(
-    PessimisticLockRequest,
-    PessimisticLockResponse,
-    |request: &PessimisticLockRequest| (request.get_start_version() == 0)
+impl_txn_request_validation!(Request => Response, no_argument_check);
+impl_txn_request_validation!(
+    PrewriteRequest => PrewriteResponse,
+    reason = |request: &PrewriteRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut PrewriteResponse, error| response.set_errors(vec![error].into())
+);
+impl_txn_request_validation!(
+    PessimisticLockRequest => PessimisticLockResponse,
+    reason = |request: &PessimisticLockRequest| (request.get_start_version() == 0)
         .then_some("zero_start_version"),
-    |response: &mut PessimisticLockResponse, error| response.set_errors(vec![error].into())
+    set_error = |response: &mut PessimisticLockResponse, error| response.set_errors(vec![error].into())
 );
-txn_request_validation!(
-    PessimisticRollbackRequest,
-    PessimisticRollbackResponse,
-    |request: &PessimisticRollbackRequest| (request.get_start_version() == 0)
+impl_txn_request_validation!(
+    PessimisticRollbackRequest => PessimisticRollbackResponse,
+    reason = |request: &PessimisticRollbackRequest| (request.get_start_version() == 0)
         .then_some("zero_start_version"),
-    |response: &mut PessimisticRollbackResponse, error| response.set_errors(vec![error].into())
+    set_error = |response: &mut PessimisticRollbackResponse, error| response.set_errors(vec![error].into())
 );
-txn_request_validation!(
-    BatchRollbackRequest,
-    BatchRollbackResponse,
-    |request: &BatchRollbackRequest| (request.get_start_version() == 0)
+impl_txn_request_validation!(
+    BatchRollbackRequest => BatchRollbackResponse,
+    reason = |request: &BatchRollbackRequest| (request.get_start_version() == 0)
         .then_some("zero_start_version"),
-    |response: &mut BatchRollbackResponse, error| response.set_error(error)
+    set_error = |response: &mut BatchRollbackResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    ResolveLockRequest,
-    ResolveLockResponse,
-    validate_resolve_lock_req,
-    |response: &mut ResolveLockResponse, error| response.set_error(error)
+impl_txn_request_validation!(
+    ResolveLockRequest => ResolveLockResponse,
+    reason = validate_resolve_lock_req,
+    set_error = |response: &mut ResolveLockResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    CommitRequest,
-    CommitResponse,
-    |request: &CommitRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
-    |response: &mut CommitResponse, error| response.set_error(error)
+impl_txn_request_validation!(
+    CommitRequest => CommitResponse,
+    reason = |request: &CommitRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut CommitResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    CleanupRequest,
-    CleanupResponse,
-    |request: &CleanupRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
-    |response: &mut CleanupResponse, error| response.set_error(error)
+impl_txn_request_validation!(
+    CleanupRequest => CleanupResponse,
+    reason = |request: &CleanupRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut CleanupResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    TxnHeartBeatRequest,
-    TxnHeartBeatResponse,
-    |request: &TxnHeartBeatRequest| (request.get_start_version() == 0)
+impl_txn_request_validation!(
+    TxnHeartBeatRequest => TxnHeartBeatResponse,
+    reason = |request: &TxnHeartBeatRequest| (request.get_start_version() == 0)
         .then_some("zero_start_version"),
-    |response: &mut TxnHeartBeatResponse, error| response.set_error(error)
+    set_error = |response: &mut TxnHeartBeatResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    CheckTxnStatusRequest,
-    CheckTxnStatusResponse,
-    |request: &CheckTxnStatusRequest| (request.get_lock_ts() == 0).then_some("zero_lock_ts"),
-    |response: &mut CheckTxnStatusResponse, error| response.set_error(error)
+impl_txn_request_validation!(
+    CheckTxnStatusRequest => CheckTxnStatusResponse,
+    reason = |request: &CheckTxnStatusRequest| (request.get_lock_ts() == 0).then_some("zero_lock_ts"),
+    set_error = |response: &mut CheckTxnStatusResponse, error| response.set_error(error)
 );
-txn_request_validation!(
-    CheckSecondaryLocksRequest,
-    CheckSecondaryLocksResponse,
-    |request: &CheckSecondaryLocksRequest| (request.get_start_version() == 0)
+impl_txn_request_validation!(
+    CheckSecondaryLocksRequest => CheckSecondaryLocksResponse,
+    reason = |request: &CheckSecondaryLocksRequest| (request.get_start_version() == 0)
         .then_some("zero_start_version"),
-    |response: &mut CheckSecondaryLocksResponse, error| response.set_error(error)
+    set_error = |response: &mut CheckSecondaryLocksResponse, error| response.set_error(error)
 );
 
 pub trait RaftGrpcMessageFilter: Send + Sync {
