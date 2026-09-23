@@ -285,20 +285,24 @@ impl RuTracker {
         }
     }
 
-    /// The last quiet reading, or zero until there has been one.
-    fn effective_baseline(&self) -> f64 {
-        self.quiet_baseline.unwrap_or(0.0)
-    }
-
     /// Whether this group is over its own burst target right now.
-    fn is_over_burst_target(&self, burst_factor: f64) -> bool {
+    fn is_over_burst_target(&self, burst_factor: f64, policy: NoisyDetection) -> bool {
         let current = self.current_rate();
-        current > 0.0 && current > self.effective_baseline() * burst_factor
+        current > 0.0
+            && policy
+                .gate_baseline(self.quiet_baseline)
+                .is_some_and(|baseline| current > baseline * burst_factor)
     }
 
     /// Advances the candidacy counter; only a cleared score wipes it.
-    fn update_over_baseline_ticks(&mut self, burst_factor: f64, loaded: bool, cleared: bool) {
-        if !self.is_over_burst_target(burst_factor) || cleared {
+    fn update_over_baseline_ticks(
+        &mut self,
+        burst_factor: f64,
+        policy: NoisyDetection,
+        loaded: bool,
+        cleared: bool,
+    ) {
+        if !self.is_over_burst_target(burst_factor, policy) || cleared {
             self.over_baseline_ticks = 0;
         } else if loaded {
             self.over_baseline_ticks = self
@@ -878,6 +882,9 @@ impl ResourceGroupManager {
         let under_pressure = loaded && self.is_bg_cpu_at_floor();
 
         self.refresh_trackers(now, loaded, cleared, quiet);
+        // Every tick, not just loaded ones: otherwise the gauge reads stale on
+        // a healthy node instead of saying what would happen if load arrived.
+        metrics::report_effective_noisy_detection(self.config.value().noisy_detection);
         self.evict_idle_trackers();
         // Written, never cleared here; `reset_group_priorities` clears it.
         if under_pressure {
@@ -892,26 +899,19 @@ impl ResourceGroupManager {
     fn refresh_trackers(&self, now: u64, loaded: bool, cleared: bool, quiet: bool) {
         let cfg = self.config.value();
         let burst_factor = 1.0 + cfg.baseline_burst_pct / 100.0;
-        let usage_based = matches!(cfg.noisy_detection, NoisyDetection::CurrentUsage);
+        let policy = cfg.noisy_detection;
         for entry in &self.ru_trackers {
             let mut guard = entry.lock().unwrap();
             guard.0.advance(now);
             guard.0.refresh_cached_historical_rate(self.start_secs, now);
             // The one place these are sampled, so no double-counting.
             guard.0.refresh_cached_current_rate(now);
-            if usage_based {
-                // Judge on what is consumed now: a zero baseline does it.
-                guard.0.quiet_baseline = Some(0.0);
-            } else {
-                // A zero here is a leftover from `current-usage`; drop it.
-                if guard.0.quiet_baseline == Some(0.0) {
-                    guard.0.quiet_baseline = None;
-                }
-                guard.0.refresh_quiet_baseline(quiet, now);
-            }
+            // Recorded whatever the policy: switching to `baseline` at runtime
+            // then has history to use instead of waiting a window for it.
+            guard.0.refresh_quiet_baseline(quiet, now);
             guard
                 .0
-                .update_over_baseline_ticks(burst_factor, loaded, cleared);
+                .update_over_baseline_ticks(burst_factor, policy, loaded, cleared);
             let name = guard.1.name();
 
             metrics::GROUP_RU_HISTORICAL_RATE
@@ -935,7 +935,7 @@ impl ResourceGroupManager {
     /// The biggest movers, taken until they cover the overshoot.
     fn select_noisy_groups(&self, cpu_score: f64) -> HashSet<String> {
         let cfg = self.config.value();
-        let survey = self.survey_groups(1.0 + cfg.baseline_burst_pct / 100.0);
+        let survey = self.survey_groups(1.0 + cfg.baseline_burst_pct / 100.0, cfg.noisy_detection);
         // Held groups stay named; dropping one would release it.
         let mut noisy = survey.held.clone();
 
@@ -961,11 +961,11 @@ impl ResourceGroupManager {
     }
 
     /// One pass over the trackers. Candidates come back ranked.
-    fn survey_groups(&self, burst_factor: f64) -> GroupSurvey {
+    fn survey_groups(&self, burst_factor: f64, policy: NoisyDetection) -> GroupSurvey {
         let mut survey = GroupSurvey::default();
         for entry in &self.ru_trackers {
             let guard = entry.lock().unwrap();
-            let baseline = guard.0.effective_baseline();
+            let gate_baseline = policy.gate_baseline(guard.0.quiet_baseline);
             let current = guard.0.current_rate();
             // A finite CPU rate limit *is* backpressure: read the limiter.
             let throttled = guard
@@ -983,9 +983,11 @@ impl ResourceGroupManager {
                 survey.relieved += current;
             }
             survey.total_usage += current;
-            // No history means any traffic is over baseline, by design.
-            let over_gate = current > 0.0 && current > baseline * burst_factor;
-            if over_gate && sustained {
+            // None only when the policy bars a group with no baseline yet;
+            // otherwise a missing one reads as zero and everything is excess.
+            let eligible = gate_baseline
+                .filter(|b| sustained && current > 0.0 && current > b * burst_factor);
+            if let Some(baseline) = eligible {
                 survey.candidates.push(Candidate {
                     name: entry.key().clone(),
                     excess: current - baseline,
@@ -2396,9 +2398,12 @@ pub(crate) mod tests {
         let burst_factor = 1.0 + cfg.baseline_burst_pct / 100.0;
         for entry in &mgr.ru_trackers {
             let mut guard = entry.lock().unwrap();
-            guard
-                .0
-                .update_over_baseline_ticks(burst_factor, loaded, cleared);
+            guard.0.update_over_baseline_ticks(
+                burst_factor,
+                cfg.noisy_detection,
+                loaded,
+                cleared,
+            );
         }
         if under_pressure {
             *mgr.noisy_groups.write() = mgr.select_noisy_groups(cpu_score);
@@ -2463,6 +2468,18 @@ pub(crate) mod tests {
             .unwrap()
             .0
             .quiet_baseline
+    }
+
+    /// Undoes the baseline `seed_tracker` grants: a group the node has never
+    /// seen a quiet window for.
+    fn clear_baseline(mgr: &ResourceGroupManager, name: &str) {
+        mgr.ru_trackers
+            .get(name)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .0
+            .quiet_baseline = None;
     }
 
     fn set_backpressure(mgr: &ResourceGroupManager, name: &str, throttle: bool, scheduler: bool) {
@@ -2732,8 +2749,8 @@ pub(crate) mod tests {
         tr.refresh_quiet_baseline(false, window + 10);
         assert_eq!(tr.quiet_baseline, Some(200.0));
         assert_eq!(
-            tr.effective_baseline(),
-            200.0,
+            tr.quiet_baseline,
+            Some(200.0),
             "the clamp-down paths must see the pre-overload value"
         );
 
@@ -2752,17 +2769,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_baseline_is_zero_before_any_quiet_window() {
-        // No sample yet, so judged on raw usage.
+    fn test_a_group_with_no_baseline_is_eligible_only_under_fallback() {
         let mut tr = RuTracker::new(0, 30);
         tr.cached_historical_rate = 400.0;
         tr.refresh_quiet_baseline(false, 0);
         assert_eq!(tr.quiet_baseline, None);
-        assert_eq!(tr.effective_baseline(), 0.0);
-        // Any traffic clears a zero gate, so such a group is always eligible.
         tr.current_bucket.store(10, Ordering::Relaxed);
         tr.refresh_cached_current_rate(1);
-        assert!(tr.is_over_burst_target(1.2));
+
+        assert!(
+            tr.is_over_burst_target(1.2, NoisyDetection::BaselineFallbackCurrentUsage),
+            "no baseline reads as zero, so any traffic clears the gate"
+        );
+        assert!(
+            tr.is_over_burst_target(1.2, NoisyDetection::CurrentUsage),
+            "current-usage ignores baselines outright"
+        );
+        assert!(
+            !tr.is_over_burst_target(1.2, NoisyDetection::Baseline),
+            "strict baseline spares a group it has no history for"
+        );
+
+        // With a baseline recorded, all three agree on the same comparison.
+        tr.quiet_baseline = Some(tr.current_rate() * 2.0);
+        for policy in [
+            NoisyDetection::Baseline,
+            NoisyDetection::BaselineFallbackCurrentUsage,
+        ] {
+            assert!(
+                !tr.is_over_burst_target(1.2, policy),
+                "inside its baseline, whatever the policy"
+            );
+        }
+        assert!(
+            tr.is_over_burst_target(1.2, NoisyDetection::CurrentUsage),
+            "current-usage still judges it on raw usage"
+        );
     }
 
     #[test]
@@ -4045,12 +4087,12 @@ pub(crate) mod tests {
         seed_mover_and_hog(&mgr, t0);
 
         mgr.online_adjust_resource_quota_at(90.0, t0);
-        assert_eq!(baseline_of(&mgr, "big"), Some(0.0));
         assert_eq!(
-            baseline_of(&mgr, "small"),
-            Some(0.0),
-            "the mode discards whatever history the fixture stated"
+            baseline_of(&mgr, "big"),
+            Some(990.0),
+            "the mode ignores history for ranking without discarding it"
         );
+        assert_eq!(baseline_of(&mgr, "small"), Some(10.0));
 
         let noisy = mgr.noisy_groups();
         assert!(
@@ -4058,7 +4100,7 @@ pub(crate) mod tests {
             "the biggest consumer is blamed, not the biggest mover: {noisy:?}"
         );
 
-        // A zero baseline is no exemption: one step off what it consumes.
+        // Ranking ignores the baseline, so this is one step off consumption.
         let limit = limit_of(&mgr, "big");
         assert!(
             (limit - 1000.0 * THROTTLE_DECREASE_FACTOR).abs() < 1.0,
@@ -4068,7 +4110,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_switching_back_to_baseline_drops_the_stated_zero() {
+    fn test_switching_to_baseline_uses_the_history_current_usage_kept() {
         let cfg = Config {
             noisy_detection: NoisyDetection::CurrentUsage,
             ..Default::default()
@@ -4078,9 +4120,10 @@ pub(crate) mod tests {
         seed_mover_and_hog(&mgr, t0);
 
         mgr.online_adjust_resource_quota_at(90.0, t0);
-        assert_eq!(baseline_of(&mgr, "big"), Some(0.0));
+        assert!(mgr.noisy_groups().contains("big"), "biggest consumer first");
 
-        // Switched back mid-episode: the zero must go, `None` is not a zero.
+        // Switched mid-episode: the baseline was recorded all along, so the
+        // new policy judges on it this tick instead of re-learning a window.
         mgr.get_config()
             .update(|c| -> Result<(), ()> {
                 c.noisy_detection = NoisyDetection::Baseline;
@@ -4091,8 +4134,55 @@ pub(crate) mod tests {
 
         assert_eq!(
             baseline_of(&mgr, "big"),
-            None,
-            "the zero was stated by the other mode, not sampled"
+            Some(990.0),
+            "sampled history, not a value the other mode stated"
+        );
+        let entry = mgr.ru_trackers.get("big").unwrap();
+        let guard = entry.lock().unwrap();
+        assert!(
+            !guard
+                .0
+                .is_over_burst_target(1.2, NoisyDetection::Baseline),
+            "sitting on its own baseline, so no longer a candidate"
+        );
+    }
+
+    #[test]
+    fn test_strict_baseline_spares_a_group_with_no_history() {
+        let cfg = Config {
+            noisy_detection: NoisyDetection::Baseline,
+            ..Default::default()
+        };
+        let mgr = ResourceGroupManager::new(cfg);
+        let t0 = RuTracker::now_secs();
+        // Loading the node hard, but with no quiet window behind it.
+        seed_tracker(&mgr, "cold", 0.0, 1000.0, t0);
+        clear_baseline(&mgr, "cold");
+        mgr.set_bg_cpu_at_floor(true);
+
+        mgr.online_adjust_resource_quota_at(90.0, t0);
+        assert!(
+            mgr.noisy_groups().is_empty(),
+            "strict baseline blames nobody it has no history for: {:?}",
+            mgr.noisy_groups()
+        );
+        assert!(limit_of(&mgr, "cold").is_infinite(), "and throttles nobody");
+    }
+
+    #[test]
+    fn test_fallback_blames_a_group_with_no_history() {
+        // Same fixture, default policy: the pre-existing behaviour.
+        let mgr = ResourceGroupManager::default();
+        let t0 = RuTracker::now_secs();
+        seed_tracker(&mgr, "cold", 0.0, 1000.0, t0);
+        clear_baseline(&mgr, "cold");
+        mgr.set_bg_cpu_at_floor(true);
+
+        mgr.online_adjust_resource_quota_at(90.0, t0);
+        assert!(
+            mgr.noisy_groups().contains("cold"),
+            "no baseline reads as zero, so its whole rate is excess: {:?}",
+            mgr.noisy_groups()
         );
     }
 
@@ -4109,7 +4199,12 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .0
-                .update_over_baseline_ticks(burst_factor, true, false)
+                .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                true,
+                false,
+            )
         };
         // Undo the fixture's claim, so the counter starts cold.
         mgr.ru_trackers
@@ -4148,13 +4243,23 @@ pub(crate) mod tests {
         // Above the threshold: evidence.
         guard
             .0
-            .update_over_baseline_ticks(burst_factor, true, false);
+            .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                true,
+                false,
+            );
         assert_eq!(guard.0.over_baseline_ticks, 1);
 
         // Below the threshold but above the leeway threshold: hold.
         guard
             .0
-            .update_over_baseline_ticks(burst_factor, false, false);
+            .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                false,
+                false,
+            );
         assert_eq!(
             guard.0.over_baseline_ticks, 1,
             "the band between the thresholds must hold, not wipe"
@@ -4162,7 +4267,12 @@ pub(crate) mod tests {
 
         guard
             .0
-            .update_over_baseline_ticks(burst_factor, true, false);
+            .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                true,
+                false,
+            );
         assert!(
             guard.0.sustained_over_baseline(),
             "so the next loaded tick confirms instead of starting over"
@@ -4182,7 +4292,12 @@ pub(crate) mod tests {
         // Below leeway the node is fine, so the group is not worth blaming.
         guard
             .0
-            .update_over_baseline_ticks(burst_factor, false, true);
+            .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                false,
+                true,
+            );
         assert_eq!(guard.0.over_baseline_ticks, 0);
     }
 
@@ -4247,7 +4362,12 @@ pub(crate) mod tests {
         guard.0.quiet_baseline = Some(10_000.0);
         guard
             .0
-            .update_over_baseline_ticks(burst_factor, true, false);
+            .update_over_baseline_ticks(
+                burst_factor,
+                NoisyDetection::BaselineFallbackCurrentUsage,
+                true,
+                false,
+            );
         assert_eq!(
             guard.0.over_baseline_ticks, 0,
             "a tick inside the target must clear the count outright"

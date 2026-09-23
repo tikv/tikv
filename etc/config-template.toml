@@ -182,9 +182,17 @@
 ## Value options:
 ## - "baseline". Blame the groups furthest above their own quiet-window baseline,
 ##               so a group that is simply large is not blamed for an overload
-##               that another group caused.
+##               that another group caused. A group whose quiet window has not
+##               elapsed yet has no baseline and is never blamed, so an overload
+##               driven by a group with no history goes unattributed.
+## - "baseline-fallback-current-usage". As "baseline", except a group with no
+##               baseline is judged against zero, so all of its usage counts as
+##               excess and it is ranked on current usage. Keeps a node that has
+##               no history yet, such as one just restarted, protected.
 ## - "current-usage". Blame the largest consumers right now, ignoring history.
-# noisy-detection = "baseline"
+##               Baselines are still recorded, so switching away takes effect
+##               immediately.
+# noisy-detection = "baseline-fallback-current-usage"
 
 ## RU charged to a resource group for every request that arrives, in addition to
 ## the CPU that request's execution consumes, in microseconds.

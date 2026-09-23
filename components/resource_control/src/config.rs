@@ -69,7 +69,7 @@ impl Default for Config {
         Self {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
-            noisy_detection: NoisyDetection::Baseline,
+            noisy_detection: NoisyDetection::BaselineFallbackCurrentUsage,
             bg_cpu_throttle_threshold: 60.0,
             fg_cpu_throttle_threshold: 70.0,
             bg_compaction_pressure_threshold: 70.0,
@@ -170,16 +170,36 @@ impl Config {
 #[serde(rename_all = "kebab-case")]
 pub enum NoisyDetection {
     /// Blame the group furthest above its own baseline: the one that changed.
-    #[default]
+    /// A group with no baseline yet is not a candidate, so an overload nobody
+    /// has history for goes unattributed rather than being pinned on whoever
+    /// is largest.
     Baseline,
+    /// As `Baseline`, except a group with no baseline is judged against zero,
+    /// so any traffic counts as excess and it ranks on current usage.
+    #[default]
+    BaselineFallbackCurrentUsage,
     /// Blame the largest consumer right now, ignoring history.
     CurrentUsage,
+}
+
+impl NoisyDetection {
+    /// The baseline to judge a group against, given the one it has recorded.
+    /// `None` means this policy makes the group ineligible: only `Baseline`
+    /// does that, and only for a group whose quiet window has not elapsed.
+    pub fn gate_baseline(self, quiet_baseline: Option<f64>) -> Option<f64> {
+        match self {
+            Self::Baseline => quiet_baseline,
+            Self::BaselineFallbackCurrentUsage => Some(quiet_baseline.unwrap_or(0.0)),
+            Self::CurrentUsage => Some(0.0),
+        }
+    }
 }
 
 impl fmt::Display for NoisyDetection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match *self {
             Self::Baseline => "baseline",
+            Self::BaselineFallbackCurrentUsage => "baseline-fallback-current-usage",
             Self::CurrentUsage => "current-usage",
         })
     }
@@ -197,6 +217,7 @@ impl TryFrom<ConfigValue> for NoisyDetection {
         if let ConfigValue::String(s) = v {
             match s.as_str() {
                 "baseline" => Ok(Self::Baseline),
+                "baseline-fallback-current-usage" => Ok(Self::BaselineFallbackCurrentUsage),
                 "current-usage" => Ok(Self::CurrentUsage),
                 s => Err(format!("invalid config value: {}", s)),
             }
@@ -297,6 +318,48 @@ mod tests {
     #[test]
     fn test_validate_accepts_defaults() {
         Config::default().validate().unwrap();
+    }
+
+    #[test]
+    fn test_noisy_detection_round_trips_through_config_value() {
+        // The path an online config update takes: a missing arm here silently
+        // rejects the update rather than failing to compile.
+        for policy in [
+            NoisyDetection::Baseline,
+            NoisyDetection::BaselineFallbackCurrentUsage,
+            NoisyDetection::CurrentUsage,
+        ] {
+            let encoded = ConfigValue::from(policy);
+            assert_eq!(NoisyDetection::try_from(encoded).unwrap(), policy);
+        }
+        assert!(
+            NoisyDetection::try_from(ConfigValue::String("baseline-fallback".to_owned())).is_err()
+        );
+    }
+
+    #[test]
+    fn test_gate_baseline_is_what_separates_the_policies() {
+        // Only strict `baseline` bars a group that has no baseline yet.
+        assert_eq!(NoisyDetection::Baseline.gate_baseline(None), None);
+        assert_eq!(
+            NoisyDetection::BaselineFallbackCurrentUsage.gate_baseline(None),
+            Some(0.0)
+        );
+        assert_eq!(NoisyDetection::CurrentUsage.gate_baseline(None), Some(0.0));
+
+        // With one recorded, only `current-usage` still ignores it.
+        assert_eq!(
+            NoisyDetection::Baseline.gate_baseline(Some(42.0)),
+            Some(42.0)
+        );
+        assert_eq!(
+            NoisyDetection::BaselineFallbackCurrentUsage.gate_baseline(Some(42.0)),
+            Some(42.0)
+        );
+        assert_eq!(
+            NoisyDetection::CurrentUsage.gate_baseline(Some(42.0)),
+            Some(0.0)
+        );
     }
 
     #[test]
