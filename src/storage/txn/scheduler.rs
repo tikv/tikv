@@ -1819,6 +1819,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                                     key.to_owned()
                                 })
                             }
+                            // A Raft fallback may overwrite CF_LOCK with a larger
+                            // for_update_ts while an older in-memory lock still exists.
+                            // Remove the stale copy after apply so a delayed rollback
+                            // checks the newer lock and cannot delete it.
+                            Modify::PessimisticLock(key, _) => {
+                                locks.get_mut(key).map(|(_, deleted)| {
+                                    *deleted = true;
+                                    key.to_owned()
+                                })
+                            }
                             _ => None,
                         })
                         .collect::<Vec<_>>()
