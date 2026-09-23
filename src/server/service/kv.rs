@@ -1600,21 +1600,28 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                if let Some(resp) = batch_txn_protocol_error(
-                    &req,
-                    CallerInfo::Resolved(&peer),
-                    &txn_protocol_admission,
-                ) {
-                    response_batch_commands_request(
-                        id,
-                        future::ok(resp),
-                        tx.clone(),
-                        Instant::now(),
-                        GrpcTypeKind::invalid,
-                        String::default(),
-                        ResourcePriority::unknown,
-                    );
-                    continue;
+                // Keep cluster-ID strictness ahead of the transaction-protocol
+                // checks, so a child request addressed to another cluster
+                // follows the same stream-failing path as the unary RPCs
+                // instead of receiving a per-request protocol or validation
+                // error response while the stream stays alive.
+                if batch_request_matches_cluster_id(&req, cluster_id) {
+                    if let Some(resp) = batch_txn_protocol_error(
+                        &req,
+                        CallerInfo::Resolved(&peer),
+                        &txn_protocol_admission,
+                    ) {
+                        response_batch_commands_request(
+                            id,
+                            future::ok(resp),
+                            tx.clone(),
+                            Instant::now(),
+                            GrpcTypeKind::invalid,
+                            String::default(),
+                            ResourcePriority::unknown,
+                        );
+                        continue;
+                    }
                 }
                 if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
                     handle_batch_commands_request(
@@ -1889,6 +1896,37 @@ fn response_batch_commands_request<F, T>(
         };
     };
     poll_future_notify(task);
+}
+
+/// Returns whether a BatchCommands child request carries a cluster ID that
+/// matches `cluster_id`. A missing or zero cluster ID is treated as unknown and
+/// therefore admissible, which is the same rule used by
+/// `handle_cluster_id_mismatch!` and `reject_if_cluster_id_mismatch!`.
+fn batch_request_matches_cluster_id(
+    req: &batch_commands_request::Request,
+    cluster_id: u64,
+) -> bool {
+    let ctx = match req.cmd.as_ref() {
+        Some(batch_commands_request::request::Cmd::Get(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::Scan(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::BatchGet(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::ScanLock(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::DeleteRange(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::Prewrite(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::BatchRollback(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::ResolveLock(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::Commit(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::Cleanup(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::CheckSecondaryLocks(req)) => req.get_context(),
+        Some(batch_commands_request::request::Cmd::Coprocessor(req)) => req.get_context(),
+        _ => return true,
+    };
+    let req_cluster_id = ctx.get_cluster_id();
+    req_cluster_id == 0 || req_cluster_id == cluster_id
 }
 
 // If error is returned, there could be some unexpected errors like cluster id
@@ -3405,6 +3443,36 @@ mod tests {
         txn_info.set_txn(0);
         req.mut_txn_infos().push(txn_info);
         assert_eq!(validate_resolve_lock_req(&req), Some("zero_txn_info"));
+    }
+
+    #[test]
+    fn test_batch_request_matches_cluster_id() {
+        const CLUSTER_ID: u64 = 42;
+        let build_req = |cluster_id: u64| {
+            let mut get = GetRequest::default();
+            get.mut_context().cluster_id = cluster_id;
+            batch_commands_request::Request {
+                cmd: Some(batch_commands_request::request::Cmd::Get(get)),
+                ..Default::default()
+            }
+        };
+
+        // A missing or zero cluster ID is unknown and therefore admissible.
+        assert!(batch_request_matches_cluster_id(&build_req(0), CLUSTER_ID));
+        assert!(batch_request_matches_cluster_id(
+            &build_req(CLUSTER_ID),
+            CLUSTER_ID
+        ));
+        assert!(!batch_request_matches_cluster_id(
+            &build_req(CLUSTER_ID + 1),
+            CLUSTER_ID
+        ));
+        // A child request without a command has an empty context, so its
+        // cluster ID is unknown and therefore admissible as well.
+        assert!(batch_request_matches_cluster_id(
+            &batch_commands_request::Request::default(),
+            CLUSTER_ID
+        ));
     }
 
     #[test]

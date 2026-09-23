@@ -168,6 +168,7 @@ impl ErrorCodeExt for Error {
 }
 
 /// Tags of errors for storage module.
+#[derive(Debug, PartialEq, Eq)]
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
