@@ -72,18 +72,21 @@ impl FmSketch {
         if self.hash_set.len() > self.max_size {
             // If the size of the hashset exceeds the maximum size, move the mask to the
             // next level.
-            let mask = (self.mask << 1) | 1;
+            self.mask = (self.mask << 1) | 1;
             // Clean up the hashset by removing the hashed values with trailing zeroes less
             // than the new mask.
-            self.hash_set.retain(|&x| x & mask == 0);
-            self.mask = mask;
+            self.filter();
         }
+    }
+
+    fn filter(&mut self) {
+        self.hash_set.retain(|&x| x & self.mask == 0);
     }
 
     pub fn merge(&mut self, other: &FmSketch) {
         if self.mask < other.mask {
             self.mask = other.mask;
-            self.hash_set.retain(|&x| x & self.mask == 0);
+            self.filter();
         }
         for hash in &other.hash_set {
             self.insert_hash_value(*hash);
