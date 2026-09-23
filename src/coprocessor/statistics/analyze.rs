@@ -160,6 +160,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
+                collector.mut_base().count += result.logical_rows.len() as u64;
+
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -192,7 +194,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
                     let base = collector.mut_base();
                     base.collect_column_group(
                         &column_vals,
