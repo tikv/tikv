@@ -181,8 +181,9 @@
 ## aggregated over all background requests. Use it to stop a large background scan, such as the
 ## scan phase of a distributed ADD INDEX, from taking the whole outbound network allowance of
 ## the node from foreground reads. It covers unary coprocessor and transactional KV read
-## responses; streaming coprocessor responses are neither charged nor paced. Set to 0 to disable
-## egress throttling.
+## responses; streaming coprocessor responses are neither charged nor paced. It is enforced only
+## for reads served by the unified read pool (`readpool.storage.use-unified-pool` and
+## `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
 # bg-egress-limit = "0B"
 
 [server]
