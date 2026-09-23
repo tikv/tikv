@@ -38,8 +38,11 @@ pub struct FmSketch {
     /// the hashed values with trailing zeroes greater than or equal to the
     /// new mask.
     max_size: usize,
-    /// A set to store unique hashed values.
+    /// All hashes in legacy mode; singleton hashes in sampled mode.
     hash_set: HashSet<u64>,
+    /// None keeps the legacy path free of duplicate tracking. In sampled mode
+    /// the two sets are disjoint and share one mask and capacity bound.
+    repeated: Option<HashSet<u64>>,
 }
 
 impl FmSketch {
@@ -49,7 +52,13 @@ impl FmSketch {
             mask: 0,
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+            repeated: None,
         }
+    }
+
+    pub fn track_duplicates(&mut self) {
+        assert!(self.hash_set.is_empty());
+        self.repeated = Some(HashSet::default());
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
@@ -61,28 +70,53 @@ impl FmSketch {
         if hash_val & self.mask != 0 {
             return;
         }
+        if let Some(repeated) = &mut self.repeated {
+            if repeated.contains(&hash_val) {
+                return;
+            }
+            if self.hash_set.remove(&hash_val) {
+                repeated.insert(hash_val);
+                return;
+            }
+        }
         self.hash_set.insert(hash_val);
         self.shrink();
     }
 
     fn shrink(&mut self) {
-        if self.hash_set.len() > self.max_size {
+        while self.hash_set.len() + self.repeated.as_ref().map_or(0, HashSet::len) > self.max_size
+            && self.mask != u64::MAX
+        {
             self.mask = (self.mask << 1) | 1;
             self.filter();
+            if self.repeated.is_none() {
+                break;
+            }
         }
     }
 
     fn filter(&mut self) {
         self.hash_set.retain(|&x| x & self.mask == 0);
+        if let Some(repeated) = &mut self.repeated {
+            repeated.retain(|&x| x & self.mask == 0);
+        }
     }
 
     pub fn merge(&mut self, other: &FmSketch) {
+        debug_assert_eq!(self.repeated.is_some(), other.repeated.is_some());
         if self.mask < other.mask {
             self.mask = other.mask;
             self.filter();
         }
         for hash in &other.hash_set {
             self.insert_hash_value(*hash);
+        }
+        if let Some(other_repeated) = &other.repeated {
+            for &hash in other_repeated {
+                // Twice also promotes a singleton already present on the left.
+                self.insert_hash_value(hash);
+                self.insert_hash_value(hash);
+            }
         }
     }
 }
@@ -93,6 +127,9 @@ impl From<FmSketch> for tipb::FmSketch {
         proto.set_mask(fm.mask);
         let hash = fm.hash_set.into_iter().collect();
         proto.set_hashset(hash);
+        if let Some(repeated) = fm.repeated {
+            proto.set_multi_hashset(repeated.into_iter().collect());
+        }
         proto
     }
 }
@@ -215,5 +252,29 @@ mod tests {
         receiver.merge(&small);
         assert!(receiver.mask >= small.mask);
         assert!(receiver.hash_set.iter().all(|h| h & receiver.mask == 0));
+
+        // The repeated set must survive both cross-input duplicates and a
+        // higher mask, regardless of which input is merged first.
+        for capacity in [2, 16] {
+            let build = |values: &[u64]| {
+                let mut sketch = FmSketch::new(capacity);
+                sketch.track_duplicates();
+                for &value in values {
+                    sketch.insert_hash_value(value);
+                }
+                sketch
+            };
+            let whole = build(&[0, 2, 2, 4, 8, 0, 6, 8, 8]);
+            let left = build(&[0, 2, 2, 4, 8]);
+            let right = build(&[0, 6, 8, 8]);
+            for (mut first, second) in [(left.clone(), right.clone()), (right, left)] {
+                first.merge(&second);
+                assert_eq!(first.mask, whole.mask);
+                assert_eq!(first.hash_set, whole.hash_set);
+                assert_eq!(first.repeated, whole.repeated);
+                assert!(first.hash_set.len() + first.repeated.as_ref().unwrap().len() <= capacity);
+                assert!(first.hash_set.is_disjoint(first.repeated.as_ref().unwrap()));
+            }
+        }
     }
 }

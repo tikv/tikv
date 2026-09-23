@@ -372,6 +372,7 @@ fn test_analyze_sampling_bernoulli() {
             collector.get_fm_sketch()[0].get_hashset().len(),
             selected as usize
         );
+        assert!(collector.get_fm_sketch()[0].get_multi_hashset().is_empty());
         assert_eq!(collector.get_total_size()[0], 8 * selected);
         assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
         assert_eq!(

@@ -124,7 +124,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             ))
         };
         if self.sampled_ndv {
-            collector.mut_base().ndv_sample_count = Some(0);
+            let base = collector.mut_base();
+            for sketch in &mut base.fm_sketches {
+                sketch.track_duplicates();
+            }
+            base.ndv_sample_count = Some(0);
         }
         collector
     }
@@ -1256,6 +1260,9 @@ mod tests {
         collector.base.null_count[0] = null_count;
         collector.base.total_sizes[0] = total_size;
         collector.base.ndv_sample_count = ndv_sample_count;
+        if ndv_sample_count.is_some() {
+            collector.base.fm_sketches[0].track_duplicates();
+        }
         for hash in ndv_hashes {
             collector.base.fm_sketches[0].insert_hash_value(*hash);
         }
@@ -1268,8 +1275,8 @@ mod tests {
 
     #[test]
     fn test_analyze_bernoulli_sampling_result_merge() {
-        // Sample rows concatenate in either mode. Only sampled NDV reports the
-        // raw number of selected rows.
+        // Sample rows concatenate in either mode. Only sampled NDV keeps
+        // duplicate hashes and the raw number of selected rows.
         for sampled in [false, true] {
             let mut result =
                 test_bernoulli_sampling_result(1, 10, &[1, 3], &[10, 20], sampled.then_some(3));
@@ -1296,8 +1303,12 @@ mod tests {
             assert_eq!(collector.has_ndv_sample_count(), sampled);
             if sampled {
                 assert_eq!(collector.get_ndv_sample_count(), 7);
+                assert_eq!(sorted_hashset(sketch), vec![20, 30]);
+                assert_eq!(sketch.get_multi_hashset(), &[10]);
+            } else {
+                assert_eq!(sorted_hashset(sketch), vec![10, 20, 30]);
+                assert!(sketch.get_multi_hashset().is_empty());
             }
-            assert_eq!(sorted_hashset(sketch), vec![10, 20, 30]);
         }
     }
 }
