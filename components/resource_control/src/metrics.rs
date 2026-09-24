@@ -151,10 +151,44 @@ pub fn deregister_metrics(name: &str) {
 /// Publishes `policy` as the one in force, zeroing the others so a panel that
 /// sums the series cannot show two policies at once after a config change.
 pub fn report_effective_noisy_detection(policy: crate::config::NoisyDetection) {
+    set_effective_noisy_detection(&EFFECTIVE_NOISY_DETECTION, policy);
+}
+
+fn set_effective_noisy_detection(gauge: &IntGaugeVec, policy: crate::config::NoisyDetection) {
     use crate::config::NoisyDetection::*;
     for candidate in [Baseline, BaselineFallbackCurrentUsage, CurrentUsage] {
-        EFFECTIVE_NOISY_DETECTION
+        gauge
             .with_label_values(&[&candidate.to_string()])
             .set(i64::from(candidate == policy));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use prometheus::Opts;
+
+    use super::*;
+    use crate::config::NoisyDetection;
+
+    #[test]
+    fn test_effective_noisy_detection_is_one_hot() {
+        // A private gauge: the global one is written by concurrent tests.
+        let gauge = IntGaugeVec::new(Opts::new("t", "t"), &["policy"]).unwrap();
+        let all = [
+            NoisyDetection::Baseline,
+            NoisyDetection::BaselineFallbackCurrentUsage,
+            NoisyDetection::CurrentUsage,
+        ];
+        // Walk every transition, so a switch away always zeroes the old one.
+        for from in all {
+            for to in all {
+                set_effective_noisy_detection(&gauge, from);
+                set_effective_noisy_detection(&gauge, to);
+                for p in all {
+                    let v = gauge.with_label_values(&[&p.to_string()]).get();
+                    assert_eq!(v, i64::from(p == to), "{} -> {}: {}", from, to, p);
+                }
+            }
+        }
     }
 }
