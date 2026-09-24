@@ -187,8 +187,19 @@ impl PartialOrd for JsonRef<'_> {
                 JsonType::I64 => match right.get_type() {
                     JsonType::I64 => Some(compare(self.get_i64(), right.get_i64())),
                     JsonType::U64 => Some(compare_i64_u64(self.get_i64(), right.get_u64())),
+                    // TiDB negates rather than swapping the operands here:
+                    //
+                    //     cmp = -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
+                    //
+                    // Calling the helper with the double on the left and
+                    // reversing is not the same as calling it with the integer
+                    // on the left. The two agree on every non-NaN input,
+                    // because `compare_f64_precision_loss` is antisymmetric
+                    // there, but for NaN both directions return `Greater`, so
+                    // only the reversal reproduces TiDB's `Less`.
                     JsonType::Double => {
-                        compare_f64_precision_loss(self.get_i64() as f64, right.as_f64().unwrap())
+                        compare_f64_precision_loss(right.as_f64().unwrap(), self.get_i64() as f64)
+                            .map(Ordering::reverse)
                     }
                     _ => unreachable!(),
                 },
@@ -197,8 +208,12 @@ impl PartialOrd for JsonRef<'_> {
                         Some(compare_i64_u64(right.get_i64(), self.get_u64()).reverse())
                     }
                     JsonType::U64 => Some(compare(self.get_u64(), right.get_u64())),
+                    // Negated for the same reason as the `I64` arm above:
+                    //
+                    //     cmp = -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
                     JsonType::Double => {
-                        compare_f64_precision_loss(self.get_u64() as f64, right.as_f64().unwrap())
+                        compare_f64_precision_loss(right.as_f64().unwrap(), self.get_u64() as f64)
+                            .map(Ordering::reverse)
                     }
                     _ => unreachable!(),
                 },
@@ -695,6 +710,141 @@ mod tests {
         heap.push(Json::from_i64(1).unwrap());
         assert_eq!(3, heap.len());
         assert!(heap.pop().is_some());
+    }
+
+    /// TiDB negates on the arms where the integer is the *left* operand
+    /// instead of calling the helper with the operands swapped:
+    ///
+    /// ```go
+    /// case JSONTypeCodeInt64:
+    ///     case JSONTypeCodeFloat64:
+    ///         cmp = -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
+    /// case JSONTypeCodeUint64:
+    ///     case JSONTypeCodeFloat64:
+    ///         cmp = -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
+    /// ```
+    ///
+    /// while the `JSONTypeCodeFloat64`-left arms are *not* negated. For every
+    /// non-NaN input the two forms coincide, because
+    /// `compare_f64_precision_loss` is antisymmetric there. For NaN they do
+    /// not: both directions return `Greater`, so only the reversal gives
+    /// TiDB's answer.
+    ///
+    /// TiDB for `i64(1)` vs `double(NaN)`:
+    /// `-compareFloat64PrecisionLoss(NaN, 1.0)`. Neither `NaN - 1.0 < 1e-8`
+    /// nor `NaN - 1.0 < 0` holds, so the helper returns `1` and the negation
+    /// makes it `-1`, i.e. `Less`.
+    #[test]
+    fn test_cmp_json_nan_integer_left_arms_match_tidb_negation() {
+        let nan = Json::from_f64(f64::NAN).unwrap();
+        let int = Json::from_i64(1).unwrap();
+        let uint = Json::from_u64(1).unwrap();
+
+        // Integer on the left: TiDB negates, so `Less`.
+        assert_eq!(Some(Ordering::Less), int.partial_cmp(&nan));
+        assert_eq!(Some(Ordering::Less), uint.partial_cmp(&nan));
+
+        // Double on the left: TiDB does not negate, so `Greater` - unchanged.
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&int));
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&uint));
+
+        // The two integer-left arms are therefore antisymmetric on NaN, which
+        // they were not before: `compare_f64_precision_loss` reports `Greater`
+        // in *both* directions, so reversing one side is what restores it.
+        assert_eq!(
+            Some(Ordering::Greater),
+            compare_f64_precision_loss(f64::NAN, 1.0)
+        );
+        assert_eq!(
+            Some(Ordering::Greater),
+            compare_f64_precision_loss(1.0, f64::NAN)
+        );
+
+        // The exact Double-vs-Double arm stays non-antisymmetric on NaN, and
+        // deliberately so: TiDB's `compareFloat64` returns `1` in both
+        // directions too, and diverging from the root is the bug this branch
+        // exists to fix.
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&nan));
+        let one = Json::from_f64(1.0).unwrap();
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&one));
+        assert_eq!(Some(Ordering::Greater), one.partial_cmp(&nan));
+
+        // The `unwrap` sites still get an ordering, so nothing panics.
+        assert_eq!(Ordering::Less, int.cmp(&nan));
+        assert_eq!(Ordering::Less, int.as_ref().cmp(&nan.as_ref()));
+        assert!(int != nan);
+    }
+
+    /// The negation is a NaN-only change. For ordinary values the negated form
+    /// and the old swapped-argument form are bit-identical, which is the whole
+    /// justification for making it: no non-NaN comparison, and therefore no
+    /// real query result, moves.
+    #[test]
+    fn test_cmp_json_integer_left_negation_is_nan_only() {
+        let doubles = [
+            -1e300f64,
+            -3.000000001,
+            -1.0,
+            -1e-9,
+            -0.0,
+            0.0,
+            1e-9,
+            0.25,
+            0.25000000000000006,
+            1.0,
+            3.0,
+            3.000000001,
+            9007199254740993.0,
+            1e300,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let ints = [
+            i64::MIN,
+            -9007199254740993,
+            -100,
+            -1,
+            0,
+            1,
+            3,
+            100,
+            9007199254740993,
+            i64::MAX,
+        ];
+        let uints = [0u64, 1, 3, 100, 9007199254740993, u64::MAX];
+
+        for &d in &doubles {
+            let dj = Json::from_f64(d).unwrap();
+
+            for &i in &ints {
+                // The form this commit removed, spelled out.
+                let swapped = compare_f64_precision_loss(i as f64, d);
+                let negated = Json::from_i64(i).unwrap().partial_cmp(&dj);
+                assert_eq!(swapped, negated, "i64 {i} vs double {d}");
+            }
+
+            for &u in &uints {
+                let swapped = compare_f64_precision_loss(u as f64, d);
+                let negated = Json::from_u64(u).unwrap().partial_cmp(&dj);
+                assert_eq!(swapped, negated, "u64 {u} vs double {d}");
+            }
+        }
+
+        // Spot-checks in the terms the issue is written in, so a regression
+        // reads as a behaviour change rather than a helper mismatch.
+        let three = Json::from_i64(3).unwrap();
+        assert_eq!(
+            Some(Ordering::Equal),
+            three.partial_cmp(&Json::from_f64(3.000000001).unwrap())
+        );
+        assert_eq!(
+            Some(Ordering::Less),
+            three.partial_cmp(&Json::from_f64(3.5).unwrap())
+        );
+        assert_eq!(
+            Some(Ordering::Greater),
+            three.partial_cmp(&Json::from_f64(2.5).unwrap())
+        );
     }
 
     #[test]
