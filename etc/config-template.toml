@@ -187,11 +187,20 @@
 ##               driven by a group with no history goes unattributed.
 ## - "baseline-fallback-current-usage". As "baseline", except a group with no
 ##               baseline is judged against zero, so all of its usage counts as
-##               excess and it is ranked on current usage. Keeps a node that has
-##               no history yet, such as one just restarted, protected.
+##               excess and it is ranked on current usage, exactly as under
+##               "current-usage". Only groups that have a baseline are judged
+##               against it. Keeps a group that is ramping up with no history
+##               from hiding as the culprit.
 ## - "current-usage". Blame the largest consumers right now, ignoring history.
 ##               Baselines are still recorded, so switching away takes effect
 ##               immediately.
+##
+## A baseline is taken only after the node's foreground CPU has stayed below
+## 85% of fg-cpu-throttle-threshold (59.5% at the default of 70) for a full
+## historical-usage-window-mins (15 minutes by default). CPU is checked every
+## 10s, and one check above that line restarts the wait. On a busy node that
+## never drops that low, no group ever gets a baseline, not only right after a
+## restart, and the default then behaves exactly like "current-usage".
 # noisy-detection = "baseline-fallback-current-usage"
 
 ## RU charged to a resource group for every request that arrives, in addition to

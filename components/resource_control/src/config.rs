@@ -175,7 +175,9 @@ pub enum NoisyDetection {
     /// is largest.
     Baseline,
     /// As `Baseline`, except a group with no baseline is judged against zero,
-    /// so any traffic counts as excess and it ranks on current usage.
+    /// so any traffic counts as excess and it ranks on current usage. On a
+    /// node that is never quiet long enough to take a baseline, this is
+    /// `CurrentUsage` for every group.
     #[default]
     BaselineFallbackCurrentUsage,
     /// Blame the largest consumer right now, ignoring history.
