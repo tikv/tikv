@@ -31,6 +31,18 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
+    /// When true, enables fair two-phase scheduling for reads: groups whose
+    /// current-minute RU rate exceeds their historical baseline are placed in
+    /// phase 1 (deprioritised in the yatp priority queue) relative to groups
+    /// within their baseline (phase 0). Protects sustained workloads from
+    /// sudden traffic spikes without hard-rejecting requests.
+    ///
+    /// Requires `readpool.unified.auto-adjust-pool-size` to be enabled, which
+    /// is *not* the default. A group is deprioritised while the unified read
+    /// pool is scaled in and released once the pool recovers to its configured
+    /// size, so with auto-adjustment off the pool never moves and no group is
+    /// ever deprioritised. This is not rejected at config load, for backward
+    /// compatibility, so enabling this alone silently has no effect.
     pub enable_fair_scheduling: bool,
     /// When true, enables Tier-1 admission control for reads: high-priority
     /// read requests from groups that are over their RU baseline are shed
