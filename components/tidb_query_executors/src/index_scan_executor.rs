@@ -584,6 +584,14 @@ impl IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
+                // For non-unique, clustered tables, Global Index Version V1+
+                // the key also includes the partition id, to allow duplicate
+                // common handles across partitions (e.g. after EXCHANGE PARTITION).
+                let (pid_from_key, remaining_key) = Self::split_partition_id(key_payload)?;
+                if !pid_from_key.is_empty() {
+                    partition_id = Some(NumberCodec::decode_i64(pid_from_key));
+                }
+                let mut key_payload = remaining_key;
                 let end_index =
                     columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 if self.fill_extra_common_handle_key {
@@ -596,7 +604,12 @@ impl IndexScanExecutorImpl {
                     &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
                 if self.physical_table_id_column_cnt > 0 {
-                    self.process_physical_table_id_column(key, columns)?;
+                    if let Some(pid) = partition_id {
+                        let col_index = columns.columns_len() - 1;
+                        columns[col_index].mut_decoded().push_int(Some(pid));
+                    } else {
+                        self.process_physical_table_id_column(key, columns)?;
+                    }
                 }
             }
         }
@@ -837,6 +850,17 @@ impl IndexScanExecutorImpl {
                 DecodeCommonHandle if common_handle_bytes.is_empty() => {
                     // This is a non-unique index, we should extract the common handle from the key.
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+
+                    // V1/V2: Check for partition ID in key (after indexed columns, before handle).
+                    // For non-unique, clustered tables, Global Index Version V1+
+                    // the key also includes the partition id, to allow duplicate
+                    // common handles across partitions (e.g. after EXCHANGE PARTITION).
+                    let (pid_from_key, remaining_key) = Self::split_partition_id(key_payload)?;
+                    if !pid_from_key.is_empty() {
+                        partition_id_from_key = Some(pid_from_key);
+                    }
+                    key_payload = remaining_key;
+
                     DecodeHandleOp::CommonHandle(key_payload)
                 }
                 DecodeCommonHandle => {
@@ -4264,6 +4288,195 @@ mod tests {
                     result.physical_columns[2].decoded().to_int_vec(),
                     &[Some(partition_id)],
                     "V2 new-encoding: physical_table_id should equal partition_id"
+                );
+            }
+        }
+    }
+
+    /// Exercises the non-unique clustered (common handle) global index path,
+    /// where the key carries the partition ID between the indexed columns and
+    /// the common handle:
+    /// `[indexed_cols][PARTITION_ID_FLAG][partition_id][common_handle]`.
+    ///
+    /// This is the format TiDB writes for clustered non-unique global indexes
+    /// V1+ after EXCHANGE PARTITION, where two partitions may hold rows with
+    /// identical common handles. The `DecodeCommonHandle` non-unique branch
+    /// must strip the partition ID prefix before decoding the common
+    /// handle.
+    ///
+    /// Also cover the short, key-only partition ID fixture that selects the
+    /// old-layout decoder. Current TiDB does not produce this fixture for
+    /// CommonHandle global indexes.
+    #[test]
+    fn test_non_unique_common_handle_global_index_with_partition_id_in_key() {
+        const TABLE_ID: i64 = 100;
+        const INDEX_ID: i64 = 5;
+
+        fn make_column(col_id: i64) -> ColumnInfo {
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(col_id);
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci
+        }
+
+        let partition_id: i64 = 42;
+        let indexed_value: i64 = 7;
+        // The common handle is a single int column (the clustered primary key).
+        let handle_value: i64 = 123;
+
+        for (pid_in_value, request_pid_column, request_phys_table_id_column) in [
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (false, true, true),
+        ] {
+            // Build columns: [indexed_col, common_handle_col, pid?, phys_table_id?].
+            // The common handle column is a normal (non pk_handle) column whose
+            // column id is part of the primary key; primary_column_ids_len = 1
+            // selects DecodeCommonHandle below.
+            let mut columns_info = vec![
+                make_column(1), // indexed column
+                make_column(2), // common handle column (clustered PK)
+            ];
+            let mut schema: Vec<FieldType> =
+                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+            if request_pid_column {
+                columns_info.push(make_column(table::EXTRA_PARTITION_ID_COL_ID));
+                schema.push(FieldTypeTp::LongLong.into());
+            }
+            if request_phys_table_id_column {
+                columns_info.push(make_column(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID));
+                schema.push(FieldTypeTp::LongLong.into());
+            }
+
+            // Build index key:
+            // [indexed_col][PARTITION_ID_FLAG][partition_id][common_handle]
+            let mut index_key_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
+                    .unwrap();
+            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+            index_key_data.write_i64(partition_id).unwrap();
+            let common_handle_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
+                    .unwrap();
+            index_key_data.extend(&common_handle_data);
+            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
+
+            let value = if pid_in_value {
+                // V1: partition ID is also in the value; the handle stays in the key.
+                let mut value = vec![
+                    0x00, // tail_len = 0 (non-unique, handle in key)
+                    INDEX_VALUE_VERSION_FLAG,
+                    0x01, // version = 1
+                    table::INDEX_VALUE_PARTITION_ID_FLAG,
+                ];
+                let mut pid_bytes = vec![0u8; 8];
+                NumberCodec::encode_i64(&mut pid_bytes, partition_id);
+                value.extend(&pid_bytes);
+                value
+            } else {
+                // A short value routes this key-only PID fixture to the old-layout decoder.
+                vec![0u8]
+            };
+            assert_eq!(value.len() > MAX_OLD_ENCODED_VALUE_LEN, pid_in_value);
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                range.set_start(key.clone());
+                range.set_end(key.clone());
+                convert_to_prefix_next(range.mut_end());
+                range
+            }];
+
+            let store = FixtureStorage::from(vec![(key, value)]);
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store,
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                key_ranges,
+                1, // primary_column_ids_len = 1 => DecodeCommonHandle
+                false,
+                false, // Do not accept point ranges for this scan.
+                false,
+                true, // is_fill_extra_common_handle_key
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+
+            let case = format!(
+                "pid_in_value={}, pid_col={}, phys_col={}",
+                pid_in_value, request_pid_column, request_phys_table_id_column
+            );
+
+            assert!(
+                result.is_drained.as_ref().unwrap().stop(),
+                "non-unique common handle global index {}",
+                case
+            );
+            assert_eq!(
+                result.physical_columns.rows_len(),
+                1,
+                "non-unique common handle global index {}",
+                case
+            );
+
+            // Verify indexed column
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(indexed_value)],
+                "non-unique common handle global index {}: indexed column mismatch",
+                case
+            );
+
+            // Verify the common handle column is decoded from the key suffix
+            // (partition ID prefix stripped).
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(handle_value)],
+                "non-unique common handle global index {}: common handle column mismatch",
+                case
+            );
+
+            // Verify the common handle key extracted from the key suffix equals
+            // the original common handle bytes (partition ID prefix stripped).
+            let extra_common_handle_keys = result.physical_columns.take_extra_common_handle_keys();
+            assert_eq!(
+                extra_common_handle_keys,
+                Some(vec![common_handle_data.clone()]),
+                "non-unique common handle global index {}: common handle mismatch",
+                case
+            );
+
+            let mut next_col = 2;
+            if request_pid_column {
+                assert_eq!(
+                    result.physical_columns[next_col].decoded().to_int_vec(),
+                    &[Some(partition_id)],
+                    "non-unique common handle global index {}: partition ID mismatch",
+                    case
+                );
+                next_col += 1;
+            }
+
+            // Both optional columns must use the partition ID, not TABLE_ID.
+            if request_phys_table_id_column {
+                assert_eq!(
+                    result.physical_columns[next_col].decoded().to_int_vec(),
+                    &[Some(partition_id)],
+                    "non-unique common handle global index {}: \
+                     physical_table_id should equal partition_id",
+                    case
                 );
             }
         }
