@@ -33,19 +33,63 @@ fn compare_f64(x: f64, y: f64) -> Option<Ordering> {
     x.partial_cmp(&y)
 }
 
+/// The acceptable error quantity when comparing a double against an integer
+/// that was widened to `f64`.
+///
+/// This is `floatEpsilon` in TiDB `pkg/types/json_binary_functions.go`:
+///
+/// ```go
+/// // floatEpsilon is the acceptable error quantity when comparing two float numbers.
+/// const floatEpsilon = 1.e-8
+/// ```
+///
+/// It must stay equal to TiDB's value. The coprocessor has to reproduce TiDB
+/// root evaluation exactly, otherwise pushing a predicate down changes the
+/// result set. A *stricter* tolerance is just as wrong as a looser one: with
+/// `f64::EPSILON` (2.22e-16) the JSON double `3.000000001` compared `Greater`
+/// than the integer `3` here while TiDB root called them `Equal`, so
+/// `WHERE j = 3` returned the row at the root and silently dropped it once
+/// pushed down.
+const FLOAT_EPSILON: f64 = 1.0e-8;
+
 /// Compares a double against an integer that was widened to `f64`, allowing for
 /// the precision loss of that widening.
 ///
 /// This is the counterpart of `compareFloat64PrecisionLoss` in TiDB
 /// `pkg/types/json_binary_functions.go`, which is used only on the
-/// integer-vs-double paths. Note TiDB's tolerance there is `1e-8` while this
-/// uses `f64::EPSILON`; reconciling that is a separate concern from
-/// tikv/tikv#20101 and is deliberately not changed here.
+/// integer-vs-double paths:
+///
+/// ```go
+/// func compareFloat64PrecisionLoss(x, y float64) int {
+///     if x-y < floatEpsilon && y-x < floatEpsilon {
+///         return 0
+///     } else if x-y < 0 {
+///         return -1
+///     }
+///     return 1
+/// }
+/// ```
+///
+/// The two one-sided comparisons are reproduced literally rather than folded
+/// into `(x - y).abs() < FLOAT_EPSILON`. The two are equivalent for every
+/// non-NaN input, but they differ on NaN: the `abs` form falls through to
+/// `partial_cmp`, which yields `None`, and `Ord for Json` unwraps that and
+/// panics, whereas TiDB reports `Greater`. Matching TiDB's shape keeps the
+/// coprocessor in step with the root here too.
+///
+/// Known limitation, shared with TiDB: a tolerance makes this comparator
+/// intransitive across the integer/double boundary (`0` compares equal to both
+/// `0.0` and `1e-9`, yet `1e-9 > 0.0`), so ordering a mixed column can depend
+/// on input order. TiDB's `CompareBinaryJSON` has the identical property;
+/// diverging from it here would be worse than matching it, so it is left
+/// alone deliberately.
 fn compare_f64_precision_loss(x: f64, y: f64) -> Option<Ordering> {
-    if (x - y).abs() < f64::EPSILON {
+    if x - y < FLOAT_EPSILON && y - x < FLOAT_EPSILON {
         Some(Ordering::Equal)
+    } else if x - y < 0.0 {
+        Some(Ordering::Less)
     } else {
-        x.partial_cmp(&y)
+        Some(Ordering::Greater)
     }
 }
 
@@ -306,11 +350,12 @@ mod tests {
 
     /// Regression test for tikv/tikv#20101.
     ///
-    /// `compare_f64_with_epsilon` used to treat `|x - y| < f64::EPSILON`
-    /// (2.22e-16) as `Ordering::Equal`. `f64::EPSILON` is the gap between 1.0
-    /// and the next double, not a universal tolerance: one ulp at 0.25 is
-    /// 5.55e-17, so adjacent distinct doubles compared Equal and pushed-down
-    /// `<` / `>` predicates silently dropped rows that TiDB root returned.
+    /// Double vs double used to go through a single helper that treated
+    /// `|x - y| < f64::EPSILON` (2.22e-16) as `Ordering::Equal`. `f64::EPSILON`
+    /// is the gap between 1.0 and the next double, not a universal tolerance:
+    /// one ulp at 0.25 is 5.55e-17, so adjacent distinct doubles compared Equal
+    /// and pushed-down `<` / `>` predicates silently dropped rows that TiDB
+    /// root returned. That arm now uses [`compare_f64`], which is exact.
     #[test]
     fn test_cmp_json_adjacent_doubles() {
         // Sanity check that these really are two distinct, adjacent doubles
@@ -340,6 +385,15 @@ mod tests {
                 Json::from_f64(0.1f64.next_up()),
                 Ordering::Less,
             ),
+            (
+                Json::from_f64(0.1f64.next_up()),
+                Json::from_f64(0.1),
+                Ordering::Greater,
+            ),
+            // IEEE-754 signed zeros: `-0.0 == 0.0`, so an exact comparison
+            // still reports Equal and neither ordering is preferred.
+            (Json::from_f64(-0.0), Json::from_f64(0.0), Ordering::Equal),
+            (Json::from_f64(0.0), Json::from_f64(-0.0), Ordering::Equal),
             // Neighbours at a magnitude where the gap already exceeded the old
             // epsilon, so these compared correctly before the fix too: proof
             // that existing behaviour is preserved rather than changed.
@@ -372,22 +426,78 @@ mod tests {
     }
 
     /// The integer-vs-double paths keep TiDB's precision-loss tolerance
-    /// (`compareFloat64PrecisionLoss`), so widening a large integer to `f64`
-    /// still compares equal. This is unchanged by the tikv/tikv#20101 fix.
+    /// (`compareFloat64PrecisionLoss` with `floatEpsilon = 1.e-8`), because an
+    /// i64/u64 widened to `f64` genuinely loses precision there.
+    ///
+    /// The cases below are chosen to straddle `1e-8` specifically: a difference
+    /// of `1e-9` is inside TiDB's tolerance but roughly seven orders of
+    /// magnitude outside `f64::EPSILON` (2.22e-16), so they fail if this ever
+    /// drifts back to the stricter constant. Differences far below both
+    /// constants would pass either way and would pin nothing.
     #[test]
     fn test_cmp_json_int_vs_double_keeps_precision_loss() {
+        // The property that makes the cases below meaningful.
+        assert!(1e-9 < FLOAT_EPSILON);
+        assert!(1e-9 > f64::EPSILON);
+
         let cases = vec![
-            // Inside the tolerance: still Equal on the integer paths, even
-            // though the two doubles are distinct.
-            (Json::from_i64(0), Json::from_f64(1e-17), Ordering::Equal),
-            (Json::from_f64(1e-17), Json::from_i64(0), Ordering::Equal),
-            (Json::from_u64(0), Json::from_f64(1e-17), Ordering::Equal),
-            (Json::from_f64(1e-17), Json::from_u64(0), Ordering::Equal),
-            // Outside the tolerance: ordered as before.
-            (Json::from_i64(9), Json::from_f64(9.1), Ordering::Less),
-            (Json::from_f64(9.1), Json::from_i64(9), Ordering::Greater),
-            (Json::from_u64(9), Json::from_f64(8.9), Ordering::Greater),
-            (Json::from_f64(8.9), Json::from_u64(9), Ordering::Less),
+            // Inside TiDB's tolerance, outside `f64::EPSILON`: Equal, in every
+            // orientation and for both integer types.
+            (
+                Json::from_f64(3.000000001),
+                Json::from_i64(3),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_i64(3),
+                Json::from_f64(3.000000001),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_f64(2.999999999),
+                Json::from_i64(3),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_f64(3.000000001),
+                Json::from_u64(3),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_u64(3),
+                Json::from_f64(3.000000001),
+                Ordering::Equal,
+            ),
+            // Just outside TiDB's tolerance (2e-8): ordered, not Equal. This
+            // pins the constant from the other side, so widening it further
+            // would fail here.
+            (
+                Json::from_f64(3.00000002),
+                Json::from_i64(3),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_i64(3),
+                Json::from_f64(3.00000002),
+                Ordering::Less,
+            ),
+            (
+                Json::from_f64(3.00000002),
+                Json::from_u64(3),
+                Ordering::Greater,
+            ),
+            // The precision loss the tolerance exists for: 2^53 + 1 is not
+            // representable as an `f64`, so widening it yields 2^53 exactly.
+            (
+                Json::from_u64(9007199254740993),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_i64(9007199254740993),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Equal,
+            ),
         ];
 
         for (left, right, expected) in cases {
@@ -401,6 +511,41 @@ mod tests {
                 right
             );
         }
+    }
+
+    /// `compare_f64_precision_loss` reproduces TiDB's two one-sided
+    /// comparisons rather than `(x - y).abs() < FLOAT_EPSILON`. The forms agree
+    /// for every non-NaN input but differ on NaN, where the `abs` form would
+    /// yield `None` and make `Ord for Json` panic on its `unwrap`.
+    #[test]
+    fn test_cmp_json_precision_loss_matches_tidb_shape() {
+        for &(x, y) in &[
+            (0.0f64, 0.0f64),
+            (1e-9, 0.0),
+            (0.0, 1e-9),
+            (3.00000002, 3.0),
+            (3.0, 3.00000002),
+            (-1e300, 1e300),
+            (f64::INFINITY, 1.0),
+        ] {
+            let abs_form = if (x - y).abs() < FLOAT_EPSILON {
+                Some(Ordering::Equal)
+            } else {
+                x.partial_cmp(&y)
+            };
+            assert_eq!(abs_form, compare_f64_precision_loss(x, y), "({x}, {y})");
+        }
+
+        // NaN is where the two shapes part ways. TiDB returns 1 (Greater)
+        // because both `x-y < floatEpsilon` and `x-y < 0` are false for NaN.
+        assert_eq!(
+            Some(Ordering::Greater),
+            compare_f64_precision_loss(f64::NAN, 1.0)
+        );
+        assert_eq!(
+            Some(Ordering::Greater),
+            compare_f64_precision_loss(1.0, f64::NAN)
+        );
     }
 
     #[test]
