@@ -29,11 +29,24 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
-    /// Maximum network egress rate (response bytes sent out) allowed for
-    /// background tasks on this node, aggregated over all background requests.
-    /// This bounds the outbound bandwidth a large background scan takes from
-    /// foreground reads, no matter how many clients scan the node at the same
-    /// time. It covers unary coprocessor and transactional KV read responses;
+    /// Network egress rate (response bytes sent out) allowed for background
+    /// reads on this node, shared by all background requests no matter how
+    /// many clients send them. It keeps a large background scan from taking
+    /// the outbound bandwidth that foreground reads need.
+    ///
+    /// It applies only to requests that resource control treats as background:
+    /// the task type in the request source must be listed in the background
+    /// settings (`BACKGROUND=(TASK_TYPES=...)`) of the request's resource
+    /// group, or of the `default` group when the request's group has no
+    /// background settings. Other requests are foreground and are not limited,
+    /// so with no background task types configured the limit has no effect.
+    ///
+    /// It is a soft, admission-side limit: a background read is charged once
+    /// its response is built, and the debt is paid by the next background
+    /// read before it is admitted. Background egress can briefly exceed the
+    /// rate by about one second's worth of the rate plus one response.
+    ///
+    /// It covers unary coprocessor and transactional KV read responses;
     /// streaming coprocessor responses are neither charged nor paced. It is
     /// enforced only for reads served by the unified read pool
     /// (`readpool.{storage,coprocessor}.use-unified-pool`). Set to 0 (the

@@ -177,13 +177,22 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
-## Maximum network egress rate (response bytes sent out) for background tasks on this node,
-## aggregated over all background requests. Use it to stop a large background scan, such as the
-## scan phase of a distributed ADD INDEX, from taking the whole outbound network allowance of
-## the node from foreground reads. It covers unary coprocessor and transactional KV read
-## responses; streaming coprocessor responses are neither charged nor paced. It is enforced only
-## for reads served by the unified read pool (`readpool.storage.use-unified-pool` and
-## `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
+## Network egress rate (response bytes sent out) for background reads on this node, shared by all
+## background requests. Use it to stop a large background scan, such as the scan phase of a
+## distributed ADD INDEX, from taking the outbound network allowance of the node from foreground
+## reads.
+##
+## It applies only to requests that resource control treats as background: the request's task
+## type must be listed in the background settings of its resource group, or of the `default`
+## group when that group has none, for example
+## `ALTER RESOURCE GROUP default BACKGROUND=(TASK_TYPES='ddl')`. With no background task types
+## configured, the limit has no effect.
+##
+## It is a soft, admission-side limit: background egress can briefly exceed it by about one
+## second's worth of the rate plus one response. It covers unary coprocessor and transactional
+## KV read responses; streaming coprocessor responses are neither charged nor paced. It is
+## enforced only for reads served by the unified read pool (`readpool.storage.use-unified-pool`
+## and `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
 # bg-egress-limit = "0B"
 
 [server]
