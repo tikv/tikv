@@ -728,7 +728,12 @@ impl ResourceGroupManager {
     }
 
     pub(crate) fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
-        self.resource_groups.get(&name.to_ascii_lowercase())
+        // Keys are stored lowercased; allocate only for a name that is not.
+        if name.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.resource_groups.get(&name.to_ascii_lowercase())
+        } else {
+            self.resource_groups.get(name)
+        }
     }
 
     pub fn get_config(&self) -> &Arc<VersionTrack<Config>> {
@@ -1329,7 +1334,7 @@ impl ResourceGroupManager {
         if request_source.is_empty() || !self.has_background_groups() {
             return false;
         }
-        if let Some(group) = self.resource_groups.get(rg)
+        if let Some(group) = self.get_resource_group(rg)
             && !group.fallback_default
         {
             return group.is_background_source(request_source);
@@ -1349,7 +1354,7 @@ impl ResourceGroupManager {
             (None, 8)
         });
         let mut group_priority = None;
-        if let Some(group) = self.resource_groups.get(rg) {
+        if let Some(group) = self.get_resource_group(rg) {
             group_priority = Some(group.group.priority);
             if !group.fallback_default {
                 return (
@@ -3734,6 +3739,37 @@ pub(crate) mod tests {
         let lower = mgr.get_resource_limiter("analytical", "query", 0).unwrap();
         let upper = mgr.get_resource_limiter("ANALYTICAL", "query", 0).unwrap();
         assert!(Arc::ptr_eq(&lower, &upper));
+    }
+
+    #[test]
+    fn test_background_routing_matches_a_configured_group_in_any_case() {
+        let mgr = ResourceGroupManager::default();
+        mgr.add_resource_group(new_background_resource_group_ru(
+            "bg".into(),
+            50,
+            LOW_PRIORITY,
+            vec!["ddl".into()],
+        ));
+        let bg_limiter = mgr
+            .get_resource_group("bg")
+            .unwrap()
+            .limiter
+            .clone()
+            .unwrap();
+
+        // The background path agrees with `bounded_group_name` on the group.
+        for name in ["bg", "BG", "Bg"] {
+            assert!(mgr.is_background_request(name, "ddl"), "{}", name);
+            assert!(Arc::ptr_eq(
+                &mgr.get_background_resource_limiter(name, "ddl").unwrap(),
+                &bg_limiter
+            ));
+            assert!(Arc::ptr_eq(
+                &mgr.get_resource_limiter(name, "ddl", 0).unwrap(),
+                &bg_limiter
+            ));
+        }
+        assert!(!mgr.is_background_request("BG", "query"));
     }
 
     #[test]
