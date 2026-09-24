@@ -190,7 +190,12 @@
 ##               excess and it is ranked on current usage, exactly as under
 ##               "current-usage". Only groups that have a baseline are judged
 ##               against it. Keeps a group that is ramping up with no history
-##               from hiding as the culprit.
+##               from hiding as the culprit. Groups are ranked together, so a
+##               group with no baseline competes with its whole usage against
+##               the other groups' rise above their baselines: a newly created
+##               group outranks an established group whose rise is smaller than
+##               the new group's usage. Each group needs its own quiet window,
+##               so a group created on an already busy node stays in this state.
 ## - "current-usage". Blame the largest consumers right now, ignoring history.
 ##               Baselines are still recorded, so switching away takes effect
 ##               immediately.
