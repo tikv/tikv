@@ -23,14 +23,44 @@ fn compare_i64_u64(x: i64, y: u64) -> Ordering {
 /// Compares two JSON doubles exactly.
 ///
 /// This mirrors `compareFloat64` in TiDB `pkg/types/json_binary_functions.go`,
-/// which uses plain `<` / `==` with no tolerance. The coprocessor must agree
-/// with TiDB root evaluation bit for bit, otherwise pushing a `<` / `>`
-/// predicate down silently changes the result set: an absolute tolerance makes
-/// adjacent distinct doubles below magnitude 1 (e.g. 0.25 and
-/// 0.25000000000000006, one ulp apart at 5.55e-17) compare Equal, which drops
-/// rows that TiDB root returns.
+/// which uses plain `<` / `==` with no tolerance:
+///
+/// ```go
+/// func compareFloat64(x float64, y float64) int {
+///     if x < y {
+///         return -1
+///     } else if x == y {
+///         return 0
+///     }
+///
+///     return 1
+/// }
+/// ```
+///
+/// The comparison must stay exact. The coprocessor has to agree with TiDB root
+/// evaluation bit for bit, otherwise pushing a `<` / `>` predicate down
+/// silently changes the result set: an absolute tolerance makes adjacent
+/// distinct doubles below magnitude 1 (e.g. 0.25 and 0.25000000000000006, one
+/// ulp apart at 5.55e-17) compare Equal, which drops rows that TiDB root
+/// returns.
+///
+/// TiDB's three branches are reproduced literally rather than deferring to
+/// `partial_cmp`. The two agree on every non-NaN input - for those, exactly one
+/// of `x < y`, `x == y`, `x > y` holds - but they differ on NaN: `partial_cmp`
+/// yields `None`, which `Ord for Json` and `PartialEq for Json` unwrap
+/// and panic on, whereas in TiDB both `x < y` and `x == y` are false for NaN so
+/// it falls through and reports `1` (`Greater`). [`compare_f64_precision_loss`]
+/// already reports `Greater` for NaN for the same reason; keeping the two
+/// helpers in the same shape means a NaN double is ordered rather than
+/// panicking, whichever arm it arrives on.
 fn compare_f64(x: f64, y: f64) -> Option<Ordering> {
-    x.partial_cmp(&y)
+    if x < y {
+        Some(Ordering::Less)
+    } else if x == y {
+        Some(Ordering::Equal)
+    } else {
+        Some(Ordering::Greater)
+    }
 }
 
 /// The acceptable error quantity when comparing a double against an integer
@@ -546,6 +576,125 @@ mod tests {
             Some(Ordering::Greater),
             compare_f64_precision_loss(1.0, f64::NAN)
         );
+    }
+
+    /// `compare_f64` reproduces TiDB's three branches rather than deferring to
+    /// `partial_cmp`. The forms agree for every non-NaN input but differ on
+    /// NaN, where `partial_cmp` yields `None` and the `unwrap` in `Ord` /
+    /// `PartialEq for Json` panics, while TiDB returns 1 (`Greater`) because
+    /// both `x < y` and `x == y` are false.
+    ///
+    /// The exactness that tikv/tikv#20101 is about must survive: the adjacent
+    /// pairs are re-asserted here at the helper level, with no tolerance
+    /// anywhere.
+    #[test]
+    fn test_cmp_json_exact_matches_tidb_shape() {
+        for &(x, y) in &[
+            (0.0f64, 0.0f64),
+            (-0.0, 0.0),
+            (0.0, -0.0),
+            // The tikv/tikv#20101 pairs: one ulp apart below magnitude 1, and
+            // therefore inside both `f64::EPSILON` and `FLOAT_EPSILON`. They
+            // must still be ordered, which is what makes `compare_f64` exact
+            // rather than merely differently-toleranced.
+            (0.25, 0.25000000000000006),
+            (0.25000000000000006, 0.25),
+            (0.1, 0.1f64.next_up()),
+            (0.1f64.next_up(), 0.1),
+            (4.0, 4.0f64.next_up()),
+            (4.0f64.next_up(), 4.0),
+            // A difference inside TiDB's precision-loss tolerance. The exact
+            // arm must not borrow it.
+            (3.000000001, 3.0),
+            (3.0, 3.000000001),
+            (1e-9, 0.0),
+            (-1e300, 1e300),
+            (f64::INFINITY, 1.0),
+            (f64::NEG_INFINITY, f64::INFINITY),
+        ] {
+            assert_eq!(x.partial_cmp(&y), compare_f64(x, y), "({x}, {y})");
+        }
+
+        // No tolerance leaked in: the ulp-neighbour pairs are ordered, never
+        // Equal.
+        assert_eq!(Some(Ordering::Less), compare_f64(0.25, 0.25000000000000006));
+        assert_eq!(
+            Some(Ordering::Greater),
+            compare_f64(0.25000000000000006, 0.25)
+        );
+        assert_eq!(Some(Ordering::Greater), compare_f64(3.000000001, 3.0));
+
+        // NaN is where the shapes part ways, and where `partial_cmp` used to
+        // hand `None` to an `unwrap`.
+        assert_eq!(None, f64::NAN.partial_cmp(&1.0));
+        assert_eq!(Some(Ordering::Greater), compare_f64(f64::NAN, 1.0));
+        assert_eq!(Some(Ordering::Greater), compare_f64(1.0, f64::NAN));
+        assert_eq!(Some(Ordering::Greater), compare_f64(f64::NAN, f64::NAN));
+    }
+
+    /// A NaN double no longer makes JSON comparison return `None`, on either
+    /// the exact (Double vs Double) arm or the tolerant (integer vs Double)
+    /// one. Both helpers now agree, and both agree with TiDB's `1`.
+    #[test]
+    fn test_cmp_json_nan_double_is_ordered_not_none() {
+        let nan = Json::from_f64(f64::NAN).unwrap();
+        let one = Json::from_f64(1.0).unwrap();
+        let int = Json::from_i64(1).unwrap();
+        let uint = Json::from_u64(1).unwrap();
+
+        // Exact arm, both directions.
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&one));
+        assert_eq!(Some(Ordering::Greater), one.partial_cmp(&nan));
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&nan));
+
+        // Tolerant arms, with the double on the left, are the ones that share
+        // TiDB's orientation directly.
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&int));
+        assert_eq!(Some(Ordering::Greater), nan.partial_cmp(&uint));
+
+        // And the helpers themselves agree, which is the point: the exact arm
+        // is no longer the odd one out.
+        assert_eq!(
+            compare_f64(f64::NAN, 1.0),
+            compare_f64_precision_loss(f64::NAN, 1.0)
+        );
+    }
+
+    /// `Ord for Json`, `Ord for JsonRef` and `PartialEq for Json` all
+    /// `unwrap()` the `Option<Ordering>`, so a NaN double used to panic the
+    /// coprocessor outright. Exercise those paths, not just the helper.
+    #[test]
+    fn test_cmp_json_ord_does_not_panic_on_nan() {
+        let nan = Json::from_f64(f64::NAN).unwrap();
+        let one = Json::from_f64(1.0).unwrap();
+
+        // `Ord::cmp` on `Json` and on `JsonRef` - the `.unwrap()` sites.
+        assert_eq!(Ordering::Greater, nan.cmp(&one));
+        assert_eq!(Ordering::Greater, one.cmp(&nan));
+        assert_eq!(Ordering::Greater, nan.as_ref().cmp(&one.as_ref()));
+
+        // `PartialEq for Json` unwraps too.
+        assert!(nan != one);
+        assert!(one != nan);
+
+        // Feeding a NaN through the `BinaryHeap` that `top_n_heap` uses - the
+        // real consumer of `Ord for Json` - completes instead of panicking.
+        //
+        // No particular resulting order is asserted, and deliberately so: NaN
+        // makes this comparator non-antisymmetric, since `compare_f64(NAN, x)`
+        // and `compare_f64(x, NAN)` are both `Greater`. TiDB's `compareFloat64`
+        // has the identical property (both `x < y` and `x == y` are false in
+        // either direction, so both calls return 1), so the position a NaN ends
+        // up in is unspecified in TiDB too. Matching TiDB is the requirement;
+        // inventing a total order here would diverge from the root again. For
+        // the same reason this uses a heap rather than `slice::sort`, whose
+        // total-order debug check can itself panic on an inconsistent `Ord`.
+        let mut heap = std::collections::BinaryHeap::new();
+        heap.push(Json::from_f64(f64::NAN).unwrap());
+        heap.push(Json::from_f64(2.0).unwrap());
+        heap.push(Json::from_i64(1).unwrap());
+        assert_eq!(3, heap.len());
+        assert!(heap.pop().is_some());
     }
 
     #[test]
