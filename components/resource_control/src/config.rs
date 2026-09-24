@@ -177,7 +177,10 @@ pub enum NoisyDetection {
     /// As `Baseline`, except a group with no baseline is judged against zero,
     /// so any traffic counts as excess and it ranks on current usage. On a
     /// node that is never quiet long enough to take a baseline, this is
-    /// `CurrentUsage` for every group.
+    /// `CurrentUsage` for every group. Where some groups have a baseline and
+    /// some do not, a cold group's whole rate is ranked against warm groups'
+    /// rise above baseline, so a newly created group outranks an established
+    /// one whose rise is smaller than the new group's rate.
     #[default]
     BaselineFallbackCurrentUsage,
     /// Blame the largest consumer right now, ignoring history.

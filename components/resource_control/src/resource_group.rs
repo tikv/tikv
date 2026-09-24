@@ -519,7 +519,11 @@ fn candidate_baseline(
         // No baseline yet bars the group, leaving an overload nobody has
         // history for unattributed rather than pinned on whoever is largest.
         NoisyDetection::Baseline => (tracker.quiet_baseline?, tracker.over_baseline_ticks),
-        // No baseline yet reads as zero, so all of its usage is excess.
+        // No baseline yet reads as zero, so all of its usage is excess. The
+        // ranking then weighs a cold group's whole rate against a warm group's
+        // delta, so a new group outranks an established one that ramped by
+        // less than the new group's rate. Intended: a group with no history
+        // is presumed new load.
         NoisyDetection::BaselineFallbackCurrentUsage => (
             tracker.quiet_baseline.unwrap_or(0.0),
             tracker.over_baseline_ticks,
