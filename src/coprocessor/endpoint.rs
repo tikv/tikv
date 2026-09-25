@@ -25,6 +25,7 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{
     ResourceGroupManager, ResourceLimiter, TaskMetadata, charge_background_egress,
+    record_uncharged_background_egress,
 };
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
@@ -1044,6 +1045,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -1111,7 +1113,9 @@ impl<E: Engine> Endpoint<E> {
                         // limiter: a stream is admitted once and cannot pay debt between
                         // chunks without holding its read-pool slot, and TiDB no longer
                         // sends streaming coprocessor requests. `bg-egress-limit` covers
-                        // unary coprocessor and transactional KV reads only.
+                        // unary coprocessor and transactional KV reads only. The bytes are
+                        // still counted, so that the uncovered traffic is visible.
+                        record_uncharged_background_egress(&resource_limiter, resp_size);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
@@ -1181,6 +1185,7 @@ impl<E: Engine> Endpoint<E> {
             self.request_semaphore(semaphore_group),
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .then(futures::future::ok::<_, mpsc::SendError>)
@@ -2692,7 +2697,18 @@ mod tests {
             r
         }
 
-        // A background stream of several chunks builds no egress debt.
+        fn uncharged_egress_bytes() -> u64 {
+            prometheus::gather()
+                .iter()
+                .find(|f| {
+                    f.get_name() == "tikv_resource_control_background_egress_uncharged_bytes_total"
+                })
+                .map_or(0, |f| f.get_metric()[0].get_counter().get_value() as u64)
+        }
+
+        // A background stream of several chunks builds no egress debt, but its
+        // bytes are counted as uncharged background egress.
+        let uncharged_before = uncharged_egress_bytes();
         let chunks = vec![Ok(new_resp()), Ok(new_resp()), Ok(new_resp())];
         let handler_builder = Box::new(move |_, _: &_| Ok(StreamFixture::new(chunks).into_boxed()));
         let resp_vec = block_on_stream(
@@ -2703,6 +2719,9 @@ mod tests {
         .unwrap();
         assert_eq!(resp_vec.len(), 3);
         assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        // Other tests may add to the global counter concurrently, so only a
+        // lower bound can be checked.
+        assert!(uncharged_egress_bytes() - uncharged_before >= 3 * 64 * 1024);
 
         // The same response sent as a background unary request builds debt.
         let handler_builder =

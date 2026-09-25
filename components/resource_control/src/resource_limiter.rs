@@ -15,7 +15,10 @@ use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{resource_control::TaskPriority, time::Limiter, timer::GLOBAL_TIMER_HANDLE};
 
-use crate::metrics::PRIORITY_WAIT_DURATION_VEC;
+use crate::metrics::{
+    BACKGROUND_EGRESS_CONSUMPTION, BACKGROUND_EGRESS_UNCHARGED_BYTES,
+    BACKGROUND_EGRESS_WAIT_DURATION, PRIORITY_WAIT_DURATION_VEC,
+};
 
 #[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
 #[repr(usize)]
@@ -176,7 +179,11 @@ impl ResourceLimiter {
         // pay for it.
         if is_read && self.is_background {
             // The value 0 adds no new consumption, it only reads back the debt.
-            wait_dur.max(self.egress_limiter.consume(0, true))
+            let egress_dur = self.egress_limiter.consume(0, true);
+            if !egress_dur.is_zero() {
+                BACKGROUND_EGRESS_WAIT_DURATION.observe(egress_dur.as_secs_f64());
+            }
+            wait_dur.max(egress_dur)
         } else {
             wait_dur
         }
@@ -235,12 +242,29 @@ impl ResourceLimiter {
 /// This only builds debt, it never sleeps here: the response buffer and the
 /// read-pool slot are released as usual, and the next background read pays the
 /// debt at the admission gate. Foreground requests are not charged, and the
-/// call is a no-op unless `resource-control.bg-egress-limit` is set.
+/// debt has no effect unless `resource-control.bg-egress-limit` is set. The
+/// bytes are counted in the background egress consumption metric either way.
 pub fn charge_background_egress(resource_limiter: &Option<Arc<ResourceLimiter>>, bytes: u64) {
     if let Some(limiter) = resource_limiter
         && limiter.is_background()
     {
+        BACKGROUND_EGRESS_CONSUMPTION.inc_by(bytes);
         limiter.consume_egress(bytes);
+    }
+}
+
+/// Counts the response size of a background read that is sent out without
+/// being charged to the background egress limiter, such as a streaming
+/// coprocessor response, so that the traffic `bg-egress-limit` does not cover
+/// is visible. Foreground requests are not counted.
+pub fn record_uncharged_background_egress(
+    resource_limiter: &Option<Arc<ResourceLimiter>>,
+    bytes: u64,
+) {
+    if let Some(limiter) = resource_limiter
+        && limiter.is_background()
+    {
+        BACKGROUND_EGRESS_UNCHARGED_BYTES.inc_by(bytes);
     }
 }
 
@@ -502,5 +526,49 @@ mod tests {
         assert!(fg.get_egress_limiter().get_rate_limit().is_infinite());
         fg.consume_egress(500 * 1024 * 1024);
         assert_eq!(fg.admission_delay(true), Duration::ZERO);
+    }
+
+    // Background egress is counted whether it is charged or not, and the
+    // debt a background read waits for is observed, so operators can tell
+    // whether the limit binds. Foreground egress is not counted.
+    #[test]
+    fn test_background_egress_metrics() {
+        let bg_limiter = Arc::new(ResourceLimiter::new(
+            "test-bg".to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+            true,
+        ));
+        let bg = Some(bg_limiter.clone());
+        let fg = Some(Arc::new(ResourceLimiter::new(
+            "test-fg".to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+            false,
+        )));
+        let consumed = BACKGROUND_EGRESS_CONSUMPTION.get();
+        let uncharged = BACKGROUND_EGRESS_UNCHARGED_BYTES.get();
+
+        charge_background_egress(&fg, 100);
+        charge_background_egress(&None, 100);
+        record_uncharged_background_egress(&fg, 100);
+        record_uncharged_background_egress(&None, 100);
+        assert_eq!(BACKGROUND_EGRESS_CONSUMPTION.get(), consumed);
+        assert_eq!(BACKGROUND_EGRESS_UNCHARGED_BYTES.get(), uncharged);
+
+        // Counted even with the limit disabled, so the limit can be sized.
+        charge_background_egress(&bg, 100);
+        record_uncharged_background_egress(&bg, 200);
+        assert_eq!(BACKGROUND_EGRESS_CONSUMPTION.get(), consumed + 100);
+        assert_eq!(BACKGROUND_EGRESS_UNCHARGED_BYTES.get(), uncharged + 200);
+
+        let waits = BACKGROUND_EGRESS_WAIT_DURATION.get_sample_count();
+        bg_limiter.get_egress_limiter().set_rate_limit(EGRESS_RATE);
+        charge_background_egress(&bg, EGRESS_RATE as u64 * 4);
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+        // Other tests in this crate may observe waits concurrently.
+        assert!(BACKGROUND_EGRESS_WAIT_DURATION.get_sample_count() > waits);
     }
 }
