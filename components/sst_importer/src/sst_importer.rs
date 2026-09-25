@@ -2267,8 +2267,7 @@ impl<E: KvEngine> SstImporter<E> {
             .set_cf(CF_DEFAULT)
             .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
             .set_use_direct_writes(use_direct_io)
-            .build(default_path.temp.to_str().unwrap())
-            .unwrap();
+            .build(default_path.temp.to_str().unwrap())?;
 
         let mut write_meta = meta;
         write_meta.set_cf_name(CF_WRITE.to_owned());
@@ -2278,8 +2277,7 @@ impl<E: KvEngine> SstImporter<E> {
             .set_cf(CF_WRITE)
             .set_compression_type(self.compression_types.get(CF_WRITE).copied())
             .set_use_direct_writes(use_direct_io)
-            .build(write_path.temp.to_str().unwrap())
-            .unwrap();
+            .build(write_path.temp.to_str().unwrap())?;
 
         Ok(TxnSstWriter::new(
             default,

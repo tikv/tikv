@@ -817,7 +817,7 @@ macro_rules! impl_write {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
-                            return (Err(Error::InvalidChunk), Some(rx));
+                            return (Err(e), Some(rx));
                         }
                     };
                     let result = rx
