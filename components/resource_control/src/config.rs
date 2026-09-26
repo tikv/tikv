@@ -42,9 +42,11 @@ pub struct Config {
     /// so with no background task types configured the limit has no effect.
     ///
     /// It is a soft, admission-side limit: a background read is charged once
-    /// its response is built, and the debt is paid by the next background
-    /// read before it is admitted. Background egress can briefly exceed the
-    /// rate by about one second's worth of the rate plus one response.
+    /// its response is built, and later background reads wait for the debt
+    /// before they are admitted. Over time background egress stays at the
+    /// rate, but in the short term it can exceed it by about one second's
+    /// worth of the rate plus the responses of the background reads in
+    /// flight at the same time.
     ///
     /// It covers unary coprocessor and transactional KV read responses;
     /// streaming coprocessor responses are neither charged nor paced. Point
