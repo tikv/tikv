@@ -25,11 +25,9 @@ use tikv_util::{
     time::Instant,
 };
 
-/// Test-only: a cpu_score high enough to guarantee maximum pressure
-/// regardless of configured thresholds, used to drive foreground/read-pool
-/// throttling tests unconditionally into their "fully engaged" branch.
+/// A `cpu_score` above any sane threshold, for tests that engage pressure.
 #[cfg(test)]
-pub(crate) const TARGET_CPU: f64 = 90.0;
+pub(crate) const PEAK_CPU_PCT: f64 = 90.0;
 
 /// Shortest interval [`ThreadGroupCpuTracker::measure_cpu_cores`] will measure
 /// over; below this the tick count is too small to be meaningful and the cached
