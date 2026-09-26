@@ -802,33 +802,39 @@ impl<E: Engine> Endpoint<E> {
         };
         let execute_batch_tasks_serially =
             req.get_execute_batch_tasks_serially() && has_batch_tasks;
-        // Serial collection and result merging bound their waits by the top
-        // task's deadline. The fallback starts before parsing so a failure
-        // cannot reset the timeout.
-        let fallback_deadline =
-            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
+        // Start the shared execution deadline before parsing. Reserve time to
+        // return completed results, but finalization itself has no deadline.
+        let serial_deadline = execute_batch_tasks_serially.then(|| {
+            let request_budget =
+                super::max_execution_duration(req.get_context(), self.max_handle_duration);
+            let budget = serial_batch_task_budget(request_budget, req.get_tasks().len());
+            req.mut_context()
+                .set_max_execution_duration_ms(budget.as_millis() as u64);
+            Deadline::from_now(budget)
+        });
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
         let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
         // Boxed so only batched requests carry the per-task machinery.
         let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
             has_batch_tasks.then(|| {
-                self.process_batch_tasks(&mut req, &peer, output_mode, execute_batch_tasks_serially)
+                self.process_batch_tasks(&mut req, &peer, output_mode, serial_deadline)
                     .boxed()
             });
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
-        let mut top_task_deadline = None;
         // A parse failure creates no top read-pool ID. The finalizer then uses a
         // random ID below so unrelated failures do not share Yatp runtime accounting.
         let mut top_task_id = None;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| {
-                top_task_deadline = Some(r.req_ctx.deadline);
+            .map(|mut r| {
+                if let Some(deadline) = serial_deadline {
+                    Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                }
                 top_task_id = Some(r.req_ctx.build_task_id());
                 top_task_semaphore_group = r.semaphore_group;
                 self.schedule_unary_request(r, output_mode)
@@ -837,11 +843,9 @@ impl<E: Engine> Endpoint<E> {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
-        let batch_deadline = top_task_deadline.unwrap_or(fallback_deadline);
         let batch_finalizer = batch_finalizer_context.map(|request_context| {
             self.build_batch_merge_finalizer(
                 request_context,
-                batch_deadline,
                 top_task_id.unwrap_or_else(rand::random),
                 top_task_semaphore_group,
             )
@@ -864,13 +868,9 @@ impl<E: Engine> Endpoint<E> {
                 // Boxed: the collector holds the top future and the stream
                 // twice over in its layout.
                 Some(batch_outputs) => {
-                    let collect = if execute_batch_tasks_serially {
-                        collect_batch_task_outputs_sequentially(
-                            top_output,
-                            batch_outputs,
-                            batch_deadline,
-                        )
-                        .boxed()
+                    let collect = if let Some(deadline) = serial_deadline {
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
+                            .boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -918,15 +918,16 @@ impl<E: Engine> Endpoint<E> {
     }
 
     // All batched coprocessor tasks are prepared up front. Serial execution
-    // streams them lazily so `ReadPoolHandle::spawn` enqueues only one child at
-    // a time; otherwise `FuturesOrdered` preserves the legacy concurrent
-    // scheduling behavior. Output materialization is controlled independently.
+    // runs them one at a time within `serial_deadline`, so
+    // `ReadPoolHandle::spawn` enqueues only one child at a time; otherwise
+    // `FuturesOrdered` preserves the legacy concurrent scheduling behavior.
+    // Output materialization is controlled independently.
     fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
         output_mode: UnaryOutputMode,
-        execute_serially: bool,
+        serial_deadline: Option<Deadline>,
     ) -> impl Stream<Item = BatchTaskOutput> {
         // Without merging, every task serializes its result inside its own
         // read pool task; with it, results stay unserialized for
@@ -957,12 +958,15 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok(r) => {
+                Ok(mut r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     let tracker_guard = DeferContext::new(move || {
                         GLOBAL_TRACKERS.remove(cur_tracker);
                     });
                     set_tls_tracker_token(cur_tracker);
+                    if let Some(deadline) = serial_deadline {
+                        Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                    }
                     let fut = self.schedule_unary_request(r, output_mode);
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
@@ -1013,21 +1017,25 @@ impl<E: Engine> Endpoint<E> {
                         }
                     };
 
-                    batch_futs.push(future::Either::Left(fut));
+                    batch_futs.push((task_id, future::Either::Left(fut)));
                 }
-                Err(e) => batch_futs.push(future::Either::Right(async move {
-                    make_error_batch_response(&mut response, e);
-                    BatchTaskOutput {
-                        response: response.into(),
-                        mergeable_result: None,
-                    }
-                })),
+                Err(e) => {
+                    let fut = async move {
+                        make_error_batch_response(&mut response, e);
+                        BatchTaskOutput {
+                            response: response.into(),
+                            mergeable_result: None,
+                        }
+                    };
+                    batch_futs.push((task_id, future::Either::Right(fut)));
+                }
             }
         }
-        if execute_serially {
-            Either::Left(stream::iter(batch_futs).then(|task| task))
-        } else {
-            Either::Right(stream::FuturesOrdered::from_iter(batch_futs))
+        match serial_deadline {
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            None => Either::Right(stream::FuturesOrdered::from_iter(
+                batch_futs.into_iter().map(|(_, fut)| fut),
+            )),
         }
     }
 
@@ -1263,7 +1271,6 @@ impl<E: Engine> Endpoint<E> {
     fn build_batch_merge_finalizer(
         &self,
         ctx: kvrpcpb::Context,
-        deadline: Deadline,
         task_id: u64,
         semaphore_group: SemaphoreGroup,
     ) -> BatchMergeFinalizer {
@@ -1272,16 +1279,7 @@ impl<E: Engine> Endpoint<E> {
             semaphore: self.request_semaphore(semaphore_group),
             merge_execution_tag: self.resource_tag_factory.new_tag(&ctx),
             returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
-            priority: ctx.get_priority(),
-            metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
-            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
-                r.get_resource_limiter(
-                    ctx.get_resource_control_context().get_resource_group_name(),
-                    ctx.get_request_source(),
-                    ctx.get_resource_control_context().get_override_priority(),
-                )
-            }),
-            deadline,
+            resource_control_ctx: ctx.get_resource_control_context().clone(),
             task_id,
         }
     }
@@ -2464,12 +2462,7 @@ mod tests {
 
         // Preserve mode defers accounting even when the handler returns ready data.
         assert_eq!(tracked_response_bytes(), 0);
-        let finalizer = copr.build_batch_merge_finalizer(
-            context,
-            Deadline::from_now(Duration::from_secs(60)),
-            0,
-            SemaphoreGroup::Shared,
-        );
+        let finalizer = copr.build_batch_merge_finalizer(context, 0, SemaphoreGroup::Shared);
         let batch_output = BatchTaskOutput {
             response: coppb::StoreBatchTaskResponse::default().into(),
             mergeable_result: Some(Box::new(ConcatMergeable::new(vec![9]))),
