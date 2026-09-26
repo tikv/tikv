@@ -131,10 +131,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.verify_is_primary,
                 self.rollback_if_not_exist,
             )?,
+<<<<<<< HEAD
             Some(Either::Right(shared_locks)) => {
                 // a shared-locked key cannot be the primary key of a transaction thus reject
                 // the request directly. This can happen when the original lock is already
                 // gone and another transaction places a shared lock on the same key.
+=======
+            Some(Either::Right(shared_locks)) if shared_locks.contains_start_ts(self.lock_ts) => {
+                // A shared lock cannot be this transaction's primary lock.
+>>>>>>> 548812e1ef (storage: check shared-lock ownership before reporting mismatch (#20118))
                 warn!("reject check_txn_status on shared lock";
                     "lock_ts" => self.lock_ts,
                     "key" => ?&self.primary_key,
@@ -144,10 +149,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 )));
             }
             l => {
-                // Either no lock or lock with different ts - extract lock if present
                 let lock = l.and_then(|lock_or_shared| match lock_or_shared {
                     Either::Left(lock) => Some(lock),
-                    Either::Right(_) => None, // SharedLocks already handled above
+                    // Unrelated shared holders do not belong to this transaction.
+                    Either::Right(_) => None,
                 });
                 (
                     check_txn_status_missing_lock(
@@ -1272,6 +1277,100 @@ pub mod tests {
     }
 
     #[test]
+    fn test_check_txn_status_with_unrelated_shared_lock_after_commit() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"primary";
+        let secondary = b"secondary";
+
+        // The primary is committed, but its secondary still needs resolution.
+        must_prewrite_put(&mut engine, primary, b"value", primary, 1);
+        must_prewrite_put(&mut engine, secondary, b"value", primary, 1);
+        must_commit(&mut engine, primary, 1, 5);
+        must_acquire_shared_pessimistic_lock(&mut engine, primary, b"other-primary", 10, 10, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, primary, b"another-primary", 20, 20, 100);
+        let shared_before = must_load_shared_lock(&mut engine, primary);
+        assert_eq!(shared_before.len(), 2);
+
+        must_success(
+            &mut engine,
+            primary,
+            1,
+            30,
+            30,
+            false,
+            false,
+            false,
+            committed(5),
+        );
+        assert_eq!(
+            must_load_shared_lock(&mut engine, primary).to_bytes(),
+            shared_before.to_bytes()
+        );
+
+        must_commit(&mut engine, secondary, 1, 5);
+        must_get_commit_ts(&mut engine, secondary, 1, 5);
+    }
+
+    #[test]
+    fn test_check_txn_status_with_unrelated_shared_lock_after_rollback() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"primary";
+
+        must_prewrite_put(&mut engine, primary, b"value", primary, 1);
+        must_rollback(&mut engine, primary, 1, true);
+        must_acquire_shared_pessimistic_lock(&mut engine, primary, b"other-primary", 10, 10, 100);
+        let shared_before = must_load_shared_lock(&mut engine, primary).to_bytes();
+
+        must_success(&mut engine, primary, 1, 10, 20, false, false, false, |s| {
+            s == RolledBack
+        });
+        must_get_rollback_ts(&mut engine, primary, 1);
+        assert_eq!(
+            must_load_shared_lock(&mut engine, primary).to_bytes(),
+            shared_before
+        );
+    }
+
+    #[test]
+    fn test_check_txn_status_with_unrelated_shared_lock_when_missing() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"primary";
+        must_acquire_shared_pessimistic_lock(&mut engine, primary, b"other-primary", 10, 10, 100);
+        let shared_before = must_load_shared_lock(&mut engine, primary).to_bytes();
+
+        let error = must_err(&mut engine, primary, 1, 10, 20, false, false, false);
+        assert!(matches!(
+            error,
+            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::TxnNotFound {
+                ..
+            })))
+        ));
+        must_get_rollback_ts_none(&mut engine, primary, 1);
+        assert_eq!(
+            must_load_shared_lock(&mut engine, primary).to_bytes(),
+            shared_before
+        );
+
+        must_success(&mut engine, primary, 1, 10, 20, true, false, true, |s| {
+            s == LockNotExistDoNothing
+        });
+        must_get_rollback_ts_none(&mut engine, primary, 1);
+        assert_eq!(
+            must_load_shared_lock(&mut engine, primary).to_bytes(),
+            shared_before
+        );
+
+        must_success(&mut engine, primary, 1, 10, 20, true, false, false, |s| {
+            s == LockNotExist
+        });
+        must_get_rollback_protected(&mut engine, primary, 1, true);
+        assert_eq!(
+            must_load_shared_lock(&mut engine, primary).to_bytes(),
+            shared_before
+        );
+    }
+
+    #[test]
     fn test_verify_is_primary() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
 
@@ -1313,7 +1412,7 @@ pub mod tests {
         );
 
         must_acquire_shared_pessimistic_lock(&mut engine, b"k2", b"k3", 2, 2, 100);
-        let e = must_err(&mut engine, b"k2", 1, 3, 3, true, false, true);
+        let e = must_err(&mut engine, b"k2", 2, 3, 3, true, false, true);
         check_error(e, b"k2", b"", kvrpcpb::Op::SharedLock);
     }
 
