@@ -531,7 +531,7 @@ impl Simulator for NodeCluster {
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
         let read_ctx = ReadContext::new(batch_id, None);
-        router.read(read_ctx, request, cb).unwrap();
+        router.read(read_ctx, request, cb, raftstore::store::RaftCmdExtraOpts::default()).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
