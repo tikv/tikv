@@ -341,7 +341,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region
         );
         assert!(!self.storage().has_dirty_data());
-        let (ch, res) = CmdResChannel::pair();
+        let (ch, mut res) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
         if let Some(res) = res.take_result() {
             if res.get_header().has_error() {
