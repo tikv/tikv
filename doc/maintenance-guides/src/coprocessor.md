@@ -98,6 +98,20 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 
 ## Data Model And Metadata Contracts
 
+- Full-sampling Analyze requests with `ndv_rate` in `(0, 1)` select NDV rows
+  after MVCC visibility checks and before filling column vectors. Histogram
+  rows are selected separately; fixed-size reservoirs still see every row.
+  Scan batches count skipped rows and remain bounded by visible rows.
+  Sampled Analyze charges background read bandwidth for all scanned KV bytes,
+  including rows not selected for either sample.
+- Sampled responses set `RowSampleCollector.ndv_sample_count`, including zero.
+  `count` counts all visible rows. TiKV scales NULL counts and sizes by the
+  actual visible-row / selected-row ratio when serializing the response, after
+  any batch merges. TiDB adds these population estimates as usual.
+  Each FMSketch keeps disjoint singleton and repeated hash sets under one mask
+  and size limit. TiDB estimates NDV after merging the sketches. Missing
+  `ndv_rate` or a rate of one preserves the legacy path and omits
+  `ndv_sample_count`.
 - `ReqContext` is the key runtime metadata contract:
   context, ranges, deadline, peer, start ts, lock-bypass sets, bounds, cache
   version, perf level.

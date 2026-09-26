@@ -322,7 +322,7 @@ fn test_analyze_sampling_bernoulli() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, limiter) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 0, 0.5);
@@ -336,6 +336,53 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_count(), 9);
     assert_eq!(collector.get_fm_sketch().len(), 4);
     assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
+    assert!(!collector.has_ndv_sample_count());
+
+    // Tiny rates round to a zero Bernoulli threshold. They exercise empty
+    // samples without a random assertion or a test-only sampling path.
+    let mut scanned_bytes = None;
+    for (ndv_rate, histogram_rate, sample_size, histogram_count) in [
+        (f64::MIN_POSITIVE, 1.0, 0, 9),
+        (f64::MIN_POSITIVE, f64::MIN_POSITIVE, 0, 0),
+        (0.5, f64::MIN_POSITIVE, 0, 0),
+        (0.5, 0.0, 5, 5),
+    ] {
+        let mut req = new_analyze_sampling_req(&product, 1, sample_size, histogram_rate);
+        let mut analyze_req: AnalyzeReq = protobuf::parse_from_bytes(req.get_data()).unwrap();
+        analyze_req.mut_col_req().set_ndv_rate(ndv_rate);
+        analyze_req.mut_col_req().set_sketch_size(1000);
+        req.set_data(analyze_req.write_to_bytes().unwrap());
+        let before = limiter.total_read_bytes_consumed(false);
+        let resp = handle_request(&endpoint, req);
+        assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+        let consumed = limiter.total_read_bytes_consumed(false) - before;
+        assert!(consumed > 0);
+        assert_eq!(consumed, *scanned_bytes.get_or_insert(consumed));
+        let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
+        let collector = analyze_resp.get_row_collector();
+        assert_eq!(collector.get_count(), 9);
+        assert!(collector.has_ndv_sample_count());
+        assert_eq!(collector.get_samples().len(), histogram_count);
+        let selected = collector.get_ndv_sample_count();
+        if ndv_rate == f64::MIN_POSITIVE {
+            assert_eq!(selected, 0);
+        }
+        // The sketch counts selected values; size describes the full population.
+        assert_eq!(
+            collector.get_fm_sketch()[0].get_hashset().len(),
+            selected as usize
+        );
+        assert!(collector.get_fm_sketch()[0].get_multi_hashset().is_empty());
+        assert_eq!(
+            collector.get_total_size()[0],
+            if selected == 0 { 0 } else { 72 }
+        );
+        assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
+        assert_eq!(
+            collector.get_null_counts()[1],
+            collector.get_null_counts()[3]
+        );
+    }
 }
 
 #[test]

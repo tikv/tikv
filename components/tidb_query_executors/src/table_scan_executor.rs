@@ -44,6 +44,17 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
 }
 
 impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
+    /// Sample only after MVCC visibility is resolved, before column vectors are
+    /// filled. A reservoir caller must use histogram_rate = 1. Call
+    /// `take_analyze_row_sample` after every batch.
+    pub fn sample_analyze_rows(&mut self, ndv_rate: f64, histogram_rate: f64) -> Result<()> {
+        self.0.sample_analyze_rows(ndv_rate, histogram_rate)
+    }
+
+    pub fn take_analyze_row_sample(&mut self) -> Option<AnalyzeRowSample> {
+        self.0.take_analyze_row_sample()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
@@ -828,6 +839,56 @@ mod tests {
                     test_basic_scan(&helper, ranges.clone(), cols, batch_expect_rows);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_analyze_row_sampling() {
+        let helper = TableScanTestHelper::new();
+        for (ndv, histogram) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+                helper.store(),
+                Arc::new(EvalConfig::default()),
+                helper.columns_info.clone(),
+                helper.mixed_ranges_for_whole_table(),
+                vec![],
+                false,
+                false,
+                vec![],
+            )
+            .unwrap();
+            executor
+                .sample_analyze_rows(u8::from(ndv) as f64, u8::from(histogram) as f64)
+                .unwrap();
+            let mut count = 0;
+            loop {
+                let result = block_on(executor.next_batch(2));
+                let sample = executor.take_analyze_row_sample().unwrap();
+                // Even a batch with no selected rows must make bounded progress.
+                assert!(sample.visible_rows <= 2);
+                assert_eq!(sample.selected_rows.len(), result.logical_rows.len());
+                assert!(
+                    sample
+                        .selected_rows
+                        .iter()
+                        .all(|row| row.ndv == ndv && row.histogram == histogram)
+                );
+                if ndv || histogram {
+                    helper.expect_table_values(
+                        &[0, 1, 2],
+                        count,
+                        sample.visible_rows,
+                        result.physical_columns,
+                    );
+                } else {
+                    assert!(result.logical_rows.is_empty());
+                }
+                count += sample.visible_rows;
+                if result.is_drained.unwrap().stop() {
+                    break;
+                }
+            }
+            assert_eq!(count, helper.data.len());
         }
     }
 

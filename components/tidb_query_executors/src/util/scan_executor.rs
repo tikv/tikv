@@ -3,6 +3,7 @@
 use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tidb_query_common::{
     Result,
     metrics::{ExecutorName, record_executor_work},
@@ -57,6 +58,27 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
     /// or there was an error scanning the table, this flag will be set to
     /// `true` and `next_batch` should be never called again.
     is_ended: bool,
+    analyze_sampling: Option<AnalyzeSampling>,
+}
+
+#[derive(Clone, Copy)]
+pub struct RowSampleSelection {
+    pub ndv: bool,
+    pub histogram: bool,
+}
+
+#[derive(Default)]
+pub struct AnalyzeRowSample {
+    pub visible_rows: usize,
+    /// One selection per materialized row, in physical row order.
+    pub selected_rows: Vec<RowSampleSelection>,
+}
+
+struct AnalyzeSampling {
+    ndv_rate: f64,
+    histogram_rate: f64,
+    rng: StdRng,
+    batch: AnalyzeRowSample,
 }
 
 pub struct ScanExecutorOptions<S, I> {
@@ -104,7 +126,27 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 load_commit_ts,
             }),
             is_ended: false,
+            analyze_sampling: None,
         })
+    }
+
+    pub fn sample_analyze_rows(&mut self, ndv_rate: f64, histogram_rate: f64) -> Result<()> {
+        if !(0.0..=1.0).contains(&ndv_rate) || !(0.0..=1.0).contains(&histogram_rate) {
+            return Err(other_err!("analyze sampling rates must be between 0 and 1"));
+        }
+        self.analyze_sampling = Some(AnalyzeSampling {
+            ndv_rate,
+            histogram_rate,
+            rng: StdRng::from_entropy(),
+            batch: AnalyzeRowSample::default(),
+        });
+        Ok(())
+    }
+
+    pub fn take_analyze_row_sample(&mut self) -> Option<AnalyzeRowSample> {
+        self.analyze_sampling
+            .as_mut()
+            .map(|sampling| std::mem::take(&mut sampling.batch))
     }
 
     /// Fills a column vector and returns whether or not all ranges are drained.
@@ -136,6 +178,19 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 let (key, value) = row.kv();
                 scanned_kv_bytes =
                     scanned_kv_bytes.saturating_add((key.len() + value.len()) as u64);
+                if let Some(sampling) = &mut self.analyze_sampling {
+                    sampling.batch.visible_rows += 1;
+                    // Draw from the visible population for each purpose. Sampling
+                    // the NDV rows again would multiply the requested rates.
+                    let selection = RowSampleSelection {
+                        ndv: sampling.rng.gen_bool(sampling.ndv_rate),
+                        histogram: sampling.rng.gen_bool(sampling.histogram_rate),
+                    };
+                    if !selection.ndv && !selection.histogram {
+                        continue;
+                    }
+                    sampling.batch.selected_rows.push(selection);
+                }
                 if let Err(e) = self
                     .imp
                     .process_kv_pair(key, value, columns, row.commit_ts())
