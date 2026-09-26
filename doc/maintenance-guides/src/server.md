@@ -63,6 +63,10 @@ Concrete runtime anchors:
 High-risk service contracts:
 
 - metadata-derived store-id checks
+- transaction RPC protocol admission is request-scoped: every protected unary,
+  BatchCommands child, and transactional Coprocessor path must reject an
+  out-of-range declaration before it schedules work; the online emergency
+  bypass is shared runtime state, not a replacement for the persisted config
 - advertised store and status addresses published through PD store metadata
 - request batching and stream callback completion
 - region-error and timeout mapping from storage/raftstore to RPCs
@@ -171,6 +175,8 @@ High-risk service contracts:
 ## Observability And Operational Signals
 
 - gRPC service metrics and request-duration tracking
+- `tikv_txn_protocol_*` admission, rejection, bypass, and caller-audit
+  counters; raw declarations and peer addresses belong only in rate-limited logs
 - raft transport rejection and memory-pressure signals
 - raft address-resolution success, failure, tombstone, and not-found counters;
   retryable not-found warnings are emitted immediately and then rate limited

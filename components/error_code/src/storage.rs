@@ -26,6 +26,7 @@ define_error_codes!(
     API_VERSION_NOT_MATCHED => ("ApiVersionNotMatched", "", ""),
     INVALID_KEY_MODE => ("InvalidKeyMode", "", ""),
     INVALID_MAX_TS_UPDATE => ("InvalidMaxTsUpdate", "", ""),
+    TXN_PROTOCOL_INCOMPATIBLE => ("TxnProtocolIncompatible", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),

@@ -55,6 +55,9 @@ Concrete runtime anchors:
 High-risk contracts:
 
 - MVCC relationships across default/lock/write CFs
+- transaction-protocol incompatibility must remain a structured region error
+  through the MVCC → transaction → storage error chain; legacy fallback is
+  encoded only at the RPC envelope
 - `ProcessResult` and callback completion semantics
 - `TxnStatusCache` and max-ts related assumptions
 - raw KV API version and TTL rules from `config.rs`

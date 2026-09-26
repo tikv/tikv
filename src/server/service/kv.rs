@@ -23,7 +23,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use health_controller::HealthController;
-use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
+use kvproto::{coprocessor::*, errorpb, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
@@ -54,8 +54,9 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult, gc_worker::GcWorker,
-        load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        config::TxnProtocolAdmissionConfig, gc_worker::GcWorker, load_statistics::ThreadLoadPool,
+        metrics::*, snap::Task as SnapTask,
     },
     storage::{
         self, SecondaryLocksStatus, Storage, TxnStatus,
@@ -71,6 +72,293 @@ use crate::{
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+const TXN_PROTOCOL_WARNING_INTERVAL_SECS: u64 = 60;
+const TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS: u64 = u64::MAX;
+static LAST_UNKNOWN_TXN_PROTOCOL_ORIGIN_WARNING_SECS: AtomicU64 =
+    AtomicU64::new(TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS);
+static LAST_TXN_PROTOCOL_INCOMPATIBLE_WARNING_SECS: AtomicU64 =
+    AtomicU64::new(TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS);
+static LAST_TXN_PROTOCOL_ADMISSION_BYPASS_WARNING_SECS: AtomicU64 =
+    AtomicU64::new(TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS);
+static LAST_INVALID_TXN_REQUEST_WARNING_SECS: AtomicU64 =
+    AtomicU64::new(TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS);
+
+/// Identifies a transaction RPC caller without resolving the peer address on
+/// the successful hot path.
+#[derive(Clone, Copy)]
+enum CallerInfo<'a> {
+    Rpc(&'a RpcContext<'a>),
+    Resolved(&'a str),
+}
+
+impl std::fmt::Display for CallerInfo<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("{peer:")?;
+        match self {
+            CallerInfo::Rpc(ctx) => write!(f, "{:?}", ctx.peer())?,
+            CallerInfo::Resolved(peer) => write!(f, "{:?}", peer)?,
+        }
+        f.write_str("}")
+    }
+}
+
+#[inline]
+fn should_log_txn_protocol_warning(last_warning_secs: &AtomicU64) -> bool {
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut last = last_warning_secs.load(Ordering::Relaxed);
+    loop {
+        if last != TXN_PROTOCOL_WARNING_UNINITIALIZED_SECS
+            && now_secs.saturating_sub(last) < TXN_PROTOCOL_WARNING_INTERVAL_SECS
+        {
+            return false;
+        }
+        match last_warning_secs.compare_exchange_weak(
+            last,
+            now_secs,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(current) => last = current,
+        }
+    }
+}
+
+fn check_txn_protocol_admission(
+    ctx: &Context,
+    caller: CallerInfo<'_>,
+    command: TxnRpcCommand,
+    admission_config: &TxnProtocolAdmissionConfig,
+) -> Option<errorpb::Error> {
+    let declaration = ctx.get_txn_protocol_version();
+    if ctx.get_request_origin() == RequestOrigin::RequestOriginUnknown
+        && should_log_txn_protocol_warning(&LAST_UNKNOWN_TXN_PROTOCOL_ORIGIN_WARNING_SECS)
+    {
+        warn!("transaction RPC has an unknown request origin";
+            "command" => command.get_str(), "region_id" => ctx.get_region_id(), "caller" => %caller,
+            "request_origin" => get_txn_rpc_origin(ctx).get_str(),
+            "raw_request_origin" => ctx.get_request_origin() as i32,
+            "txn_protocol_version" => declaration, "request_source" => ctx.get_request_source(),
+            "reason" => "unknown_request_origin");
+    }
+    match crate::storage::txn_protocol::check_admission(ctx) {
+        Some(rejection) => {
+            record_txn_protocol_caller_audit(ctx, command, TxnRpcDeclarationState::out_of_range);
+            if !admission_config.is_enabled() {
+                record_txn_protocol_admission_bypass(
+                    ctx,
+                    command,
+                    "txn_protocol_version_out_of_range",
+                );
+                if should_log_txn_protocol_warning(&LAST_TXN_PROTOCOL_ADMISSION_BYPASS_WARNING_SECS)
+                {
+                    warn!("transaction RPC protocol admission is bypassed";
+                        "command" => command.get_str(), "region_id" => ctx.get_region_id(), "caller" => %caller,
+                        "request_origin" => get_txn_rpc_origin(ctx).get_str(),
+                        "raw_request_origin" => ctx.get_request_origin() as i32,
+                        "txn_protocol_version" => declaration, "request_source" => ctx.get_request_source(),
+                        "reason" => rejection.message, "min_txn_protocol_version" => rejection.min_compatible,
+                        "max_txn_protocol_version" => rejection.max_compatible);
+                }
+                return None;
+            }
+            record_txn_protocol_incompatible_rejection(
+                ctx,
+                command,
+                "global_version",
+                "txn_protocol_version_out_of_range",
+            );
+            if should_log_txn_protocol_warning(&LAST_TXN_PROTOCOL_INCOMPATIBLE_WARNING_SECS) {
+                warn!("transaction RPC protocol declaration is incompatible";
+                    "command" => command.get_str(), "region_id" => ctx.get_region_id(), "caller" => %caller,
+                    "request_origin" => get_txn_rpc_origin(ctx).get_str(),
+                    "raw_request_origin" => ctx.get_request_origin() as i32,
+                    "txn_protocol_version" => declaration, "request_source" => ctx.get_request_source(),
+                    "reason" => rejection.message, "min_txn_protocol_version" => rejection.min_compatible,
+                    "max_txn_protocol_version" => rejection.max_compatible);
+            }
+            Some(rejection.into_region_error())
+        }
+        None => {
+            let state = if declaration == crate::storage::txn_protocol::TXN_PROTOCOL_VERSION_LEGACY
+            {
+                TxnRpcDeclarationState::legacy_or_missing
+            } else {
+                TxnRpcDeclarationState::valid
+            };
+            record_txn_protocol_caller_audit(ctx, command, state);
+            None
+        }
+    }
+}
+
+fn reject_invalid_txn_request(
+    ctx: &Context,
+    caller: CallerInfo<'_>,
+    command: TxnRpcCommand,
+    reason: &'static str,
+) -> KeyError {
+    record_invalid_txn_request(ctx, command, reason);
+    if should_log_txn_protocol_warning(&LAST_INVALID_TXN_REQUEST_WARNING_SECS) {
+        warn!("transaction RPC request is invalid";
+            "command" => command.get_str(), "region_id" => ctx.get_region_id(), "caller" => %caller,
+            "request_origin" => get_txn_rpc_origin(ctx).get_str(),
+            "raw_request_origin" => ctx.get_request_origin() as i32,
+            "txn_protocol_version" => ctx.get_txn_protocol_version(), "request_source" => ctx.get_request_source(),
+            "reason" => reason);
+    }
+    let mut error = KeyError::default();
+    error.set_abort(format!("invalid_txn_request:{reason}"));
+    error
+}
+
+fn validate_resolve_lock_req(req: &ResolveLockRequest) -> Option<&'static str> {
+    let start_version = req.get_start_version();
+    if req
+        .get_txn_infos()
+        .iter()
+        .any(|info| info.get_txn() == 0 && (start_version == 0 || info.get_is_txn_file()))
+    {
+        return Some("zero_txn_info");
+    }
+    if start_version != 0 {
+        return None;
+    }
+    if !req.get_keys().is_empty() || req.get_is_txn_file() {
+        return Some("zero_start_version");
+    }
+    None
+}
+
+trait TxnRequestValidation {
+    type Response: Default;
+
+    fn context(&self) -> &Context;
+    fn invalid_reason(&self) -> Option<&'static str>;
+    fn set_invalid_error(response: &mut Self::Response, error: KeyError);
+}
+
+fn invalid_txn_request_response<T: TxnRequestValidation>(
+    req: &T,
+    caller: CallerInfo<'_>,
+    command: TxnRpcCommand,
+) -> Option<T::Response> {
+    req.invalid_reason().map(|reason| {
+        let mut response = T::Response::default();
+        T::set_invalid_error(
+            &mut response,
+            reject_invalid_txn_request(req.context(), caller, command, reason),
+        );
+        response
+    })
+}
+
+macro_rules! impl_txn_request_validation {
+    ($request:ty => $response:ty,no_argument_check) => {
+        impl TxnRequestValidation for $request {
+            type Response = $response;
+
+            fn context(&self) -> &Context {
+                self.get_context()
+            }
+
+            fn invalid_reason(&self) -> Option<&'static str> {
+                None
+            }
+
+            fn set_invalid_error(_: &mut Self::Response, _: KeyError) {
+                unreachable!("requests without argument checks cannot have invalid errors")
+            }
+        }
+    };
+    ($request:ty => $response:ty,reason = $reason:expr,set_error = $setter:expr) => {
+        impl TxnRequestValidation for $request {
+            type Response = $response;
+
+            fn context(&self) -> &Context {
+                self.get_context()
+            }
+
+            fn invalid_reason(&self) -> Option<&'static str> {
+                $reason(self)
+            }
+
+            fn set_invalid_error(response: &mut Self::Response, error: KeyError) {
+                $setter(response, error)
+            }
+        }
+    };
+}
+
+impl_txn_request_validation!(GetRequest => GetResponse, no_argument_check);
+impl_txn_request_validation!(ScanRequest => ScanResponse, no_argument_check);
+impl_txn_request_validation!(BatchGetRequest => BatchGetResponse, no_argument_check);
+impl_txn_request_validation!(ScanLockRequest => ScanLockResponse, no_argument_check);
+impl_txn_request_validation!(DeleteRangeRequest => DeleteRangeResponse, no_argument_check);
+impl_txn_request_validation!(MvccGetByKeyRequest => MvccGetByKeyResponse, no_argument_check);
+impl_txn_request_validation!(
+    MvccGetByStartTsRequest => MvccGetByStartTsResponse,
+    no_argument_check
+);
+impl_txn_request_validation!(Request => Response, no_argument_check);
+impl_txn_request_validation!(
+    PrewriteRequest => PrewriteResponse,
+    reason = |request: &PrewriteRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut PrewriteResponse, error| response.set_errors(vec![error].into())
+);
+impl_txn_request_validation!(
+    PessimisticLockRequest => PessimisticLockResponse,
+    reason = |request: &PessimisticLockRequest| (request.get_start_version() == 0)
+        .then_some("zero_start_version"),
+    set_error = |response: &mut PessimisticLockResponse, error| response.set_errors(vec![error].into())
+);
+impl_txn_request_validation!(
+    PessimisticRollbackRequest => PessimisticRollbackResponse,
+    reason = |request: &PessimisticRollbackRequest| (request.get_start_version() == 0)
+        .then_some("zero_start_version"),
+    set_error = |response: &mut PessimisticRollbackResponse, error| response.set_errors(vec![error].into())
+);
+impl_txn_request_validation!(
+    BatchRollbackRequest => BatchRollbackResponse,
+    reason = |request: &BatchRollbackRequest| (request.get_start_version() == 0)
+        .then_some("zero_start_version"),
+    set_error = |response: &mut BatchRollbackResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    ResolveLockRequest => ResolveLockResponse,
+    reason = validate_resolve_lock_req,
+    set_error = |response: &mut ResolveLockResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    CommitRequest => CommitResponse,
+    reason = |request: &CommitRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut CommitResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    CleanupRequest => CleanupResponse,
+    reason = |request: &CleanupRequest| (request.get_start_version() == 0).then_some("zero_start_version"),
+    set_error = |response: &mut CleanupResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    TxnHeartBeatRequest => TxnHeartBeatResponse,
+    reason = |request: &TxnHeartBeatRequest| (request.get_start_version() == 0)
+        .then_some("zero_start_version"),
+    set_error = |response: &mut TxnHeartBeatResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    CheckTxnStatusRequest => CheckTxnStatusResponse,
+    reason = |request: &CheckTxnStatusRequest| (request.get_lock_ts() == 0).then_some("zero_lock_ts"),
+    set_error = |response: &mut CheckTxnStatusResponse, error| response.set_error(error)
+);
+impl_txn_request_validation!(
+    CheckSecondaryLocksRequest => CheckSecondaryLocksResponse,
+    reason = |request: &CheckSecondaryLocksRequest| (request.get_start_version() == 0)
+        .then_some("zero_start_version"),
+    set_error = |response: &mut CheckSecondaryLocksResponse, error| response.set_error(error)
+);
 
 pub trait RaftGrpcMessageFilter: Send + Sync {
     fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
@@ -141,6 +429,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_feedback_seq: Arc<AtomicU64>,
 
     raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+    txn_protocol_admission: TxnProtocolAdmissionConfig,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -169,6 +458,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             health_feedback_seq: self.health_feedback_seq.clone(),
             health_feedback_interval: self.health_feedback_interval,
             raft_message_filter: self.raft_message_filter.clone(),
+            txn_protocol_admission: self.txn_protocol_admission.clone(),
         }
     }
 }
@@ -192,6 +482,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
         raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+        txn_protocol_admission: TxnProtocolAdmissionConfig,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -215,6 +506,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
             raft_message_filter,
+            txn_protocol_admission,
         }
     }
 
@@ -278,10 +570,34 @@ macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, txn = $command: ident) => {
+        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail, txn = $command);
+    };
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt $(, txn = $command: ident)?) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             reject_if_cluster_id_mismatch!(req, self, ctx, sink);
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
+            $(
+                if let Some(response) = invalid_txn_request_response(
+                    &req,
+                    CallerInfo::Rpc(&ctx),
+                    TxnRpcCommand::$command,
+                ) {
+                    ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
+                    return;
+                }
+                if let Some(error) = check_txn_protocol_admission(
+                    req.get_context(),
+                    CallerInfo::Rpc(&ctx),
+                    TxnRpcCommand::$command,
+                    &self.txn_protocol_admission,
+                ) {
+                    let mut response = $resp_ty::default();
+                    response.set_region_error(error);
+                    ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
+                    return;
+                }
+            )?
             let begin_instant = Instant::now();
 
             let source = req.get_context().get_request_source().to_owned();
@@ -336,102 +652,129 @@ macro_rules! set_total_time {
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
-    handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
-    handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
+    handle_request!(
+        kv_get,
+        future_get,
+        GetRequest,
+        GetResponse,
+        has_time_detail,
+        txn = get
+    );
+    handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse, txn = scan);
     handle_request!(
         kv_prewrite,
         future_prewrite,
         PrewriteRequest,
         PrewriteResponse,
-        has_time_detail
+        has_time_detail,
+        txn = prewrite
     );
     handle_request!(
         kv_pessimistic_lock,
         future_acquire_pessimistic_lock,
         PessimisticLockRequest,
         PessimisticLockResponse,
-        has_time_detail
+        has_time_detail,
+        txn = pessimistic_lock
     );
     handle_request!(
         kv_pessimistic_rollback,
         future_pessimistic_rollback,
         PessimisticRollbackRequest,
         PessimisticRollbackResponse,
-        has_time_detail
+        has_time_detail,
+        txn = pessimistic_rollback
     );
     handle_request!(
         kv_commit,
         future_commit,
         CommitRequest,
         CommitResponse,
-        has_time_detail
+        has_time_detail,
+        txn = commit
     );
-    handle_request!(kv_cleanup, future_cleanup, CleanupRequest, CleanupResponse);
+    handle_request!(
+        kv_cleanup,
+        future_cleanup,
+        CleanupRequest,
+        CleanupResponse,
+        txn = cleanup
+    );
     handle_request!(
         kv_batch_get,
         future_batch_get,
         BatchGetRequest,
-        BatchGetResponse
+        BatchGetResponse,
+        txn = batch_get
     );
     handle_request!(
         kv_batch_rollback,
         future_batch_rollback,
         BatchRollbackRequest,
         BatchRollbackResponse,
-        has_time_detail
+        has_time_detail,
+        txn = batch_rollback
     );
     handle_request!(
         kv_txn_heart_beat,
         future_txn_heart_beat,
         TxnHeartBeatRequest,
         TxnHeartBeatResponse,
-        has_time_detail
+        has_time_detail,
+        txn = txn_heart_beat
     );
     handle_request!(
         kv_check_txn_status,
         future_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse,
-        has_time_detail
+        has_time_detail,
+        txn = check_txn_status
     );
     handle_request!(
         kv_check_secondary_locks,
         future_check_secondary_locks,
         CheckSecondaryLocksRequest,
         CheckSecondaryLocksResponse,
-        has_time_detail
+        has_time_detail,
+        txn = check_secondary_locks
     );
     handle_request!(
         kv_scan_lock,
         future_scan_lock,
         ScanLockRequest,
         ScanLockResponse,
-        has_time_detail
+        has_time_detail,
+        txn = scan_lock
     );
     handle_request!(
         kv_resolve_lock,
         future_resolve_lock,
         ResolveLockRequest,
         ResolveLockResponse,
-        has_time_detail
+        has_time_detail,
+        txn = resolve_lock
     );
     handle_request!(
         kv_delete_range,
         future_delete_range,
         DeleteRangeRequest,
-        DeleteRangeResponse
+        DeleteRangeResponse,
+        txn = delete_range
     );
     handle_request!(
         mvcc_get_by_key,
         future_mvcc_get_by_key,
         MvccGetByKeyRequest,
-        MvccGetByKeyResponse
+        MvccGetByKeyResponse,
+        txn = mvcc_get_by_key
     );
     handle_request!(
         mvcc_get_by_start_ts,
         future_mvcc_get_by_start_ts,
         MvccGetByStartTsRequest,
-        MvccGetByStartTsResponse
+        MvccGetByStartTsResponse,
+        txn = mvcc_get_by_start_ts
     );
     handle_request!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
     handle_request!(
@@ -590,6 +933,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
+        if let Some(error) = check_txn_protocol_admission(
+            req.get_context(),
+            CallerInfo::Rpc(&ctx),
+            TxnRpcCommand::coprocessor,
+            &self.txn_protocol_admission,
+        ) {
+            let mut response = Response::default();
+            response.set_region_error(error);
+            ctx.spawn(sink.success(response).unwrap_or_else(|_| {}));
+            return;
+        }
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -736,6 +1090,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
+        if let Some(error) = check_txn_protocol_admission(
+            req.get_context(),
+            CallerInfo::Rpc(&ctx),
+            TxnRpcCommand::coprocessor,
+            &self.txn_protocol_admission,
+        ) {
+            let mut response = Response::default();
+            response.set_region_error(error);
+            let future = async move {
+                if sink
+                    .send((response, WriteFlags::default().buffer_hint(true)))
+                    .await
+                    .is_ok()
+                {
+                    let _ = sink.close().await;
+                }
+            };
+            ctx.spawn(future);
+            return;
+        }
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
@@ -1049,6 +1423,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let resource_manager = self.resource_manager.clone();
+        let txn_protocol_admission = self.txn_protocol_admission.clone();
         let cluster_id = self.cluster_id;
         let mut health_feedback_attacher = HealthFeedbackAttacher::new(
             self.store_id,
@@ -1075,6 +1450,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         req,
                         &tx,
                         &resource_manager,
+                        &txn_protocol_admission,
                     )
                 {
                     let e = RpcStatus::with_message(
@@ -1082,9 +1458,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         server_err.to_string(),
                     );
                     return future::err(GrpcError::RpcFailure(e));
-                }
-                if let Some(batch) = batcher.as_mut() {
-                    batch.maybe_commit(&storage, &tx);
                 }
             }
             if let Some(batch) = batcher {
@@ -1351,6 +1724,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
     resource_manager: &Option<Arc<ResourceGroupManager>>,
+    txn_protocol_admission: &TxnProtocolAdmissionConfig,
 ) -> Result<(), Error> {
     macro_rules! handle_cluster_id_mismatch {
         ($cluster_id:expr, $req:expr) => {
@@ -1378,8 +1752,46 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         };
     }
 
+    macro_rules! reject_txn_request {
+        ($req:expr, $response:ident, $command:ident, $variant:ident) => {
+            if let Some(response) = invalid_txn_request_response(
+                &$req,
+                CallerInfo::Resolved(peer),
+                TxnRpcCommand::$command,
+            )
+            .or_else(|| {
+                check_txn_protocol_admission(
+                    $req.get_context(),
+                    CallerInfo::Resolved(peer),
+                    TxnRpcCommand::$command,
+                    txn_protocol_admission,
+                )
+                .map(|error| {
+                    let mut response = $response::default();
+                    response.set_region_error(error);
+                    response
+                })
+            }) {
+                let response = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::$variant(response)),
+                    ..Default::default()
+                };
+                response_batch_commands_request(
+                    id,
+                    future::ok(response),
+                    tx.clone(),
+                    Instant::now(),
+                    GrpcTypeKind::invalid,
+                    String::default(),
+                    ResourcePriority::unknown,
+                );
+                return Ok(());
+            }
+        };
+    }
+
     macro_rules! handle_cmd {
-        ($($cmd: ident, $future_fn: ident ( $($arg: expr),* ), $metric_name: ident;)*) => {
+        ($($cmd: ident, $future_fn: ident ( $($arg: expr),* ), $metric_name: ident $(, txn = $txn_command:ident : $response:ident)?;)*) => {
             match req.cmd {
                 None => {
                     // For some invalid requests.
@@ -1389,6 +1801,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    reject_txn_request!(req, GetResponse, get, Get);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1438,6 +1851,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    reject_txn_request!(req, Response, coprocessor, Coprocessor);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1485,6 +1899,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    $(reject_txn_request!(req, $response, $txn_command, $cmd);)?
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1507,19 +1922,19 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     }
 
     handle_cmd! {
-        Scan, future_scan(storage), kv_scan;
-        Prewrite, future_prewrite(storage), kv_prewrite;
-        Commit, future_commit(storage), kv_commit;
-        Cleanup, future_cleanup(storage), kv_cleanup;
-        BatchGet, future_batch_get(storage), kv_batch_get;
-        BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
-        TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
-        CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
-        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks;
-        ScanLock, future_scan_lock(storage), kv_scan_lock;
-        ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
+        Scan, future_scan(storage), kv_scan, txn = scan: ScanResponse;
+        Prewrite, future_prewrite(storage), kv_prewrite, txn = prewrite: PrewriteResponse;
+        Commit, future_commit(storage), kv_commit, txn = commit: CommitResponse;
+        Cleanup, future_cleanup(storage), kv_cleanup, txn = cleanup: CleanupResponse;
+        BatchGet, future_batch_get(storage), kv_batch_get, txn = batch_get: BatchGetResponse;
+        BatchRollback, future_batch_rollback(storage), kv_batch_rollback, txn = batch_rollback: BatchRollbackResponse;
+        TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat, txn = txn_heart_beat: TxnHeartBeatResponse;
+        CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status, txn = check_txn_status: CheckTxnStatusResponse;
+        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks, txn = check_secondary_locks: CheckSecondaryLocksResponse;
+        ScanLock, future_scan_lock(storage), kv_scan_lock, txn = scan_lock: ScanLockResponse;
+        ResolveLock, future_resolve_lock(storage), kv_resolve_lock, txn = resolve_lock: ResolveLockResponse;
         Gc, future_gc(), kv_gc;
-        DeleteRange, future_delete_range(storage), kv_delete_range;
+        DeleteRange, future_delete_range(storage), kv_delete_range, txn = delete_range: DeleteRangeResponse;
         PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
         FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
         BufferBatchGet, future_buffer_batch_get(storage), kv_buffer_batch_get;
@@ -1533,11 +1948,14 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
-        PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
-        PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
+        PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock, txn = pessimistic_lock: PessimisticLockResponse;
+        PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback, txn = pessimistic_rollback: PessimisticRollbackResponse;
         BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
     }
 
+    if let Some(batch) = batcher.as_mut() {
+        batch.maybe_commit(storage, tx);
+    }
     Ok(())
 }
 
@@ -2811,6 +3229,48 @@ mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
+
+    #[test]
+    fn test_transaction_protocol_admission_and_bypass() {
+        let mut ctx = Context::default();
+        ctx.set_txn_protocol_version(crate::storage::txn_protocol::TXN_PROTOCOL_VERSION_MAX + 1);
+        let admission = TxnProtocolAdmissionConfig::new(true);
+        let error = check_txn_protocol_admission(
+            &ctx,
+            CallerInfo::Resolved("127.0.0.1:20160"),
+            TxnRpcCommand::get,
+            &admission,
+        )
+        .unwrap();
+        assert!(error.has_incompatible_request());
+        assert!(!error.has_server_is_busy());
+
+        admission.set_enabled(false);
+        assert!(
+            check_txn_protocol_admission(
+                &ctx,
+                CallerInfo::Resolved("127.0.0.1:20160"),
+                TxnRpcCommand::get,
+                &admission,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_validate_resolve_lock_request() {
+        let mut req = ResolveLockRequest::default();
+        assert_eq!(validate_resolve_lock_req(&req), None);
+
+        req.mut_keys().push(b"key".to_vec());
+        assert_eq!(validate_resolve_lock_req(&req), Some("zero_start_version"));
+
+        req.mut_keys().clear();
+        let mut txn_info = TxnInfo::default();
+        txn_info.set_txn(0);
+        req.mut_txn_infos().push(txn_info);
+        assert_eq!(validate_resolve_lock_req(&req), Some("zero_txn_info"));
+    }
 
     #[test]
     fn test_kv_get_sets_ru_v2_processed_keys() {
