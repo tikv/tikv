@@ -23,7 +23,10 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, charge_background_egress,
+    record_uncharged_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -552,6 +555,7 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
         output_mode: UnaryOutputMode,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
@@ -647,10 +651,9 @@ impl<E: Engine> Endpoint<E> {
                 // is committed, so bytes are neither charged twice nor
                 // charged for a response that is never returned.
                 if matches!(output_mode, UnaryOutputMode::Materialize) {
-                    record_coprocessor_response_size(
-                        output.response.get_data().len() as u64,
-                        get_tls_tracker_token(),
-                    );
+                    let resp_size = output.response.get_data().len() as u64;
+                    record_coprocessor_response_size(resp_size, get_tls_tracker_token());
+                    charge_background_egress(&resource_limiter, resp_size);
                 }
                 output
             }
@@ -723,6 +726,7 @@ impl<E: Engine> Endpoint<E> {
             tracker,
             handler_builder,
             output_mode,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .map(move |res| {
@@ -1041,6 +1045,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -1104,6 +1109,13 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        // Streaming responses are not charged to the background egress
+                        // limiter: a stream is admitted once and cannot pay debt between
+                        // chunks without holding its read-pool slot, and TiDB no longer
+                        // sends streaming coprocessor requests. `bg-egress-limit` covers
+                        // unary coprocessor and transactional KV reads only. The bytes are
+                        // still counted, so that the uncovered traffic is visible.
+                        record_uncharged_background_egress(&resource_limiter, resp_size);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
@@ -1173,6 +1185,7 @@ impl<E: Engine> Endpoint<E> {
             self.request_semaphore(semaphore_group),
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .then(futures::future::ok::<_, mpsc::SendError>)
@@ -2283,6 +2296,7 @@ mod tests {
                 )),
                 background_handler,
                 UnaryOutputMode::Materialize,
+                None,
             );
             background_tx.send(block_on(background_future)).unwrap();
         });
@@ -2310,6 +2324,7 @@ mod tests {
                 )),
                 shared_handler,
                 UnaryOutputMode::Materialize,
+                None,
             );
             shared_tx.send(block_on(shared_future)).unwrap();
         });
@@ -2623,6 +2638,99 @@ mod tests {
     }
 
     // TODO: Test panic?
+
+    // Background unary responses are charged to the background egress limiter,
+    // streaming responses are not: `bg-egress-limit` does not cover streaming
+    // coprocessor requests.
+    #[test]
+    fn test_background_egress_charged_for_unary_not_streaming() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // `ddl` is a background task type of the default group, with a
+        // background egress limit of 1 KiB/s.
+        let manager = Arc::new(ResourceGroupManager::default());
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        // Each response is much larger than one second of the egress limit.
+        let new_resp = || {
+            let mut resp = coppb::Response::default();
+            resp.set_data(vec![0; 64 * 1024]);
+            resp
+        };
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        fn uncharged_egress_bytes() -> u64 {
+            prometheus::gather()
+                .iter()
+                .find(|f| {
+                    f.get_name() == "tikv_resource_control_background_egress_uncharged_bytes_total"
+                })
+                .map_or(0, |f| f.get_metric()[0].get_counter().get_value() as u64)
+        }
+
+        // A background stream of several chunks builds no egress debt, but its
+        // bytes are counted as uncharged background egress.
+        let uncharged_before = uncharged_egress_bytes();
+        let chunks = vec![Ok(new_resp()), Ok(new_resp()), Ok(new_resp())];
+        let handler_builder = Box::new(move |_, _: &_| Ok(StreamFixture::new(chunks).into_boxed()));
+        let resp_vec = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+        assert_eq!(resp_vec.len(), 3);
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        // Other tests may add to the global counter concurrently, so only a
+        // lower bound can be checked.
+        assert!(uncharged_egress_bytes() - uncharged_before >= 3 * 64 * 1024);
+
+        // The same response sent as a background unary request builds debt.
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(new_resp())).into_boxed()));
+        let resp =
+            block_on(copr.handle_unary_request(background_request(handler_builder))).unwrap();
+        assert_eq!(resp.get_data().len(), 64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
 
     #[test]
     fn test_special_streaming_handlers() {

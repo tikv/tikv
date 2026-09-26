@@ -177,6 +177,31 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
+## Network egress rate (response bytes sent out) for background reads on this node, shared by all
+## background requests. Use it to stop a large background scan, such as the scan phase of a
+## distributed ADD INDEX, from taking the outbound network allowance of the node from foreground
+## reads.
+##
+## It applies only to requests that resource control treats as background: the request's task
+## type must be listed in the background settings of its resource group, or of the `default`
+## group when that group has none, for example
+## `ALTER RESOURCE GROUP default BACKGROUND=(TASK_TYPES='ddl')`. With no background task types
+## configured, the limit has no effect.
+##
+## It is a soft, admission-side limit: a background read is charged once its response is built,
+## and later background reads wait for the debt before they are admitted. Over time background
+## egress stays at the rate, but in the short term it can exceed it by about one second's worth
+## of the rate plus the responses of the background reads in flight at the same time.
+##
+## It charges unary coprocessor and transactional KV read responses. Streaming coprocessor and raw
+## KV read responses are not charged, though these reads still wait at admission for the debt of
+## other background reads. Point gets that TiKV merges from a `BatchCommands` stream are
+## classified by the first get of the merged batch, so a background get merged behind a
+## foreground one is not charged, and a foreground get merged behind a background one is. It is
+## enforced only for reads served by the unified read pool (`readpool.storage.use-unified-pool`
+## and `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
+# bg-egress-limit = "0B"
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"

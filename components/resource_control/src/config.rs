@@ -29,6 +29,36 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
+    /// Network egress rate (response bytes sent out) allowed for background
+    /// reads on this node, shared by all background requests no matter how
+    /// many clients send them. It keeps a large background scan from taking
+    /// the outbound bandwidth that foreground reads need.
+    ///
+    /// It applies only to requests that resource control treats as background:
+    /// the task type in the request source must be listed in the background
+    /// settings (`BACKGROUND=(TASK_TYPES=...)`) of the request's resource
+    /// group, or of the `default` group when the request's group has no
+    /// background settings. Other requests are foreground and are not limited,
+    /// so with no background task types configured the limit has no effect.
+    ///
+    /// It is a soft, admission-side limit: a background read is charged once
+    /// its response is built, and later background reads wait for the debt
+    /// before they are admitted. Over time background egress stays at the
+    /// rate, but in the short term it can exceed it by about one second's
+    /// worth of the rate plus the responses of the background reads in
+    /// flight at the same time.
+    ///
+    /// It charges unary coprocessor and transactional KV read responses.
+    /// Streaming coprocessor and raw KV read responses are not charged,
+    /// though these reads still wait at admission for the debt of other
+    /// background reads. Point gets that TiKV merges from a `BatchCommands`
+    /// stream are classified by the first get of the merged batch, so a
+    /// background get merged behind a foreground one is not charged, and a
+    /// foreground get merged behind a background one is. It is enforced only
+    /// for reads served by the unified read pool
+    /// (`readpool.{storage,coprocessor}.use-unified-pool`). Set to 0 (the
+    /// default) to disable egress throttling.
+    pub bg_egress_limit: ReadableSize,
     /// When true, enables fair two-phase scheduling for reads: groups whose
     /// current-minute RU rate exceeds their historical baseline are placed in
     /// phase 1 (deprioritised in the yatp priority queue) relative to groups
@@ -82,6 +112,7 @@ impl Default for Config {
             bg_compaction_pressure_threshold: 70.0,
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),
+            bg_egress_limit: ReadableSize(0),
             enable_fair_scheduling: false,
             enable_read_admission_control: false,
             enable_write_admission_control: false,

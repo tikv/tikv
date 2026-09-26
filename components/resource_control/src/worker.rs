@@ -139,6 +139,9 @@ pub struct GroupQuotaAdjustWorker<R> {
     io_bandwidth: f64,
     // Last measured IO utilization, reused when a fetch fails.
     prev_io_util: f64,
+    // Whether `bg-egress-limit` was set with no background groups on the
+    // previous tick, so the warning is logged once per such period.
+    egress_limit_inactive: bool,
 }
 
 impl GroupQuotaAdjustWorker<SysQuotaGetter> {
@@ -188,6 +191,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             },
             io_bandwidth,
             prev_io_util: 0.0,
+            egress_limit_inactive: false,
         }
     }
 
@@ -310,7 +314,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         // begins at bg_scale_start and reaches min_floor at fg_cpu_throttle_threshold.
         bg_util_limit = bg_util_limit.min(fg_cpu_throttle_threshold as u64);
 
-        if !self.resource_ctl.has_background_groups() {
+        let has_background = self.resource_ctl.has_background_groups();
+        self.check_egress_limit_active(has_background);
+        if !has_background {
             self.resource_ctl.set_bg_cpu_at_floor(true);
             self.prev_had_background = false;
             return;
@@ -350,6 +356,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             scores.io_score,
         );
         self.adjust_write_io_by_compaction_pressure(scores.compaction_score);
+        self.adjust_egress_limit();
     }
 
     fn background_adjust_resource_quota(
@@ -505,6 +512,42 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         self.bg_limiter
             .get_write_io_limiter()
             .set_rate_limit(new_limit);
+    }
+
+    /// Warns when `resource-control.bg-egress-limit` is set but no resource
+    /// group has background task types, since no request is background then
+    /// and the limit has no effect. Logged once each time that state starts.
+    fn check_egress_limit_active(&mut self, has_background: bool) {
+        let limit = self.resource_ctl.get_config().value().bg_egress_limit;
+        let inactive = !has_background && limit.0 > 0;
+        if inactive && !self.egress_limit_inactive {
+            warn!(
+                "resource-control.bg-egress-limit has no effect because no resource group has background task types, set them with BACKGROUND=(TASK_TYPES=...)";
+                "bg-egress-limit" => ?limit,
+            );
+        }
+        self.egress_limit_inactive = inactive;
+    }
+
+    /// Apply `resource-control.bg-egress-limit` to the background egress
+    /// limiter. Unlike the write IO limit this rate is absolute: it does not
+    /// scale with utilization, because the resource it protects is the node's
+    /// outbound network allowance, which is fixed. A value of 0 disables the
+    /// throttle.
+    fn adjust_egress_limit(&self) {
+        let limit = self.resource_ctl.get_config().value().bg_egress_limit.0;
+        let new_limit = if limit == 0 {
+            f64::INFINITY
+        } else {
+            limit as f64
+        };
+        self.bg_limiter
+            .get_egress_limiter()
+            .set_rate_limit(new_limit);
+        // 0 on the gauge means the throttle is disabled.
+        BACKGROUND_QUOTA_LIMIT_VEC
+            .with_label_values(&["egress"])
+            .set(limit as i64);
     }
 }
 
@@ -754,7 +797,7 @@ impl PriorityLimiterStatsTracker {
 mod tests {
     use std::time::Duration;
 
-    use tikv_util::thread_name_prefix::BACKGROUND_WORKER_THREAD;
+    use tikv_util::{config::ReadableSize, thread_name_prefix::BACKGROUND_WORKER_THREAD};
 
     use super::*;
     use crate::resource_group::tests::*;
@@ -1615,6 +1658,115 @@ mod tests {
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(limiter.get_write_io_limiter().get_rate_limit(), ceiling);
+    }
+
+    // The background egress limit is an absolute rate taken straight from the
+    // config: it does not scale with utilization, and 0 disables it.
+    #[test]
+    fn test_bg_egress_limit_from_config() {
+        let resource_ctl = Arc::new(ResourceGroupManager::new(crate::config::Config {
+            bg_egress_limit: ReadableSize::mb(50),
+            ..Default::default()
+        }));
+        let test_provider = TestResourceStatsProvider::new(8.0, 10000.0);
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            test_provider,
+            Arc::new(AtomicU32::new(0)),
+            8,
+            10000.0,
+        );
+        resource_ctl.add_resource_group(new_background_resource_group_ru(
+            "default".into(),
+            2000,
+            8,
+            vec!["br".into()],
+        ));
+        let limiter = resource_ctl
+            .get_background_resource_limiter("default", "br")
+            .unwrap();
+
+        // Before the first tick the limiter is unthrottled.
+        assert!(limiter.get_egress_limiter().get_rate_limit().is_infinite());
+
+        worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
+        worker.adjust_quota();
+        assert_eq!(
+            limiter.get_egress_limiter().get_rate_limit(),
+            ReadableSize::mb(50).0 as f64
+        );
+
+        // A new value is picked up on the next tick.
+        resource_ctl
+            .get_config()
+            .update(|c| {
+                c.bg_egress_limit = ReadableSize::mb(10);
+                Ok::<(), String>(())
+            })
+            .unwrap();
+        worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
+        worker.adjust_quota();
+        assert_eq!(
+            limiter.get_egress_limiter().get_rate_limit(),
+            ReadableSize::mb(10).0 as f64
+        );
+
+        // 0 disables the throttle again.
+        resource_ctl
+            .get_config()
+            .update(|c| {
+                c.bg_egress_limit = ReadableSize(0);
+                Ok::<(), String>(())
+            })
+            .unwrap();
+        worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
+        worker.adjust_quota();
+        assert!(limiter.get_egress_limiter().get_rate_limit().is_infinite());
+    }
+
+    // `bg-egress-limit` with no background task types in any group has no
+    // effect, and the worker flags that state so it is warned about once.
+    #[test]
+    fn test_bg_egress_limit_inactive_without_background_groups() {
+        let resource_ctl = Arc::new(ResourceGroupManager::new(crate::config::Config {
+            bg_egress_limit: ReadableSize::mb(50),
+            ..Default::default()
+        }));
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            TestResourceStatsProvider::new(8.0, 10000.0),
+            Arc::new(AtomicU32::new(0)),
+            8,
+            10000.0,
+        );
+        let tick = |worker: &mut GroupQuotaAdjustWorker<_>| {
+            worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
+            worker.adjust_quota();
+        };
+
+        tick(&mut worker);
+        assert!(worker.egress_limit_inactive);
+
+        resource_ctl.add_resource_group(new_background_resource_group_ru(
+            "default".into(),
+            2000,
+            8,
+            vec!["ddl".into()],
+        ));
+        tick(&mut worker);
+        assert!(!worker.egress_limit_inactive);
+
+        // With the limit disabled there is nothing to warn about.
+        resource_ctl.remove_resource_group("default");
+        resource_ctl
+            .get_config()
+            .update(|c| {
+                c.bg_egress_limit = ReadableSize(0);
+                Ok::<(), String>(())
+            })
+            .unwrap();
+        tick(&mut worker);
+        assert!(!worker.egress_limit_inactive);
     }
 
     // Verify that with multiple background groups the budget is set globally on

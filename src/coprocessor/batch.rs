@@ -11,7 +11,7 @@ use futures::{
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, kvrpcpb::CommandPri};
-use resource_control::{ResourceLimiter, TaskMetadata};
+use resource_control::{ResourceLimiter, TaskMetadata, charge_background_egress};
 use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{deadline::Deadline, defer, future::async_timeout};
@@ -128,6 +128,7 @@ impl BatchMergeFinalizer {
         // Handler tasks already paid the memory admission cost of these results,
         // so submitting the merge must not charge them again. `submission` only
         // reports admission and enqueue; `response_rx` reports merge completion.
+        let egress_limiter = resource_limiter.clone();
         let submission = read_pool.spawn(pool_task, priority, task_id, metadata, resource_limiter);
         let submission_error = match async_timeout(submission, deadline.remaining_duration()).await
         {
@@ -142,32 +143,42 @@ impl BatchMergeFinalizer {
             return make_error_response(error).into();
         }
 
-        let completion_error = match async_timeout(&mut response_rx, deadline.remaining_duration())
-            .await
-        {
-            Ok(Ok(response)) => {
-                return account_returned_response(response, &returned_response_tag, tracker);
-            }
-            Ok(Err(_)) => Error::MaxPendingTasksExceeded,
-            Err(_) => match response_rx.try_recv() {
-                // The response may already be ready when the timeout wins the poll race.
-                Ok(Some(response)) => {
-                    return account_returned_response(response, &returned_response_tag, tracker);
+        let completion_error =
+            match async_timeout(&mut response_rx, deadline.remaining_duration()).await {
+                Ok(Ok(response)) => {
+                    return account_returned_response(
+                        response,
+                        &returned_response_tag,
+                        tracker,
+                        &egress_limiter,
+                    );
                 }
-                Ok(None) => Error::DeadlineExceeded,
-                Err(_) => Error::MaxPendingTasksExceeded,
-            },
-        };
+                Ok(Err(_)) => Error::MaxPendingTasksExceeded,
+                Err(_) => match response_rx.try_recv() {
+                    // The response may already be ready when the timeout wins the poll race.
+                    Ok(Some(response)) => {
+                        return account_returned_response(
+                            response,
+                            &returned_response_tag,
+                            tracker,
+                            &egress_limiter,
+                        );
+                    }
+                    Ok(None) => Error::DeadlineExceeded,
+                    Err(_) => Error::MaxPendingTasksExceeded,
+                },
+            };
         make_error_response(completion_error).into()
     }
 }
 
-/// Records bytes for a response accepted by the caller and updates its wire RU
-/// details.
+/// Records bytes for a response accepted by the caller, charges them to the
+/// background egress limiter, and updates its wire RU details.
 fn account_returned_response(
     mut response: TracedResponse,
     returned_response_tag: &ResourceMeteringTag,
     tracker: TrackerToken,
+    resource_limiter: &Option<Arc<ResourceLimiter>>,
 ) -> TracedResponse {
     let bytes = response.get_data().len() as u64
         + response
@@ -177,6 +188,7 @@ fn account_returned_response(
             .sum::<u64>();
     let _tag_guard = returned_response_tag.attach();
     record_coprocessor_response_size(bytes, tracker);
+    charge_background_egress(resource_limiter, bytes);
     // The handler built these details before deferred materialization knew the
     // returned byte count. Keep the wire value in sync with the tracker here.
     ::tracker::GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
@@ -1117,6 +1129,7 @@ mod tests {
             resp,
             &ResourceTagFactory::new_for_test().new_tag(&kvrpcpb::Context::default()),
             token,
+            &None,
         );
         let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
 
