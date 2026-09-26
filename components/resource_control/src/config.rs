@@ -48,14 +48,16 @@ pub struct Config {
     /// worth of the rate plus the responses of the background reads in
     /// flight at the same time.
     ///
-    /// It covers unary coprocessor and transactional KV read responses;
-    /// streaming coprocessor responses are neither charged nor paced. Point
-    /// gets that TiKV merges from a `BatchCommands` stream are classified by
-    /// the first get of the merged batch, so a background get merged behind a
-    /// foreground one is not charged, and a foreground get merged behind a
-    /// background one is. It is enforced only for reads served by the unified
-    /// read pool (`readpool.{storage,coprocessor}.use-unified-pool`). Set to 0
-    /// (the default) to disable egress throttling.
+    /// It charges unary coprocessor and transactional KV read responses.
+    /// Streaming coprocessor and raw KV read responses are not charged,
+    /// though these reads still wait at admission for the debt of other
+    /// background reads. Point gets that TiKV merges from a `BatchCommands`
+    /// stream are classified by the first get of the merged batch, so a
+    /// background get merged behind a foreground one is not charged, and a
+    /// foreground get merged behind a background one is. It is enforced only
+    /// for reads served by the unified read pool
+    /// (`readpool.{storage,coprocessor}.use-unified-pool`). Set to 0 (the
+    /// default) to disable egress throttling.
     pub bg_egress_limit: ReadableSize,
     /// When true, enables fair two-phase scheduling for reads: groups whose
     /// current-minute RU rate exceeds their historical baseline are placed in
