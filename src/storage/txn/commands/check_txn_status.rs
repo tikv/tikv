@@ -131,15 +131,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.verify_is_primary,
                 self.rollback_if_not_exist,
             )?,
-<<<<<<< HEAD
-            Some(Either::Right(shared_locks)) => {
-                // a shared-locked key cannot be the primary key of a transaction thus reject
-                // the request directly. This can happen when the original lock is already
-                // gone and another transaction places a shared lock on the same key.
-=======
             Some(Either::Right(shared_locks)) if shared_locks.contains_start_ts(self.lock_ts) => {
                 // A shared lock cannot be this transaction's primary lock.
->>>>>>> 548812e1ef (storage: check shared-lock ownership before reporting mismatch (#20118))
                 warn!("reject check_txn_status on shared lock";
                     "lock_ts" => self.lock_ts,
                     "key" => ?&self.primary_key,
