@@ -120,6 +120,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // (and other background quotas) apply to manual analyze as well.
             let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
+            let scanned_rows_before = self.data.peek_scanned_rows_sum();
             {
                 let result = {
                     let (duration, res) = sample
@@ -160,6 +161,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
+                collector.mut_base().count +=
+                    (self.data.peek_scanned_rows_sum() - scanned_rows_before) as u64;
+
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -192,7 +196,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
