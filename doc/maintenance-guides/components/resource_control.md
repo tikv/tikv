@@ -243,6 +243,64 @@ skipped for background-routed requests, which their background limiter meters.
 It is cached outside the config lock and re-read by `refresh_cached_config` on
 each control tick, so a config change lands within one tick.
 
+## Background Egress Limit (`bg-egress-limit`)
+
+`resource-control.bg-egress-limit` caps the response bytes that background
+reads send out per node. It is an `egress_limiter` token bucket on the shared
+background `ResourceLimiter`, next to its CPU, IO and write-IO limiters.
+`worker.rs::adjust_egress_limit` sets its rate from the config each tick; the
+rate is absolute and does not scale with utilization, and 0 means unlimited.
+
+How it is enforced:
+
+- Charged where the response is built: callers pass the same bytes they report
+  through `record_network_out_bytes` to
+  `resource_limiter.rs::update_background_egress` (unary coprocessor in
+  `src/coprocessor/endpoint.rs`, merged batch tasks in
+  `src/coprocessor/batch.rs`, and the transactional KV reads in
+  `src/storage/mod.rs`). Charging only builds debt; it never sleeps.
+- Repaid only at background read admission: `ResourceLimiter::admission_delay`
+  adds the egress debt when `is_read` and the limiter is background, and
+  `src/read_pool.rs::admission_and_enqueue` waits for it before the yatp
+  enqueue.
+
+Invariant: egress debt stays out of `ResourceLimiter::consume`. Backup and
+ImportSST pay CPU/IO debt through `LimitedFuture` (which calls `consume`), and
+background writes are admitted with `is_read = false`, so none of them wait for
+egress debt they do not create. Adding egress to `consume` or to write
+admission would make a background scan throttle them.
+
+Scope and known gaps:
+
+- A request is background only if its task type is listed in its group's
+  `BACKGROUND=(TASK_TYPES=...)`, or in the `default` group's when its group has
+  no background settings. Otherwise nothing is charged or paced.
+- Streaming coprocessor and raw KV responses are not charged, though those
+  reads still wait at admission. Streaming bytes are counted separately.
+- Point gets merged from `BatchCommands` (`batch_get_command`) use the limiter
+  of the first get for the whole batch (#20112).
+- Reads on a legacy (non-unified) read pool are charged but never wait, since
+  that pool has no admission gate; `TikvConfig::validate` warns about it.
+- It is a soft limit. Admission only sees debt that is already charged and a
+  delayed read does not check again, so the short-term excess is about one
+  second's worth of the rate plus the responses of the background reads in
+  flight.
+
+Signals:
+
+- `tikv_resource_control_background_resource_consumption{type="egress"}`:
+  charged bytes, counted even when the limit is 0.
+- `tikv_resource_control_background_egress_wait_duration_seconds`: egress debt
+  background reads waited for at admission, i.e. whether the limit binds.
+- `tikv_resource_control_background_egress_uncharged_bytes_total`: background
+  streaming bytes the limit does not cover.
+- `tikv_resource_control_background_quota_limiter{type="egress"}` is only the
+  configured rate, not evidence that it binds.
+- `worker.rs::check_egress_limit_active` warns once when the limit is set and
+  no group has any background task type. It stays quiet when some group has
+  one, even if the group serving a job lacks its task type; zero egress
+  consumption during a background job is the sign of that.
+
 ## Critical Invariants
 
 - Group configuration must converge safely when PD watch streams restart or the
@@ -254,12 +312,16 @@ each control tick, so a config change lands within one tick.
   value.
 - Background-group reporting must not silently double-count or regress versioned
   limiter statistics.
+- Background egress debt is repaid only at background read admission, never in
+  `ResourceLimiter::consume` or write admission (see "Background Egress Limit").
 
 ## Observability And Operational Signals
 
 - limiter and scheduling metrics in `metrics.rs`
 - logs on PD watch/reload failures, compaction restarts, and config loads
 - RU reporting cadence and background-group behavior
+- background egress consumption, wait, and uncharged-bytes metrics (see
+  "Background Egress Limit")
 
 Start triage with:
 
@@ -302,6 +364,12 @@ Start triage with:
 - Detection changes (`select_noisy_groups`, `survey_groups`, quiet baselines,
   `noisy_detection`): inspect both actuators — `adjust_group_throttling` and
   `deprioritize_over_quota_groups` — since they consume one shared verdict
+- Background egress limit changes (`egress_limiter`, `update_background_egress`,
+  egress in `admission_delay`):
+  inspect `resource_limiter.rs`, `worker.rs`, `src/read_pool.rs` admission, and
+  the charge sites in `src/coprocessor` and `src/storage`; keep egress out of
+  `consume` so Backup, ImportSST and background writes are unaffected, and
+  update the "Background Egress Limit" section
 
 ## Review Checklist
 
@@ -320,6 +388,9 @@ Start triage with:
 - Does it change who gets blamed for an overload (candidacy, ranking, the
   target, or the quiet baseline)? If so, does a test pin *which* group is
   picked, not just how many?
+- Does it add a read path that sends response bytes? If so, does it call
+  `update_background_egress` next to `record_network_out_bytes`, or is it
+  documented as not charged?
 
 ## Observability And Tests
 
@@ -347,6 +418,9 @@ Start triage with:
   as load is shed and so floats up under the ratchet
 - blame that lands on a group whose baseline is stale, or on the largest tenant
   rather than the one that changed
+- `bg-egress-limit` silently not applying because the job's task type is not a
+  background task type of its group, or because its reads use a legacy read
+  pool
 
 ## Reading Map And Companion Docs
 
