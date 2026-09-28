@@ -94,7 +94,7 @@ use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{
     ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata,
-    charge_background_egress,
+    update_background_egress,
 };
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
@@ -776,7 +776,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .as_ref()
                         .map_or(0, |v| v.value.len());
                     record_network_out_bytes(result_len as u64);
-                    charge_background_egress(&egress_limiter, result_len as u64);
+                    update_background_egress(&egress_limiter, result_len as u64, true);
                     let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
                     let quota_delay = quota_limiter.consume_sample(sample, true).await;
@@ -1019,7 +1019,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         v.as_ref().map_or(0, |v1| v1.value.len()) as u64
                                     });
                                     record_network_out_bytes(value_size);
-                                    charge_background_egress(&egress_limiter, value_size);
+                                    update_background_egress(&egress_limiter, value_size, true);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
                                         id,
@@ -1207,7 +1207,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
                         });
                         record_network_out_bytes(out_bytes);
-                        charge_background_egress(&egress_limiter, out_bytes);
+                        update_background_egress(&egress_limiter, out_bytes, true);
                         record_logical_read_bytes(reader.statistics.processed_size as u64);
                         (result, reader.statistics)
                     });
@@ -1415,7 +1415,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         as u64
                                 });
                                 record_network_out_bytes(out_bytes);
-                                charge_background_egress(&egress_limiter, out_bytes);
+                                update_background_egress(&egress_limiter, out_bytes, true);
                                 kv_pairs
                             });
                         (result, stats)
@@ -1685,7 +1685,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
                         });
                         record_network_out_bytes(out_bytes);
-                        charge_background_egress(&egress_limiter, out_bytes);
+                        update_background_egress(&egress_limiter, out_bytes, true);
                         record_logical_read_bytes(statistics.processed_size as u64);
                         results
                             .into_iter()
@@ -1863,7 +1863,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ));
                     let out_bytes = locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64;
                     record_network_out_bytes(out_bytes);
-                    charge_background_egress(&egress_limiter, out_bytes);
+                    update_background_egress(&egress_limiter, out_bytes, true);
                     record_logical_read_bytes(statistics.processed_size as u64);
                     Ok(locks)
                 })

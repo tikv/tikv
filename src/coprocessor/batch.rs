@@ -11,7 +11,7 @@ use futures::{
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, kvrpcpb::CommandPri};
-use resource_control::{ResourceLimiter, TaskMetadata, charge_background_egress};
+use resource_control::{ResourceLimiter, TaskMetadata, update_background_egress};
 use resource_metering::{FutureExt, ResourceMeteringTag};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{deadline::Deadline, defer, future::async_timeout};
@@ -188,7 +188,7 @@ fn account_returned_response(
             .sum::<u64>();
     let _tag_guard = returned_response_tag.attach();
     record_coprocessor_response_size(bytes, tracker);
-    charge_background_egress(resource_limiter, bytes);
+    update_background_egress(resource_limiter, bytes, true);
     // The handler built these details before deferred materialization knew the
     // returned byte count. Keep the wire value in sync with the tracker here.
     ::tracker::GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
