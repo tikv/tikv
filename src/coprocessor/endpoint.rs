@@ -24,8 +24,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{
-    ResourceGroupManager, ResourceLimiter, TaskMetadata, charge_background_egress,
-    record_uncharged_background_egress,
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, update_background_egress,
 };
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
@@ -653,7 +652,7 @@ impl<E: Engine> Endpoint<E> {
                 if matches!(output_mode, UnaryOutputMode::Materialize) {
                     let resp_size = output.response.get_data().len() as u64;
                     record_coprocessor_response_size(resp_size, get_tls_tracker_token());
-                    charge_background_egress(&resource_limiter, resp_size);
+                    update_background_egress(&resource_limiter, resp_size, true);
                 }
                 output
             }
@@ -1127,7 +1126,7 @@ impl<E: Engine> Endpoint<E> {
                         // sends streaming coprocessor requests. `bg-egress-limit` covers
                         // unary coprocessor and transactional KV reads only. The bytes are
                         // still counted, so that the uncovered traffic is visible.
-                        record_uncharged_background_egress(&resource_limiter, resp_size);
+                        update_background_egress(&resource_limiter, resp_size, false);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
