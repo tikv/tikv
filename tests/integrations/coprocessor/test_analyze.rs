@@ -338,17 +338,19 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
     assert!(!collector.has_ndv_sample_count());
 
-    // TiKV does not read ndv_rate yet, so every row still feeds the sketches.
     // A tiny rate keeps a row with probability 2^-52, so it exercises empty
     // samples without a random assertion or a test-only sampling path.
+    // Histogram rows come only from the rows selected for NDV: Bernoulli
+    // sampling keeps each at sample_rate / ndv_rate, and the reservoir sees
+    // only those rows.
     let mut scanned_bytes = None;
-    for (ndv_rate, histogram_rate, sample_size, histogram_count) in [
-        (f64::MIN_POSITIVE, 1.0, 0, 9),
-        (f64::MIN_POSITIVE, f64::MIN_POSITIVE, 0, 0),
-        (0.5, f64::MIN_POSITIVE, 0, 0),
-        (0.5, 0.0, 5, 5),
+    for (ndv_rate, sample_rate, sample_size) in [
+        (f64::MIN_POSITIVE, f64::MIN_POSITIVE, 0),
+        (0.5, f64::MIN_POSITIVE, 0),
+        (0.5, 0.5, 0),
+        (0.5, 0.0, 5),
     ] {
-        let mut req = new_analyze_sampling_req(&product, 1, sample_size, histogram_rate);
+        let mut req = new_analyze_sampling_req(&product, 1, sample_size, sample_rate);
         let mut analyze_req: AnalyzeReq = protobuf::parse_from_bytes(req.get_data()).unwrap();
         analyze_req.mut_col_req().set_ndv_rate(ndv_rate);
         analyze_req.mut_col_req().set_sketch_size(1000);
@@ -362,16 +364,46 @@ fn test_analyze_sampling_bernoulli() {
         let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
         let collector = analyze_resp.get_row_collector();
         assert_eq!(collector.get_count(), 9);
-        assert!(!collector.has_ndv_sample_count());
-        assert_eq!(collector.get_samples().len(), histogram_count);
-        assert_eq!(collector.get_fm_sketch()[0].get_hashset().len(), 9);
-        assert_eq!(collector.get_total_size()[0], 72);
+        assert!(collector.has_ndv_sample_count());
+        let selected = collector.get_ndv_sample_count();
+        if ndv_rate == f64::MIN_POSITIVE {
+            assert_eq!(selected, 0);
+        }
+        // A ratio of 1 keeps every selected row, and a tiny one keeps none.
+        let histogram_count = if sample_size > 0 {
+            selected.min(sample_size)
+        } else if sample_rate >= ndv_rate {
+            selected
+        } else {
+            0
+        };
+        assert_eq!(collector.get_samples().len(), histogram_count as usize);
+        // The sketch and size count only the selected values.
+        assert_eq!(
+            collector.get_fm_sketch()[0].get_hashset().len(),
+            selected as usize
+        );
+        assert_eq!(collector.get_total_size()[0], 8 * selected);
         assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
         assert_eq!(
             collector.get_null_counts()[1],
             collector.get_null_counts()[3]
         );
     }
+
+    // A rate of 1 reads every row through the legacy path.
+    let mut req = new_analyze_sampling_req(&product, 1, 0, 1.0);
+    let mut analyze_req: AnalyzeReq = protobuf::parse_from_bytes(req.get_data()).unwrap();
+    analyze_req.mut_col_req().set_ndv_rate(1.0);
+    req.set_data(analyze_req.write_to_bytes().unwrap());
+    let resp = handle_request(&endpoint, req);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
+    let collector = analyze_resp.get_row_collector();
+    assert!(!collector.has_ndv_sample_count());
+    assert_eq!(collector.get_count(), 9);
+    assert_eq!(collector.get_samples().len(), 9);
+    assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
 }
 
 #[test]

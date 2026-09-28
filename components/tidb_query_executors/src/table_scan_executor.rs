@@ -44,6 +44,13 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
 }
 
 impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
+    /// Keeps each visible row with probability `ndv_rate`, after MVCC
+    /// visibility is resolved and before column vectors are filled. The
+    /// scanner still counts every visible row.
+    pub fn sample_analyze_rows(&mut self, ndv_rate: f64) {
+        self.0.sample_analyze_rows(ndv_rate)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
@@ -828,6 +835,48 @@ mod tests {
                     test_basic_scan(&helper, ranges.clone(), cols, batch_expect_rows);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_analyze_row_sampling() {
+        let helper = TableScanTestHelper::new();
+        for selected in [false, true] {
+            let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+                helper.store(),
+                Arc::new(EvalConfig::default()),
+                helper.columns_info.clone(),
+                helper.mixed_ranges_for_whole_table(),
+                vec![],
+                false,
+                false,
+                vec![],
+            )
+            .unwrap();
+            executor.sample_analyze_rows(u8::from(selected) as f64);
+            let mut count = 0;
+            loop {
+                let scanned_rows = executor.peek_scanned_rows_sum();
+                let result = block_on(executor.next_batch(2));
+                let visible_rows = executor.peek_scanned_rows_sum() - scanned_rows;
+                // Even a batch with no selected rows must make bounded progress.
+                assert!(visible_rows <= 2);
+                if selected {
+                    helper.expect_table_values(
+                        &[0, 1, 2],
+                        count,
+                        visible_rows,
+                        result.physical_columns,
+                    );
+                } else {
+                    assert!(result.logical_rows.is_empty());
+                }
+                count += visible_rows;
+                if result.is_drained.unwrap().stop() {
+                    break;
+                }
+            }
+            assert_eq!(count, helper.data.len());
         }
     }
 
