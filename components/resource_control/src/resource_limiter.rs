@@ -144,6 +144,7 @@ impl ResourceLimiter {
 
     /// Sets the background egress rate in bytes/s, as `bg-egress-limit`
     /// does through `GroupQuotaAdjustWorker`. For tests outside this crate.
+    #[cfg(any(test, feature = "testexport"))]
     pub fn set_egress_limit_for_test(&self, bytes_per_sec: f64) {
         self.egress_limiter.set_rate_limit(bytes_per_sec);
     }
