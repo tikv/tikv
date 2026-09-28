@@ -42,6 +42,10 @@ pub struct Config {
     /// group, or of the `default` group when the request's group has no
     /// background settings. Other requests are foreground and are not limited,
     /// so with no background task types configured the limit has no effect.
+    /// TiKV warns only when no group has any background task type. A group
+    /// that lacks the task type of its requests is not warned about, and
+    /// `tikv_resource_control_background_resource_consumption{type="egress"}`
+    /// staying at zero during a background job is the sign of it.
     ///
     /// It is a soft, admission-side limit: a background read is charged once
     /// its response is built, and later background reads wait for the debt
