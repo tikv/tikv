@@ -506,13 +506,19 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     /// Warns when `resource-control.bg-egress-limit` is set but no resource
     /// group has background task types, since no request is background then
     /// and the limit has no effect. Logged once each time that state starts.
+    ///
+    /// It only catches the case where nothing is background anywhere. Once
+    /// any group has a background task type it stays quiet, even for requests
+    /// whose own group (or `default`) does not list their task type, which are
+    /// foreground and not limited. The background egress consumption metric
+    /// staying at zero during a background job shows that case.
     fn check_egress_limit_active(&mut self, has_background: bool) {
         let limit = self.resource_ctl.get_config().value().bg_egress_limit;
         let inactive = !has_background && limit.0 > 0;
         if inactive && !self.egress_limit_inactive {
             warn!(
-                "resource-control.bg-egress-limit has no effect because no resource group has background task types, set them with BACKGROUND=(TASK_TYPES=...)";
-                "bg-egress-limit" => ?limit,
+                "resource-control.bg-egress-limit has no effect because no resource group has any background task types, set them with BACKGROUND=(TASK_TYPES=...)";
+                "bg_egress_limit" => ?limit,
             );
         }
         self.egress_limit_inactive = inactive;

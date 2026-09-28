@@ -226,7 +226,10 @@
 ## type must be listed in the background settings of its resource group, or of the `default`
 ## group when that group has none, for example
 ## `ALTER RESOURCE GROUP default BACKGROUND=(TASK_TYPES='ddl')`. With no background task types
-## configured, the limit has no effect.
+## configured, the limit has no effect. TiKV warns only when no group has any background task
+## type. A group that lacks the task type of its requests is not warned about, and
+## `tikv_resource_control_background_resource_consumption{type="egress"}` staying at zero during
+## a background job is the sign of it.
 ##
 ## It is a soft, admission-side limit: a background read is charged once its response is built,
 ## and later background reads wait for the debt before they are admitted. Over time background
