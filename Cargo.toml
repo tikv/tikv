@@ -198,8 +198,8 @@ example_coprocessor_plugin = { workspace = true }                              #
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
-resource_control = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
+resource_control = { workspace = true, features = ["testexport"] }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
