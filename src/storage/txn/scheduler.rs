@@ -424,11 +424,10 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 pub struct TxnScheduler<E: Engine, L: LockManager> {
     inner: Arc<TxnSchedulerInner<L>>,
     // The engine can be fetched from the thread local storage of scheduler threads.
-    // So, we don't store the engine here.
-    _engine: PhantomData<E>,
+    // So, we don't store the engine here. The function-pointer phantom keeps the
+    // engine type parameter without inheriting `E`'s auto traits (no `E` is stored).
+    _engine: PhantomData<fn() -> E>,
 }
-
-unsafe impl<E: Engine, L: LockManager> Send for TxnScheduler<E, L> {}
 
 impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// Creates a scheduler.
