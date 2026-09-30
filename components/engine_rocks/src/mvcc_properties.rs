@@ -81,7 +81,7 @@ impl RocksMvccProperties {
             .unwrap_or(res.num_puts);
         res.num_stale_default_puts = props
             .decode_u64(PROP_NUM_STALE_DEFAULT_PUTS)
-            unwrap_or_else(|_| res.num_puts.saturating_sub(res.num_rows));
+            .unwrap_or_else(|_| res.num_puts.saturating_sub(res.num_rows));
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         // The following 4 properties may not exist in old releases, so use min_ts for
         // oldest, max_ts for newest if not found.
