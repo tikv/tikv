@@ -421,7 +421,7 @@ fn calculate_compaction_score(
         estimated_reclaimable_bytes,
         config.auto_compaction.redundant_bytes_threshold.0,
     );
-    let base_score = if !config.enable_compaction_filter {
+    if !config.enable_compaction_filter {
         // Only consider deletes (tombstones).
         let ratio = num_tombstones as f64 / num_total_entries as f64;
         if num_tombstones < config.auto_compaction.tombstones_num_threshold
@@ -451,9 +451,7 @@ fn calculate_compaction_score(
             // Keep candidates visible when old SSTs do not have range properties.
             num_discardable as f64 * ratio
         }
-    };
-
-    base_score
+    }
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
