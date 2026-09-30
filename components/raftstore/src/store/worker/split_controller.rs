@@ -1450,6 +1450,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    rocksdb_block_read_count: 0,
                 },
             );
         }
@@ -1930,6 +1931,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    rocksdb_block_read_count: 0,
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1943,6 +1945,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    rocksdb_block_read_count: 0,
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1956,6 +1959,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    rocksdb_block_read_count: 0,
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1969,6 +1973,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    rocksdb_block_read_count: 0,
                 },
             );
 

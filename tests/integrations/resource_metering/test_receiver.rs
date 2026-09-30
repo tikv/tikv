@@ -16,6 +16,7 @@ pub fn test_alter_receiver_address() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
@@ -53,6 +54,7 @@ pub fn test_receiver_blocking() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
@@ -92,6 +94,7 @@ pub fn test_receiver_shutdown() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
