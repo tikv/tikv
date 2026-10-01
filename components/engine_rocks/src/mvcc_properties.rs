@@ -12,6 +12,9 @@ pub const PROP_NUM_ROWS: &str = "tikv.num_rows";
 pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
 pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
 pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+pub const PROP_NUM_STALE_DELETES: &str = "tikv.num_stale_deletes";
+pub const PROP_NUM_DEFAULT_PUTS: &str = "tikv.num_default_puts";
+pub const PROP_NUM_STALE_DEFAULT_PUTS: &str = "tikv.num_stale_default_puts";
 pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
 pub const PROP_OLDEST_STALE_VERSION_TS: &str = "tikv.oldest_stale_version_ts";
 pub const PROP_NEWEST_STALE_VERSION_TS: &str = "tikv.newest_stale_version_ts";
@@ -32,6 +35,12 @@ impl RocksMvccProperties {
         props.encode_u64(PROP_NUM_PUTS, mvcc_props.num_puts);
         props.encode_u64(PROP_NUM_DELETES, mvcc_props.num_deletes);
         props.encode_u64(PROP_NUM_VERSIONS, mvcc_props.num_versions);
+        props.encode_u64(PROP_NUM_STALE_DELETES, mvcc_props.num_stale_deletes);
+        props.encode_u64(PROP_NUM_DEFAULT_PUTS, mvcc_props.num_default_puts);
+        props.encode_u64(
+            PROP_NUM_STALE_DEFAULT_PUTS,
+            mvcc_props.num_stale_default_puts,
+        );
         props.encode_u64(PROP_MAX_ROW_VERSIONS, mvcc_props.max_row_versions);
         props.encode_u64(
             PROP_OLDEST_STALE_VERSION_TS,
@@ -64,6 +73,15 @@ impl RocksMvccProperties {
         res.num_deletes = props
             .decode_u64(PROP_NUM_DELETES)
             .unwrap_or(res.num_versions - res.num_puts);
+        res.num_stale_deletes = props.decode_u64(PROP_NUM_STALE_DELETES).unwrap_or(0);
+        // Old SSTs do not carry the split Put counters. Fall back to the
+        // historical lower-bound estimate so they retain the previous score.
+        res.num_default_puts = props
+            .decode_u64(PROP_NUM_DEFAULT_PUTS)
+            .unwrap_or(res.num_puts);
+        res.num_stale_default_puts = props
+            .decode_u64(PROP_NUM_STALE_DEFAULT_PUTS)
+            .unwrap_or(res.num_puts.saturating_sub(res.num_rows));
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         // The following 4 properties may not exist in old releases, so use min_ts for
         // oldest, max_ts for newest if not found.
@@ -113,5 +131,45 @@ impl MvccPropertiesExt for RocksEngine {
             props.add(&mvcc);
         }
         Some(props)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_old_properties_uses_compatible_defaults() {
+        let mut properties = UserProperties::new();
+        properties.encode_u64(PROP_MIN_TS, 1);
+        properties.encode_u64(PROP_MAX_TS, 10);
+        properties.encode_u64(PROP_NUM_ROWS, 3);
+        properties.encode_u64(PROP_NUM_PUTS, 5);
+        properties.encode_u64(PROP_NUM_DELETES, 2);
+        properties.encode_u64(PROP_NUM_VERSIONS, 7);
+        properties.encode_u64(PROP_MAX_ROW_VERSIONS, 3);
+
+        let decoded = RocksMvccProperties::decode(&properties).unwrap();
+        assert_eq!(decoded.num_stale_deletes, 0);
+        assert_eq!(decoded.num_default_puts, 5);
+        assert_eq!(decoded.num_stale_default_puts, 2);
+    }
+
+    #[test]
+    fn test_encode_decode_new_default_value_properties() {
+        let mut properties = MvccProperties::default();
+        properties.num_rows = 2;
+        properties.num_puts = 3;
+        properties.num_deletes = 1;
+        properties.num_versions = 4;
+        properties.num_stale_deletes = 1;
+        properties.num_default_puts = 2;
+        properties.num_stale_default_puts = 1;
+
+        let decoded =
+            RocksMvccProperties::decode(&RocksMvccProperties::encode(&properties)).unwrap();
+        assert_eq!(decoded.num_stale_deletes, 1);
+        assert_eq!(decoded.num_default_puts, 2);
+        assert_eq!(decoded.num_stale_default_puts, 1);
     }
 }
