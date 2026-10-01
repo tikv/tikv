@@ -132,7 +132,7 @@ pub use self::{
     },
 };
 use crate::{
-    read_pool::{ReadPool, ReadPoolHandle},
+    read_pool::{ReadPool, ReadPoolError, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
@@ -820,6 +820,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
 
@@ -876,6 +877,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
+        // The gets of a merged batch are admitted together, so bound admission by
+        // the latest of their deadlines; each get still checks its own deadline.
+        let admission_deadline = requests
+            .iter()
+            .map(|req| Self::get_deadline(req.get_context()))
+            .max_by_key(|deadline| deadline.remaining_duration());
         let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
@@ -1058,6 +1065,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            admission_deadline,
         )
     }
 
@@ -1272,6 +1280,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
     /// Get values of a set of keys in a batch from the snapshot.
@@ -1495,6 +1504,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
 
@@ -1540,6 +1550,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
+        let admission_deadline = Self::get_deadline(&ctx);
         let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
@@ -1699,6 +1710,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(admission_deadline),
         )
     }
 
@@ -1738,6 +1750,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
+        let admission_deadline = Self::get_deadline(&ctx);
         let egress_limiter = resource_limiter.clone();
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1873,11 +1886,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(admission_deadline),
         );
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_error).await? }
     }
 
     // The entry point of the storage scheduler. Not only transaction commands need
@@ -2137,6 +2148,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2295,6 +2307,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2402,6 +2415,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2936,6 +2950,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3102,6 +3117,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3191,6 +3207,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3381,12 +3398,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_error).await? }
     }
 
     fn read_pool_spawn_with_busy_check<Fut, T>(
@@ -3397,6 +3412,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
+        admission_deadline: Option<Deadline>,
     ) -> impl Future<Output = Result<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
@@ -3415,8 +3431,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let read_pool = self.read_pool.clone();
         FuturesEither::Right(async move {
             read_pool
-                .spawn_handle(future, priority, task_id, metadata, resource_limiter)
-                .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .spawn_handle(
+                    future,
+                    priority,
+                    task_id,
+                    metadata,
+                    resource_limiter,
+                    admission_deadline,
+                )
+                .map_err(read_pool_error)
                 .await?
         })
     }
@@ -3502,6 +3525,16 @@ pub struct DynamicConfigs {
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
     pub in_memory_peer_size_limit: Arc<AtomicU64>,
     pub in_memory_instance_size_limit: Arc<AtomicU64>,
+}
+
+/// Converts a failure to run a read in the read pool into a storage error. A
+/// read whose deadline passes while it waits for admission reports
+/// `DeadlineExceeded`, the others report that the scheduler is busy.
+fn read_pool_error(e: ReadPoolError) -> Error {
+    match e {
+        ReadPoolError::DeadlineExceeded => Error::from(ErrorInner::DeadlineExceeded),
+        _ => Error::from(ErrorInner::SchedTooBusy),
+    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {

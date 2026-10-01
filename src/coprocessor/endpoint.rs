@@ -714,6 +714,7 @@ impl<E: Engine> Endpoint<E> {
                     .get_override_priority(),
             )
         });
+        let deadline = req_ctx.deadline;
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
@@ -740,7 +741,13 @@ impl<E: Engine> Endpoint<E> {
             resource_limiter,
         );
         async move {
-            spawn_fut_result?.await?;
+            // Admission can delay the submission for as long as the limiter is in
+            // debt, so bound it by the request deadline. Dropping the submission
+            // releases its admission delay slot and memory quota.
+            match async_timeout(spawn_fut_result?, deadline.remaining_duration()).await {
+                Ok(res) => res?,
+                Err(_) => return Err(Error::DeadlineExceeded),
+            }
             rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
         }
     }
@@ -1189,6 +1196,7 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
+        let deadline = req_ctx.deadline;
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
@@ -1215,12 +1223,13 @@ impl<E: Engine> Endpoint<E> {
         )?;
         // Transparent to caller: embed admission delay into the stream itself.
         // On first poll, drives spawn_fut (sleep if delayed, then submit to
-        // yatp). On error yields one error item. Then chains with rx items.
+        // yatp), bounded by the request deadline as in the unary path. On error
+        // yields one error item. Then chains with rx items.
         let stream = futures::stream::once(Box::pin(async move {
-            spawn_fut
-                .await
-                .err()
-                .map(|_| Err(Error::MaxPendingTasksExceeded))
+            match async_timeout(spawn_fut, deadline.remaining_duration()).await {
+                Ok(res) => res.err().map(|_| Err(Error::MaxPendingTasksExceeded)),
+                Err(_) => Some(Err(Error::DeadlineExceeded)),
+            }
         }))
         .filter_map(futures::future::ready)
         .chain(rx);
@@ -2733,6 +2742,99 @@ mod tests {
             block_on(copr.handle_unary_request(background_request(handler_builder))).unwrap();
         assert_eq!(resp.get_data().len(), 64 * 1024);
         assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
+
+    // A background request whose admission is delayed by egress debt fails
+    // with `DeadlineExceeded` once its deadline passes, instead of waiting out
+    // the debt before entering the read pool, for both unary and streaming
+    // requests.
+    #[test]
+    fn test_background_admission_respects_deadline() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // One delayed request at a time, so a leaked delay slot would make the
+        // next delayed request be rejected instead.
+        let manager = Arc::new(ResourceGroupManager::new(
+            resource_control::config::Config {
+                admission_max_delayed_count: 1,
+                ..Default::default()
+            },
+        ));
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        // About a minute of background egress debt at 1 KiB/s.
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+        bg_limiter.consume_egress(64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::from_secs(30));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            Some(manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            req_ctx.deadline = Deadline::from_now(Duration::from_millis(100));
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        for _ in 0..2 {
+            let started_at = Instant::now();
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+            let res = block_on(copr.handle_unary_request(background_request(handler_builder)));
+            assert!(matches!(res, Err(Error::DeadlineExceeded)), "{res:?}");
+            assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+        }
+
+        let started_at = Instant::now();
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(StreamFixture::new(vec![Ok(coppb::Response::default())]).into_boxed())
+        });
+        let items = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(items[0], Err(Error::DeadlineExceeded)),
+            "{items:?}"
+        );
+        assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
     }
 
     #[test]

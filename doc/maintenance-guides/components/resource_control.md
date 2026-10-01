@@ -263,6 +263,12 @@ How it is enforced:
   adds the egress debt when `is_read` and the limiter is background, and
   `src/read_pool.rs::admission_and_enqueue` waits for it before the yatp
   enqueue.
+- The admission wait, for egress as for CPU/IO debt, is bounded by the request
+  deadline for coprocessor requests (`src/coprocessor/endpoint.rs`) and
+  transactional KV reads (the `admission_deadline` of
+  `ReadPoolHandle::spawn_handle`). A read whose deadline passes is dropped
+  before it enters the pool, releasing its admission delay slot, and fails
+  with `DeadlineExceeded`. Raw KV reads are not bounded.
 
 Invariant: egress debt stays out of `ResourceLimiter::consume`. Backup and
 ImportSST pay CPU/IO debt through `LimitedFuture` (which calls `consume`), and
