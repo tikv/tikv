@@ -251,6 +251,16 @@ impl Storage for MockStorage {
         unimplemented!()
     }
 
+    fn get_entry_at_ts(
+        &mut self,
+        _is_key_only: bool,
+        _load_commit_ts: bool,
+        _range: PointRange,
+        _ts: u64,
+    ) -> StorageResult<Option<OwnedKvPairEntry>> {
+        unimplemented!()
+    }
+
     fn met_uncacheable_data(&self) -> Option<bool> {
         unimplemented!()
     }

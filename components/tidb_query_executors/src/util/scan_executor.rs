@@ -65,6 +65,10 @@ pub struct ScanExecutorOptions<S, I> {
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
     pub load_commit_ts: bool,
+    /// Per-range read ts aligned with `key_ranges`.
+    ///
+    /// When present, it is only supported for point ranges.
+    pub range_versions: Option<Vec<u64>>,
 }
 
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
@@ -73,6 +77,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             imp,
             storage,
             mut key_ranges,
+            mut range_versions,
             is_backward,
             is_key_only,
             accept_point_range,
@@ -81,17 +86,43 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
+        let has_range_versions = range_versions.is_some();
+        if let Some(versions) = range_versions.as_ref() {
+            if !accept_point_range {
+                return Err(other_err!(
+                    "range_versions is only supported for point ranges"
+                ));
+            }
+            if versions.len() != key_ranges.len() {
+                return Err(other_err!(
+                    "range_versions length {} doesn't match ranges length {}",
+                    versions.len(),
+                    key_ranges.len()
+                ));
+            }
+        }
         if is_backward {
             key_ranges.reverse();
+            if let Some(v) = range_versions.as_mut() {
+                v.reverse();
+            }
+        }
+        let mut ranges = Vec::with_capacity(key_ranges.len());
+        for r in key_ranges {
+            let r = Range::from_pb_range(r, accept_point_range);
+            if has_range_versions && !matches!(r, Range::Point(_)) {
+                return Err(other_err!(
+                    "range_versions is only supported for point ranges"
+                ));
+            }
+            ranges.push(r);
         }
         Ok(Self {
             imp,
             scanner: RangesScanner::new(RangesScannerOptions {
+                range_versions,
                 storage,
-                ranges: key_ranges
-                    .into_iter()
-                    .map(|r| Range::from_pb_range(r, accept_point_range))
-                    .collect(),
+                ranges,
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,

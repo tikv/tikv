@@ -228,6 +228,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let ranges = std::mem::take(&mut self.ranges);
                 table::check_table_ranges::<F>(&ranges)?;
                 let mut scanner = RangesScanner::<_, F>::new(RangesScannerOptions {
+                    range_versions: None,
                     storage: self.storage.take().unwrap(),
                     ranges: ranges
                         .into_iter()

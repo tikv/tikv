@@ -79,6 +79,7 @@ where
                 black_box(TikvStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 StubAccessor::none(),
                 black_box(ranges.to_vec()),
+                black_box(None),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(false),
             )

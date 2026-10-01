@@ -159,4 +159,5 @@ exceptions = [
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
+allow-git = ["https://github.com/AilinKid/kvproto.git"]
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
