@@ -27,6 +27,8 @@ use resource_control::{
 };
 use thiserror::Error;
 use tikv_util::{
+    deadline::Deadline,
+    future::async_timeout,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, priority_from_task_meta},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
@@ -338,6 +340,13 @@ impl ReadPoolHandle {
         }
     }
 
+    /// Spawns `f` like `spawn` and resolves to its output.
+    ///
+    /// With `admission_deadline`, the admission and enqueue of the task, which
+    /// can be delayed for as long as its resource limiter is in debt, fail
+    /// with `ReadPoolError::DeadlineExceeded` once the deadline passes. The
+    /// task is then dropped before it enters the pool, releasing its
+    /// admission delay slot. A task that has entered the pool is not bounded.
     pub fn spawn_handle<F, T>(
         &self,
         f: F,
@@ -345,6 +354,7 @@ impl ReadPoolHandle {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
+        admission_deadline: Option<Deadline>,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -361,7 +371,15 @@ impl ReadPoolHandle {
             resource_limiter,
         );
         async move {
-            spawn_fut.await?;
+            match admission_deadline {
+                Some(deadline) => {
+                    match async_timeout(spawn_fut, deadline.remaining_duration()).await {
+                        Ok(res) => res?,
+                        Err(_) => return Err(ReadPoolError::DeadlineExceeded),
+                    }
+                }
+                None => spawn_fut.await?,
+            }
             rx.map_err(ReadPoolError::from).await
         }
     }
@@ -1110,6 +1128,9 @@ pub enum ReadPoolError {
     #[error("Request rejected by admission control")]
     Rejected,
 
+    #[error("Deadline exceeded before the task was admitted")]
+    DeadlineExceeded,
+
     #[error("{0}")]
     Canceled(#[from] oneshot::Canceled),
 }
@@ -1458,7 +1479,7 @@ mod tests {
         let mut ctx = ResourceControlContext::default();
         ctx.override_priority = 16; // high priority
         let metadata = TaskMetadata::from_ctx(&ctx);
-        let f = handle.spawn_handle(task_high, CommandPri::Normal, 6, metadata, None);
+        let f = handle.spawn_handle(task_high, CommandPri::Normal, 6, metadata, None, None);
         tx_h.send(()).unwrap();
         block_on(f).unwrap();
 
@@ -1621,6 +1642,71 @@ mod tests {
         }
 
         worker.stop();
+    }
+
+    // A task whose admission is delayed by resource limiter debt gives up once
+    // its admission deadline passes, instead of waiting out the whole debt,
+    // and releases its admission delay slot.
+    #[test]
+    fn test_spawn_handle_admission_respects_deadline() {
+        // One delayed request at a time, so a leaked delay slot would make the
+        // next delayed request be rejected instead.
+        let rm_config = resource_control::config::Config {
+            admission_max_delayed_count: 1,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let handle = pool.handle();
+        // About a minute of background egress debt at 1 KiB/s.
+        let limiter = Arc::new(ResourceLimiter::new(
+            "test-bg".to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+            true,
+        ));
+        limiter.set_egress_limit_for_test(1024.0);
+        limiter.consume_egress(64 * 1024);
+        assert!(limiter.admission_delay(true) > Duration::from_secs(30));
+
+        let metadata = TaskMetadata::from_ctx(&ResourceControlContext::default());
+        for _ in 0..2 {
+            let started_at = Instant::now();
+            let res = block_on(handle.spawn_handle(
+                async { 42 },
+                CommandPri::Normal,
+                1,
+                metadata.deep_clone(),
+                Some(limiter.clone()),
+                Some(Deadline::from_now(Duration::from_millis(100))),
+            ));
+            assert!(
+                matches!(res, Err(ReadPoolError::DeadlineExceeded)),
+                "{res:?}"
+            );
+            assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+        }
+
+        // Without a deadline, a task with no limiter is not delayed at all.
+        let res = block_on(handle.spawn_handle(
+            async { 42 },
+            CommandPri::Normal,
+            2,
+            metadata,
+            None,
+            None,
+        ));
+        assert_eq!(res.unwrap(), 42);
     }
 
     #[test]
