@@ -1340,4 +1340,4 @@
 ## size. Candidates admitted by this
 ## threshold force bottommost-level compaction. Set to "0" to disable this
 ## byte-based admission path.
-# redundant-bytes-threshold = "384MiB"
+# redundant-bytes-threshold = "144MiB"
