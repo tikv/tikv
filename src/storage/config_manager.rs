@@ -29,9 +29,6 @@ pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
     concurrency_manager: ConcurrencyManager,
 }
 
-unsafe impl<E: Engine, K, L: LockManager> Send for StorageConfigManger<E, K, L> {}
-unsafe impl<E: Engine, K, L: LockManager> Sync for StorageConfigManger<E, K, L> {}
-
 impl<E: Engine, K, L: LockManager> StorageConfigManger<E, K, L> {
     pub fn new(
         configurable_db: K,
@@ -50,7 +47,7 @@ impl<E: Engine, K, L: LockManager> StorageConfigManger<E, K, L> {
     }
 }
 
-impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
+impl<EK: Engine, K: ConfigurableDb + Send + Sync, L: LockManager> ConfigManager
     for StorageConfigManger<EK, K, L>
 {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
@@ -125,4 +122,21 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
 
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::StorageConfigManger;
+    use crate::storage::{TxnScheduler, lock_manager::MockLockManager};
+
+    type ThreadSafeManager = StorageConfigManger<tikv_kv::BTreeEngine, (), MockLockManager>;
+    type NonThreadSafeManager = StorageConfigManger<tikv_kv::BTreeEngine, Rc<()>, MockLockManager>;
+
+    assert_impl_all!(ThreadSafeManager: Send, Sync);
+    assert_not_impl_any!(NonThreadSafeManager: Send, Sync);
+    assert_impl_all!(TxnScheduler<tikv_kv::BTreeEngine, MockLockManager>: Send, Sync);
 }
