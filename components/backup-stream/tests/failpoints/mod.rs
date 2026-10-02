@@ -40,6 +40,15 @@ mod all {
     };
     use crate::{make_table_key, Suite};
 
+    /// The cases below which block a task of the backup-stream runtime with a
+    /// `pause` failpoint and then wait for other tasks of that same runtime need
+    /// more than one worker thread there. The runtime only gets
+    /// `BackupStreamConfig::num_threads / 2` workers, and `num_threads` defaults
+    /// to half of the host CPU count, so a 6-CPU CI pod leaves it with a single
+    /// worker and those cases hang until the test times out. Pin it here so the
+    /// cases behave the same on any host.
+    const BACKUP_STREAM_TEST_THREADS: usize = 4;
+
     #[test]
     fn failed_register_task() {
         let suite = SuiteBuilder::new_named("failed_register_task").build();
@@ -259,6 +268,7 @@ mod all {
     fn failure_and_split() {
         let mut suite = SuiteBuilder::new_named("failure_and_split")
             .nodes(1)
+            .cfg(|cfg| cfg.num_threads = BACKUP_STREAM_TEST_THREADS)
             .build();
         fail::cfg("try_start_observe0", "pause").unwrap();
 
@@ -377,6 +387,7 @@ mod all {
     fn commit_during_flushing() {
         let mut suite = SuiteBuilder::new_named("commit_during_flushing")
             .nodes(1)
+            .cfg(|cfg| cfg.num_threads = BACKUP_STREAM_TEST_THREADS)
             .build();
         suite.must_register_task(1, "commit_during_flushing");
         let key = make_record_key(1, 1);
@@ -466,6 +477,7 @@ mod all {
     fn unregister_during_flush_cleans_flush_safe_point() {
         let mut suite = SuiteBuilder::new_named("unregister_during_flush")
             .nodes(1)
+            .cfg(|cfg| cfg.num_threads = BACKUP_STREAM_TEST_THREADS)
             .build();
         let task = "unregister_during_flush";
         let service_id = format!("backup-stream-{}-{}", task, 1);
