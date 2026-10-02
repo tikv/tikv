@@ -64,6 +64,13 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref GROUP_RU_BASELINE: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_group_ru_baseline",
+        "Quiet-window baseline per resource group, as CPU utilization %. 0 means no quiet window has elapsed yet; whether that makes the group ineligible or judged on raw usage depends on resource-control.noisy-detection",
+        &["resource_group"]
+    )
+    .unwrap();
+
     pub static ref GROUP_QUOTA_LIMIT_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_group_quota_limit",
         "Current rate limit per resource group per resource type (CPU as utilization %, 0 means unlimited)",
@@ -99,8 +106,15 @@ lazy_static! {
 
     pub static ref READ_POOL_CPU_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_read_pool_cpu_percent",
-        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
+        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (live sliding average), baseline (floor frozen at overload onset, 0 when not frozen), current (measured), and target (foreground-pressure-driven ceiling)",
         &["type"]
+    )
+    .unwrap();
+
+    pub static ref EFFECTIVE_NOISY_DETECTION: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_effective_noisy_detection",
+        "Noisy-detection policy in force right now, 1 for the active one. Tracks online config changes; whether an individual group is falling back to current usage for want of a baseline is visible in tikv_resource_control_group_ru_baseline, which reads 0 for such a group",
+        &["policy"]
     )
     .unwrap();
 
@@ -112,15 +126,69 @@ lazy_static! {
     .unwrap();
 }
 
+/// Drops an evicted tracker's gauges, which would keep its last value.
+pub fn deregister_tracker_gauges(name: &str) {
+    _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_BASELINE.remove_label_values(&[name]);
+    _ = GROUP_QUOTA_LIMIT_VEC.remove_label_values(&[name, "cpu"]);
+}
+
 pub fn deregister_metrics(name: &str) {
     _ = TWO_PHASE_THROTTLED_REQUESTS.remove_label_values(&[name]);
     _ = GROUP_QUOTA_LIMIT_VEC.remove_label_values(&[name, "cpu"]);
     _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
     _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_BASELINE.remove_label_values(&[name]);
     _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&[name]);
     _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&[name]);
     _ = ADMISSION_DELAY_DURATION.remove_label_values(&[name]);
     _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&["background"]);
     _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&["background"]);
     _ = ADMISSION_DELAY_DURATION.remove_label_values(&["background"]);
+}
+
+/// Publishes `policy` as the one in force, zeroing the others so a panel that
+/// sums the series cannot show two policies at once after a config change.
+pub fn report_effective_noisy_detection(policy: crate::config::NoisyDetection) {
+    set_effective_noisy_detection(&EFFECTIVE_NOISY_DETECTION, policy);
+}
+
+fn set_effective_noisy_detection(gauge: &IntGaugeVec, policy: crate::config::NoisyDetection) {
+    use crate::config::NoisyDetection::*;
+    for candidate in [Baseline, BaselineFallbackCurrentUsage, CurrentUsage] {
+        gauge
+            .with_label_values(&[&candidate.to_string()])
+            .set(i64::from(candidate == policy));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use prometheus::Opts;
+
+    use super::*;
+    use crate::config::NoisyDetection;
+
+    #[test]
+    fn test_effective_noisy_detection_is_one_hot() {
+        // A private gauge: the global one is written by concurrent tests.
+        let gauge = IntGaugeVec::new(Opts::new("t", "t"), &["policy"]).unwrap();
+        let all = [
+            NoisyDetection::Baseline,
+            NoisyDetection::BaselineFallbackCurrentUsage,
+            NoisyDetection::CurrentUsage,
+        ];
+        // Walk every transition, so a switch away always zeroes the old one.
+        for from in all {
+            for to in all {
+                set_effective_noisy_detection(&gauge, from);
+                set_effective_noisy_detection(&gauge, to);
+                for p in all {
+                    let v = gauge.with_label_values(&[&p.to_string()]).get();
+                    assert_eq!(v, i64::from(p == to), "{} -> {}: {}", from, to, p);
+                }
+            }
+        }
+    }
 }
