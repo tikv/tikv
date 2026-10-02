@@ -41,12 +41,12 @@ mod all {
     use crate::{make_table_key, Suite};
 
     /// The cases below which block a task of the backup-stream runtime with a
-    /// `pause` failpoint and then wait for other tasks of that same runtime need
-    /// more than one worker thread there. The runtime only gets
-    /// `BackupStreamConfig::num_threads / 2` workers, and `num_threads` defaults
-    /// to half of the host CPU count, so a 6-CPU CI pod leaves it with a single
-    /// worker and those cases hang until the test times out. Pin it here so the
-    /// cases behave the same on any host.
+    /// `pause` failpoint and then wait for other tasks of that same runtime
+    /// need more than one worker thread there. The runtime only gets
+    /// `BackupStreamConfig::num_threads / 2` workers, and `num_threads`
+    /// defaults to half of the host CPU count, so a 6-CPU CI pod leaves it
+    /// with a single worker and those cases hang until the test times out.
+    /// Pin it here so the cases behave the same on any host.
     const BACKUP_STREAM_TEST_THREADS: usize = 4;
 
     #[test]
