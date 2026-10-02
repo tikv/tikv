@@ -3,8 +3,13 @@
 //! A module provides the implementation of receiver that supports async/await.
 
 use std::{
+    cell::Cell,
+    marker::PhantomData,
     pin::Pin,
-    sync::atomic::{self, AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -89,21 +94,20 @@ const SENDER_COUNT_BASE: usize = 1 << 1;
 const RECEIVER_COUNT_BASE: usize = 1;
 
 pub struct Sender<T> {
-    queue: *mut Queue<T>,
+    queue: Arc<Queue<T>>,
 }
 
 impl<T: Send> Sender<T> {
     /// Sends the message with predefined wake policy.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        let policy = unsafe { (*self.queue).policy };
-        self.send_with(t, policy)
+        self.send_with(t, self.queue.policy)
     }
 
     /// Sends the message with the specified wake policy.
     #[inline]
     pub fn send_with(&self, t: T, policy: WakePolicy) -> Result<(), SendError<T>> {
-        let queue = unsafe { &*self.queue };
+        let queue = &self.queue;
         if queue.liveness.load(Ordering::Acquire) & RECEIVER_COUNT_BASE != 0 {
             let res = queue.queue.push_back(t);
             queue.wake(policy);
@@ -115,36 +119,33 @@ impl<T: Send> Sender<T> {
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
-        let queue = unsafe { &*self.queue };
+        let queue = &self.queue;
         queue
             .liveness
             .fetch_add(SENDER_COUNT_BASE, Ordering::Relaxed);
-        Self { queue: self.queue }
+        Self {
+            queue: Arc::clone(&self.queue),
+        }
     }
 }
 
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
-        let queue = unsafe { &*self.queue };
+        let queue = &self.queue;
         let previous = queue
             .liveness
             .fetch_sub(SENDER_COUNT_BASE, Ordering::Release);
         if previous == SENDER_COUNT_BASE | RECEIVER_COUNT_BASE {
             // The last sender is dropped, we need to wake up the receiver.
             queue.waker.wake();
-        } else if previous == SENDER_COUNT_BASE {
-            atomic::fence(Ordering::Acquire);
-            drop(unsafe { Box::from_raw(self.queue) });
         }
     }
 }
 
-unsafe impl<T: Send> Send for Sender<T> {}
-unsafe impl<T: Send> Sync for Sender<T> {}
-
 pub struct Receiver<T> {
-    queue: *mut Queue<T>,
+    queue: Arc<Queue<T>>,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl<T: Send> Stream for Receiver<T> {
@@ -152,7 +153,7 @@ impl<T: Send> Stream for Receiver<T> {
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let queue = unsafe { &*self.queue };
+        let queue = &self.queue;
         if let Some(t) = queue.queue.pop_front() {
             return Poll::Ready(Some(t));
         }
@@ -171,7 +172,7 @@ impl<T: Send> Stream for Receiver<T> {
 impl<T: Send> Receiver<T> {
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        let queue = unsafe { &*self.queue };
+        let queue = &self.queue;
         if let Some(t) = queue.queue.pop_front() {
             return Ok(t);
         }
@@ -194,19 +195,12 @@ impl<T: Send> Receiver<T> {
 impl<T> Drop for Receiver<T> {
     #[inline]
     fn drop(&mut self) {
-        let queue = unsafe { &*self.queue };
-        if RECEIVER_COUNT_BASE
-            == queue
-                .liveness
-                .fetch_sub(RECEIVER_COUNT_BASE, Ordering::Release)
-        {
-            atomic::fence(Ordering::Acquire);
-            drop(unsafe { Box::from_raw(self.queue) });
-        }
+        let queue = &self.queue;
+        queue
+            .liveness
+            .fetch_sub(RECEIVER_COUNT_BASE, Ordering::Release);
     }
 }
-
-unsafe impl<T: Send> Send for Receiver<T> {}
 
 #[inline]
 pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
@@ -219,13 +213,21 @@ pub fn bounded<T>(cap: usize, policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
 }
 
 fn with_queue<T>(queue: QueueType<T>, policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
-    let queue = Box::into_raw(Box::new(Queue {
+    let queue = Arc::new(Queue {
         queue,
         waker: AtomicWaker::new(),
         liveness: AtomicUsize::new(SENDER_COUNT_BASE | RECEIVER_COUNT_BASE),
         policy,
-    }));
-    (Sender { queue }, Receiver { queue })
+    });
+    (
+        Sender {
+            queue: Arc::clone(&queue),
+        },
+        Receiver {
+            queue,
+            _not_sync: PhantomData,
+        },
+    )
 }
 
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
@@ -492,6 +494,22 @@ mod tests {
         tx1.send(SetOnDrop::default()).unwrap_err();
         drop(tx1);
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_concurrent_endpoint_drop() {
+        for _ in 0..100 {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = super::unbounded(WakePolicy::Immediately);
+            tx.send(SetOnDrop(dropped.clone())).unwrap();
+
+            thread::scope(|scope| {
+                scope.spawn(move || drop(tx));
+                scope.spawn(move || drop(rx));
+            });
+
+            assert!(dropped.load(Ordering::SeqCst));
+        }
     }
 
     #[test]
