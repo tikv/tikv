@@ -1,7 +1,5 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(any(test, feature = "failpoints"))]
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,
@@ -42,11 +40,6 @@ make_static_metric! {
 
 
 }
-
-// Global variable for testing: stores the region_id of the first candidate
-// selected for compaction. Used by failpoint tests to verify prioritization.
-#[cfg(any(test, feature = "failpoints"))]
-pub static FIRST_COMPACTION_CANDIDATE_REGION: AtomicU64 = AtomicU64::new(0);
 
 lazy_static::lazy_static! {
     pub static ref AUTO_COMPACTION_DURATION_HISTOGRAM_VEC: AutoCompactionDurationHistogramVec = register_static_histogram_vec!(
@@ -747,18 +740,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         for (index, candidate) in candidates.into_iter().enumerate() {
             if self.check_stopped() {
                 return None; // Stopped
-            }
-
-            // Failpoint for testing: capture first candidate selected for compaction
-            // Log the region_id so test can verify which region was prioritized
-            #[cfg(any(test, feature = "failpoints"))]
-            if index == 0 {
-                let region_id = candidate.region.get_id();
-                info!("first compaction candidate selected"; "region_id" => region_id, "score" => candidate.score);
-
-                // Store region_id for test verification
-                FIRST_COMPACTION_CANDIDATE_REGION.store(region_id, Ordering::Relaxed);
-                fail_point!("gc_worker_auto_compaction_first_candidate");
             }
 
             // Check if we've exceeded the check interval, return to start next round
