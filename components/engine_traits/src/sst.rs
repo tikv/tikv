@@ -23,6 +23,18 @@ pub trait SstExt: Sized {
 /// SstReader is used to read an SST file.
 pub trait SstReader: RefIterable + Sized + Send {
     fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self>;
+    /// Open the SST for a one-shot read, such as ingest checksum verification.
+    ///
+    /// With `use_direct_io` set, the read bypasses the OS page cache, so
+    /// reading a large SST once does not evict the working set of concurrent
+    /// readers. Engines without direct-I/O support fall back to `open`.
+    fn open_for_one_shot_read(
+        path: &str,
+        mgr: Option<Arc<DataKeyManager>>,
+        _use_direct_io: bool,
+    ) -> Result<Self> {
+        Self::open(path, mgr)
+    }
     fn verify_checksum(&self) -> Result<()>;
     fn kv_count_and_size(&self) -> (u64, u64);
 }
@@ -101,6 +113,18 @@ where
 
     #[must_use]
     fn set_compression_level(self, level: i32) -> Self;
+
+    /// If set, the SST is written with direct I/O so the write stream does not
+    /// populate the OS page cache. Only affects the write path; reads of the
+    /// resulting SST are buffered as usual unless the reader opts out too.
+    /// Engines without direct-I/O support ignore this.
+    #[must_use]
+    fn set_use_direct_writes(self, _use_direct_writes: bool) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;
