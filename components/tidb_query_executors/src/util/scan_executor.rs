@@ -3,6 +3,7 @@
 use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tidb_query_common::{
     Result,
     metrics::{ExecutorName, record_executor_work},
@@ -57,6 +58,12 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
     /// or there was an error scanning the table, this flag will be set to
     /// `true` and `next_batch` should be never called again.
     is_ended: bool,
+    analyze_sampling: Option<AnalyzeSampling>,
+}
+
+struct AnalyzeSampling {
+    ndv_rate: f64,
+    rng: StdRng,
 }
 
 pub struct ScanExecutorOptions<S, I> {
@@ -104,7 +111,15 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 load_commit_ts,
             }),
             is_ended: false,
+            analyze_sampling: None,
         })
+    }
+
+    pub fn sample_analyze_rows(&mut self, ndv_rate: f64) {
+        self.analyze_sampling = Some(AnalyzeSampling {
+            ndv_rate,
+            rng: StdRng::from_entropy(),
+        });
     }
 
     /// Fills a column vector and returns whether or not all ranges are drained.
@@ -136,6 +151,11 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 let (key, value) = row.kv();
                 scanned_kv_bytes =
                     scanned_kv_bytes.saturating_add((key.len() + value.len()) as u64);
+                if let Some(sampling) = &mut self.analyze_sampling {
+                    if sampling.rng.gen_range(0.0, 1.0) >= sampling.ndv_rate {
+                        continue;
+                    }
+                }
                 if let Err(e) = self
                     .imp
                     .process_kv_pair(key, value, columns, row.commit_ts())

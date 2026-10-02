@@ -8389,6 +8389,7 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf 2.8.0",
+ "rand 0.7.3",
  "slog",
  "slog-global",
  "smallvec",
@@ -8885,7 +8886,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#5f9928e91afe4ac82c770cc9cd5fb2c804a7555e"
+source = "git+https://github.com/0xPoe/tipb.git?rev=1db4b3fa2dbf3a841c3efed58b769423d7510046#1db4b3fa2dbf3a841c3efed58b769423d7510046"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
