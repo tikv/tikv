@@ -189,11 +189,6 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
                             });
                         }
                     }
-                    if let Some(tracker) = tracker {
-                        let _ = GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                            tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
-                        });
-                    }
                     match val {
                         Some(val) => {
                             resp.set_value(val.value);

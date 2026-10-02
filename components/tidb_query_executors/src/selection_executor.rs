@@ -19,7 +19,6 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     src: Src,
 
     conditions: Vec<RpnExpression>,
-    condition_column_ref_counts: Vec<u32>,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -39,12 +38,10 @@ impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
-        let condition_column_ref_counts = conditions.iter().map(count_column_refs).collect();
         Self {
             context: EvalContext::default(),
             src,
             conditions,
-            condition_column_ref_counts,
         }
     }
 
@@ -55,20 +52,19 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
-        let mut condition_column_ref_counts = Vec::with_capacity(conditions_def.len());
         let mut ctx = EvalContext::new(config);
         for def in conditions_def {
-            let expr =
-                RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
-            condition_column_ref_counts.push(count_column_refs(&expr));
-            conditions.push(expr);
+            conditions.push(RpnExpressionBuilder::build_from_expr_tree(
+                def,
+                &mut ctx,
+                src.schema().len(),
+            )?);
         }
 
         Ok(Self {
             context: ctx,
             src,
             conditions,
-            condition_column_ref_counts,
         })
     }
 
@@ -87,19 +83,6 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         while condition_index < self.conditions.len() && !src_result.logical_rows.is_empty() {
             src_logical_rows_copy.clear();
             src_logical_rows_copy.extend_from_slice(&src_result.logical_rows);
-
-            // Selection predicate evaluation cost is dominated by expression evaluation.
-            // Approximate work as rows * (expression work units + number of column refs),
-            // once per evaluated condition. The work count preserves logical operations
-            // represented by flattened short-circuit calls.
-            let rows_u64 = src_logical_rows_copy.len() as u64;
-            let expression_work_u64 = self.conditions[condition_index].work_count() as u64;
-            let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
-            let weighted_nodes_u64 = expression_work_u64.saturating_add(col_refs_u64);
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_selection,
-                rows_u64.saturating_mul(weighted_nodes_u64),
-            );
 
             match self.conditions[condition_index].eval(
                 &mut self.context,
@@ -137,10 +120,6 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
         Ok(())
     }
-}
-
-fn count_column_refs(expr: &RpnExpression) -> u32 {
-    expr.column_ref_count().try_into().unwrap_or(u32::MAX)
 }
 
 fn update_logical_rows_by_scalar_value(

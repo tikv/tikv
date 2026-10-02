@@ -1294,10 +1294,6 @@ mod tests {
             node => panic!("expected short-circuit call, got {:?}", node),
         }
         assert_eq!(exp.node_count(), 6);
-        // The flattened root has three binary OR operations even though the
-        // outer two are represented by one short-circuit node.
-        assert_eq!(exp.work_count(), 7);
-        assert_eq!(exp.column_ref_count(), 4);
         assert_eq!(exp.referenced_column_offsets(), &[0, 1, 2, 3]);
     }
 
@@ -1330,29 +1326,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_flattened_chain_preserves_logical_work_count() {
-        // 32 terms contain 31 binary logical operations. Flattening replaces
-        // those 31 FnCall nodes with one short-circuit node, but the RU-v2 work
-        // estimate must retain all 31 conceptual operations.
-        let depth = 31;
-        let lazy = RpnExpressionBuilder::build_from_expr_tree(
-            same_logical_expr(depth, ScalarFuncSig::LogicalOr),
-            &mut short_circuit_context(),
-            depth + 1,
-        )
-        .unwrap();
-        let eager = RpnExpressionBuilder::build_from_expr_tree(
-            same_logical_expr(depth, ScalarFuncSig::LogicalOr),
-            &mut EvalContext::default(),
-            depth + 1,
-        )
-        .unwrap();
-
-        assert_eq!(eager.node_count() - lazy.node_count(), 30);
-        assert_eq!(lazy.work_count(), eager.node_count());
     }
 
     #[test]
@@ -1396,11 +1369,6 @@ mod tests {
                 assert_eq!(
                     exp.referenced_column_offsets(),
                     &(0..=depth).collect::<Vec<_>>(),
-                    "depth={depth}, sig={sig:?}"
-                );
-                assert_eq!(
-                    exp.work_count(),
-                    exp.node_count() + depth - 1,
                     "depth={depth}, sig={sig:?}"
                 );
             }
@@ -1452,7 +1420,6 @@ mod tests {
                             }
                             // Collect metadata on the constrained stack too.
                             assert_eq!(lazy.node_count(), eager.node_count());
-                            assert_eq!(lazy.column_ref_count(), depth + 1);
                             assert_eq!(
                                 lazy.referenced_column_offsets(),
                                 &(0..=depth).collect::<Vec<_>>()

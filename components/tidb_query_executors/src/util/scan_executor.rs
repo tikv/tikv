@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     Result,
-    metrics::{ExecutorName, record_executor_work},
     storage::{
         IntervalRange, Range, Storage,
         scanner::{RangesScanner, RangesScannerOptions},
@@ -45,8 +44,6 @@ pub trait ScanExecutorImpl: Send {
 /// Implementation differences between table scan and index scan are further
 /// given via `ScanExecutorImpl`.
 pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
-    executor_name: ExecutorName,
-
     /// The internal scanning implementation.
     imp: I,
 
@@ -60,7 +57,6 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
 }
 
 pub struct ScanExecutorOptions<S, I> {
-    pub executor_name: ExecutorName,
     pub imp: I,
     pub storage: S,
     pub key_ranges: Vec<KeyRange>,
@@ -74,7 +70,6 @@ pub struct ScanExecutorOptions<S, I> {
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
     pub fn new(
         ScanExecutorOptions {
-            executor_name,
             imp,
             storage,
             mut key_ranges,
@@ -90,7 +85,6 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             key_ranges.reverse();
         }
         Ok(Self {
-            executor_name,
             imp,
             scanner: RangesScanner::new(RangesScannerOptions {
                 storage,
@@ -118,24 +112,12 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        let mut scanned_kv_bytes: u64 = 0;
         for i in 0..scan_rows {
-            let some_row = match self.scanner.next_opt(i == scan_rows - 1).await {
-                Ok(r) => r,
-                Err(e) => {
-                    // Persist partial work already done in this batch before propagating errors.
-                    if scanned_kv_bytes > 0 {
-                        record_executor_work(self.executor_name, scanned_kv_bytes);
-                    }
-                    return Err(e.into());
-                }
-            };
+            let some_row = self.scanner.next_opt(i == scan_rows - 1).await?;
             if let Some(row) = some_row {
                 // Retrieved one row from point range or non-point range.
 
                 let (key, value) = row.kv();
-                scanned_kv_bytes =
-                    scanned_kv_bytes.saturating_add((key.len() + value.len()) as u64);
                 if let Err(e) = self
                     .imp
                     .process_kv_pair(key, value, columns, row.commit_ts())
@@ -147,23 +129,14 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                     // further cause future executors to panic. So let's truncate these columns to
                     // make they all have N-1 rows in that case.
                     columns.truncate_into_equal_length();
-                    if scanned_kv_bytes > 0 {
-                        record_executor_work(self.executor_name, scanned_kv_bytes);
-                    }
                     return Err(e);
                 }
             } else {
                 // Drained
-                if scanned_kv_bytes > 0 {
-                    record_executor_work(self.executor_name, scanned_kv_bytes);
-                }
                 return Ok(true);
             }
         }
 
-        if scanned_kv_bytes > 0 {
-            record_executor_work(self.executor_name, scanned_kv_bytes);
-        }
         // Not drained
         Ok(false)
     }
@@ -231,8 +204,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
         let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns).await;
 
         logical_columns.assert_columns_equal_length();
-        let logical_rows_len = logical_columns.rows_len();
-        let logical_rows = (0..logical_rows_len).collect();
+        let logical_rows = (0..logical_columns.rows_len()).collect();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after

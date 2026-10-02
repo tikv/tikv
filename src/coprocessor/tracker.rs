@@ -266,7 +266,11 @@ impl<E: Engine> Tracker<E> {
         detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
         with_tls_tracker(|tracker| tracker.write_scan_detail(&mut detail_v2));
         exec_details_v2.set_scan_detail_v2(detail_v2);
-        with_tls_tracker(|tracker| tracker.write_ru_v2(exec_details_v2.mut_ru_v2()));
+        with_tls_tracker(|tracker| {
+            exec_details_v2
+                .mut_ru_v2()
+                .set_coprocessor_response_bytes(tracker.metrics.coprocessor_response_bytes);
+        });
 
         (exec_details, exec_details_v2)
     }
