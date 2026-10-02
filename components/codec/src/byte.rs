@@ -367,10 +367,14 @@ impl MemComparableByteCodec {
             let src_ptr_end = src_ptr.add(src_len);
 
             loop {
-                let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
-                if std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
+                // Check the remaining length before forming src_ptr + (GROUP_SIZE + 1):
+                // for a truncated final group that pointer would be out of bounds of
+                // the source allocation, which is UB even without a dereference.
+                let remaining = src_ptr_end.offset_from(src_ptr) as usize;
+                if std::intrinsics::unlikely(remaining < MEMCMP_GROUP_SIZE + 1) {
                     return Err(ErrorInner::eof().into());
                 }
+                let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
 
                 // Copy `MEMCMP_GROUP_SIZE` bytes any way. However we will truncate the returned
                 // length according to padding size if it is the last block.
@@ -1327,6 +1331,98 @@ mod tests {
                 assert_eq!(read, encoded.len());
                 assert_eq!(written, payload.len());
                 assert_eq!(&buf[..written], payload);
+            }
+        }
+    }
+
+    /// Miri soundness regression for OOB pointer arithmetic on truncated input.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// `try_decode_first_internal` formed `src_ptr + (MEMCMP_GROUP_SIZE + 1)`
+    /// *before* checking whether that many bytes remain:
+    ///
+    /// ```ignore
+    /// let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
+    /// if unlikely(src_ptr_next > src_ptr_end) {
+    ///     return Err(ErrorInner::eof().into());
+    /// }
+    /// ```
+    ///
+    /// For a truncated / malformed input (fewer than `MEMCMP_GROUP_SIZE + 1`
+    /// bytes remaining), `ptr::add` produces a pointer beyond one-past-the-end
+    /// of the source allocation — and for the empty input it offsets a
+    /// dangling pointer. Both are UB under Rust's in-bounds pointer arithmetic
+    /// rules even though the pointer is only compared, never dereferenced. All
+    /// safe decode entry points (`try_decode_first`,
+    /// `try_decode_first_in_place` and the `_desc` variants) funnel into
+    /// this loop, so any safe caller handing over a truncated buffer
+    /// triggers it (library unsoundness).
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with the pre-fix code this test fails at
+    /// `src_ptr.add(MEMCMP_GROUP_SIZE + 1)` with
+    /// `Undefined Behavior: in-bounds pointer arithmetic failed`.
+    /// With the fix (remaining length checked before forming the pointer),
+    /// Miri accepts the test and every truncation returns `Err` as documented.
+    ///
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_try_decode_first_truncated`
+    #[test]
+    fn miri_soundness_try_decode_first_truncated() {
+        for payload_len in [0usize, 1, 7, 8, 9, 16] {
+            let payload = vec![0xA5u8; payload_len];
+            let enc_len = MemComparableByteCodec::encoded_len(payload_len);
+
+            // ascending
+            {
+                let mut encoded = vec![0; enc_len];
+                MemComparableByteCodec::encode_all(&payload, &mut encoded);
+                for cut in 1..=enc_len {
+                    // The truncated buffer must be its own allocation: `ptr::add`
+                    // bounds are allocation-level, so a short slice of a larger
+                    // buffer would keep src_ptr + 9 in-bounds and hide the UB.
+                    let truncated = encoded[..enc_len - cut].to_vec();
+                    let truncated = truncated.as_slice();
+                    let mut dest = vec![0; truncated.len()];
+                    assert!(
+                        MemComparableByteCodec::try_decode_first(truncated, &mut dest).is_err(),
+                        "asc truncated decode must fail (payload_len={}, cut={})",
+                        payload_len,
+                        cut
+                    );
+                }
+                let mut dest = vec![0; enc_len];
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first(&encoded, &mut dest).unwrap();
+                assert_eq!(read, enc_len);
+                assert_eq!(&dest[..written], payload.as_slice());
+            }
+            // descending
+            {
+                let mut encoded = vec![0; enc_len];
+                MemComparableByteCodec::encode_all_desc(&payload, &mut encoded);
+                for cut in 1..=enc_len {
+                    // The truncated buffer must be its own allocation: `ptr::add`
+                    // bounds are allocation-level, so a short slice of a larger
+                    // buffer would keep src_ptr + 9 in-bounds and hide the UB.
+                    let truncated = encoded[..enc_len - cut].to_vec();
+                    let truncated = truncated.as_slice();
+                    let mut dest = vec![0; truncated.len()];
+                    assert!(
+                        MemComparableByteCodec::try_decode_first_desc(truncated, &mut dest)
+                            .is_err(),
+                        "desc truncated decode must fail (payload_len={}, cut={})",
+                        payload_len,
+                        cut
+                    );
+                }
+                let mut dest = vec![0; enc_len];
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first_desc(&encoded, &mut dest).unwrap();
+                assert_eq!(read, enc_len);
+                assert_eq!(&dest[..written], payload.as_slice());
             }
         }
     }
