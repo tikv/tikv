@@ -552,6 +552,7 @@ mod all {
     fn cleanup_flush_safe_point_keeps_same_name_registered_task() {
         let mut suite = SuiteBuilder::new_named("cleanup_same_name_task")
             .nodes(1)
+            .cfg(|cfg| cfg.num_threads = BACKUP_STREAM_TEST_THREADS)
             .build();
         let task = "cleanup_same_name_task";
         let service_id = format!("backup-stream-{}-{}", task, 1);
