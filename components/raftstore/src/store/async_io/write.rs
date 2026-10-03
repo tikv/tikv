@@ -563,6 +563,12 @@ where
     pub readies: HashMap<u64, (u64, u64)>,
     pub(crate) raft_wb_split_size: usize,
     recorder: WriteTaskBatchRecorder,
+    /// Whether this batch contains a task that changed hard state (term or
+    /// vote) or included a snapshot. Such batches must always be synced,
+    /// regardless of `Config::unsafe_no_raft_log_fsync`, since raft requires
+    /// hard-state durability before responding to RPCs, and snapshot
+    /// metadata cannot be replayed.
+    pub needs_sync: bool,
 }
 
 impl<EK, ER> WriteTaskBatch<EK, ER>
@@ -585,6 +591,7 @@ where
             readies: HashMap::default(),
             raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
             recorder: WriteTaskBatchRecorder::new(write_batch_size_hint, write_wait_duration),
+            needs_sync: false,
         }
     }
 
@@ -632,6 +639,7 @@ where
             .unwrap();
 
         if let Some(raft_state) = task.raft_state.take() {
+            self.needs_sync = true;
             if self
                 .raft_states
                 .insert(task.region_id, raft_state)
@@ -639,6 +647,9 @@ where
             {
                 self.state_size += std::mem::size_of::<RaftLocalState>();
             }
+        }
+        if task.has_snapshot {
+            self.needs_sync = true;
         }
         self.extra_batch_write.merge(&mut task.extra_write);
 
@@ -679,6 +690,7 @@ where
         self.tasks.clear();
         self.readies.clear();
         self.recorder.reset_wait_count();
+        self.needs_sync = false;
     }
 
     #[inline]
@@ -788,6 +800,9 @@ where
     last_raft_append_success_at_millis: Arc<AtomicU64>,
     last_kv_sync_success_at_millis: Arc<AtomicU64>,
 
+    /// Testing only. See `Config::unsafe_no_raft_log_fsync`.
+    unsafe_no_raft_log_fsync: bool,
+
     // Adaptive batching related fields
     adaptive_batch_enabled: bool,
     /// Configurable QPS threshold for high concurrency detection.
@@ -847,6 +862,8 @@ where
             pending_latency_inspect: vec![],
             last_raft_append_success_at_millis,
             last_kv_sync_success_at_millis,
+
+            unsafe_no_raft_log_fsync: cfg.value().unsafe_no_raft_log_fsync(),
 
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
@@ -1165,11 +1182,15 @@ where
 
             let now = Instant::now();
             self.perf_context.start_observe();
+            let sync = !self.unsafe_no_raft_log_fsync || self.batch.needs_sync;
+            STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+                .with_label_values(&[if sync { "synced" } else { "skipped" }])
+                .inc();
             for i in 0..self.batch.raft_wbs.len() {
                 self.raft_engine
                     .consume_and_shrink(
                         &mut self.batch.raft_wbs[i],
-                        true,
+                        sync,
                         RAFT_WB_SHRINK_SIZE,
                         RAFT_WB_DEFAULT_SIZE,
                     )
@@ -1294,6 +1315,7 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.unsafe_no_raft_log_fsync = incoming.unsafe_no_raft_log_fsync();
             self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
             self.adaptive_high_qps_threshold = incoming.adaptive_high_qps_threshold;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
