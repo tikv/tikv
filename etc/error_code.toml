@@ -673,6 +673,11 @@ error = '''
 KV:Storage:InvalidKeyMode
 '''
 
+["KV:Storage:TxnProtocolIncompatible"]
+error = '''
+KV:Storage:TxnProtocolIncompatible
+'''
+
 ["KV:Storage:Committed"]
 error = '''
 KV:Storage:Committed
@@ -757,4 +762,3 @@ KV:Storage:PrimaryMismatch
 error = '''
 KV:Storage:Unknown
 '''
-

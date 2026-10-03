@@ -2,7 +2,7 @@
 
 use kvproto::errorpb;
 
-use super::ErrorCodeExt;
+use super::{ErrorCodeExt, storage::TXN_PROTOCOL_INCOMPATIBLE};
 
 define_error_codes!(
     "KV:Raftstore:",
@@ -52,6 +52,10 @@ impl ErrorCodeExt for errorpb::Error {
             KEY_NOT_IN_REGION
         } else if self.has_epoch_not_match() {
             EPOCH_NOT_MATCH
+        } else if self.has_incompatible_request() {
+            // Legacy callers also receive ServerIsBusy as a fallback, but the
+            // structured incompatible error is the authoritative classification.
+            TXN_PROTOCOL_INCOMPATIBLE
         } else if self.has_server_is_busy() {
             SERVER_IS_BUSY
         } else if self.has_stale_command() {

@@ -6,6 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
+use kvproto::kvrpcpb::{Context, RequestOrigin};
 use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, local::LocalIntCounter, *};
 use prometheus_static_metric::*;
@@ -124,6 +125,21 @@ make_auto_flush_static_metric! {
         receive_delay,
     }
 
+    pub label_enum TxnRpcCommand {
+        get, scan, batch_get, scan_lock, delete_range, prewrite, pessimistic_lock,
+        pessimistic_rollback, batch_rollback, resolve_lock, commit, cleanup,
+        txn_heart_beat, check_txn_status, check_secondary_locks, mvcc_get_by_key,
+        mvcc_get_by_start_ts, coprocessor,
+    }
+
+    pub label_enum TxnRpcOrigin {
+        tidb, ticdc, br, tiflash, unknown,
+    }
+
+    pub label_enum TxnRpcDeclarationState {
+        legacy_or_missing, valid, out_of_range,
+    }
+
     pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
@@ -168,6 +184,12 @@ make_auto_flush_static_metric! {
 
     pub struct RaftMessageDurationVec: LocalHistogram {
         "type" => RaftMessageDurationKind,
+    }
+
+    pub struct TxnRpcCallerAuditCounterVec: LocalIntCounter {
+        "command" => TxnRpcCommand,
+        "request_origin" => TxnRpcOrigin,
+        "declaration_state" => TxnRpcDeclarationState,
     }
 }
 
@@ -314,6 +336,30 @@ lazy_static! {
             &["source"]
         )
         .unwrap();
+    pub static ref TXN_PROTOCOL_CALLER_AUDIT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_protocol_caller_audit_total",
+        "Transaction RPCs observed by protocol declaration and caller origin.",
+        &["command", "request_origin", "declaration_state"]
+    )
+    .unwrap();
+    pub static ref TXN_PROTOCOL_INCOMPATIBLE_REJECTION_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_protocol_incompatible_rejection_total",
+        "Transaction RPCs rejected because their protocol declaration is incompatible.",
+        &["command", "request_origin", "required_semantic", "reason"]
+    )
+    .unwrap();
+    pub static ref TXN_PROTOCOL_ADMISSION_BYPASS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_protocol_admission_bypass_total",
+        "Transaction RPCs allowed despite an incompatible protocol declaration.",
+        &["command", "request_origin", "reason"]
+    )
+    .unwrap();
+    pub static ref TXN_PROTOCOL_INVALID_REQUEST_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_protocol_invalid_request_total",
+        "Transaction RPCs rejected because their transaction parameters are invalid.",
+        &["command", "request_origin", "reason"]
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -333,6 +379,10 @@ lazy_static! {
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref TXN_PROTOCOL_CALLER_AUDIT_COUNTER: TxnRpcCallerAuditCounterVec = auto_flush_from!(
+        TXN_PROTOCOL_CALLER_AUDIT_COUNTER_VEC,
+        TxnRpcCallerAuditCounterVec
+    );
     pub static ref GRPC_PROXY_MSG_COUNTER: GrpcProxyMsgCounterVec =
         auto_flush_from!(GRPC_PROXY_MSG_COUNTER_VEC, GrpcProxyMsgCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
@@ -549,6 +599,7 @@ make_auto_flush_static_metric! {
         err_region_not_found,
         err_key_not_in_region,
         err_epoch_not_match,
+        err_txn_protocol_incompatible,
         err_server_is_busy,
         err_stale_command,
         err_store_not_match,
@@ -595,6 +646,9 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::RegionNotFound => RequestStatusKind::err_region_not_found,
             ErrorHeaderKind::KeyNotInRegion => RequestStatusKind::err_key_not_in_region,
             ErrorHeaderKind::EpochNotMatch => RequestStatusKind::err_epoch_not_match,
+            ErrorHeaderKind::TxnProtocolIncompatible => {
+                RequestStatusKind::err_txn_protocol_incompatible
+            }
             ErrorHeaderKind::ServerIsBusy => RequestStatusKind::err_server_is_busy,
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
@@ -653,6 +707,61 @@ impl LocalRequestSourceMetrics {
                 .local(),
         }
     }
+}
+
+/// Returns the normalized caller origin for a transaction RPC.
+pub fn get_txn_rpc_origin(ctx: &Context) -> TxnRpcOrigin {
+    match ctx.get_request_origin() {
+        RequestOrigin::RequestOriginTiDb => TxnRpcOrigin::tidb,
+        RequestOrigin::RequestOriginTiCdc => TxnRpcOrigin::ticdc,
+        RequestOrigin::RequestOriginBr => TxnRpcOrigin::br,
+        RequestOrigin::RequestOriginTiFlash => TxnRpcOrigin::tiflash,
+        RequestOrigin::RequestOriginUnknown => TxnRpcOrigin::unknown,
+    }
+}
+
+pub fn record_txn_protocol_caller_audit(
+    ctx: &Context,
+    command: TxnRpcCommand,
+    declaration_state: TxnRpcDeclarationState,
+) {
+    TXN_PROTOCOL_CALLER_AUDIT_COUNTER
+        .get(command)
+        .get(get_txn_rpc_origin(ctx))
+        .get(declaration_state)
+        .inc();
+}
+
+pub fn record_txn_protocol_incompatible_rejection(
+    ctx: &Context,
+    command: TxnRpcCommand,
+    required_semantic: &'static str,
+    reason: &'static str,
+) {
+    TXN_PROTOCOL_INCOMPATIBLE_REJECTION_COUNTER_VEC
+        .with_label_values(&[
+            command.get_str(),
+            get_txn_rpc_origin(ctx).get_str(),
+            required_semantic,
+            reason,
+        ])
+        .inc();
+}
+
+pub fn record_txn_protocol_admission_bypass(
+    ctx: &Context,
+    command: TxnRpcCommand,
+    reason: &'static str,
+) {
+    TXN_PROTOCOL_ADMISSION_BYPASS_COUNTER_VEC
+        .with_label_values(&[command.get_str(), get_txn_rpc_origin(ctx).get_str(), reason])
+        .inc();
+}
+
+pub fn record_invalid_txn_request(ctx: &Context, command: TxnRpcCommand, reason: &'static str) {
+    TXN_PROTOCOL_INVALID_REQUEST_COUNTER_VEC
+        .with_label_values(&[command.get_str(), get_txn_rpc_origin(ctx).get_str(), reason])
+        .inc();
 }
 
 thread_local! {
