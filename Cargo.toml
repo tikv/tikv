@@ -225,6 +225,12 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
+# Temporary: pick up the active_workers accounting fix for surplus workers
+# (tikv/yatp#100, fixes #20137). Remove once it lands on tikv/yatp master and
+# run `cargo update -p yatp`.
+[patch.'https://github.com/tikv/yatp.git']
+yatp = { git = "https://github.com/mittalrishabh/yatp.git", rev = "12203b2746adce73c53b732e50583c59cf104fa7" }
+
 # [patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 #
