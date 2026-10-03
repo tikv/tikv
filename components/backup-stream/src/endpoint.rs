@@ -922,6 +922,12 @@ where
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
+            // On retry, reuse the generation's bound proof so we never publish
+            // progress past the uploaded payload. See #19897.
+            let resolved = match router.get_task_handler(&task) {
+                Ok(handler) => handler.effective_flushing_resolved(resolved).await,
+                Err(_) => resolved,
+            };
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
             flush_ob.before(resolved.resolve_results().to_vec()).await;
@@ -1061,7 +1067,15 @@ where
     }
 
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, flush_ts: TimeStamp) {
-        self.checkpoint_mgr.freeze();
+        // Freeze only on a new generation; a retry keeps the generation it was
+        // frozen for, else it would publish progress past the payload. See #19897.
+        let is_new_generation = match self.range_router.get_task_handler(&task) {
+            Ok(handler) => self.pool.block_on(handler.is_new_flush_generation()),
+            Err(_) => true, // task gone; nothing will be published
+        };
+        if is_new_generation {
+            self.checkpoint_mgr.freeze();
+        }
         let fut = self.do_flush(task.clone(), resolved, flush_ts);
         let sched = self.scheduler.clone();
         self.pool.spawn(root!("flush"; async move {
