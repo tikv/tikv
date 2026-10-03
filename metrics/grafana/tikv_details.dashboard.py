@@ -1096,6 +1096,10 @@ def gRPC() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title=r"gRPC batch commands wait duration",
                 description=r"The 99.99% wait time of gRPC batch commands",
@@ -1108,6 +1112,18 @@ def gRPC() -> RowPanel:
                             is_optional_quantile=False,
                         ),
                         legend_format="P9999",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="gRPC resource group QPS",
+                description="The QPS of different resource groups of gRPC request",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_resource_group_total", by_labels=["name"]
+                        ),
                         additional_groupby=True,
                     ),
                 ],

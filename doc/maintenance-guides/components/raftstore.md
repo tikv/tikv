@@ -142,6 +142,11 @@ High-risk contracts:
 - `coprocessor/dispatcher.rs` hosts raftstore observers.
 - `coprocessor/region_info_accessor.rs` exposes region metadata for other
   subsystems.
+- `coprocessor/split_observer.rs` emits a best-effort notification when all
+  proposed split keys collapse to invalid Region boundaries. The notification
+  must remain non-blocking and must not enqueue per-failure compaction work on
+  raftstore cleanup workers; the server-side auto-compaction runner coalesces
+  it into a bounded scan wake-up.
 
 ## Critical Invariants
 
@@ -149,6 +154,9 @@ High-risk contracts:
   safety depends on this.
 - Normal load-based split keys must be validated against the current Region's
   exclusive range before requesting split IDs from PD.
+- A no-valid-split-key notification is only a scheduling hint. It must not
+  bypass GC-safe-point checks, candidate admission, execution-time rechecks, or
+  auto-compaction I/O bounds.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
 - `EntryStorage` caches are performance hints, not an authority for unknown
@@ -160,6 +168,9 @@ High-risk contracts:
   generation, transport, application, and cleanup are all coupled.
 - Local reads must only bypass raft when lease and read-progress guarantees are
   valid.
+- Resolved-ts `RegionReadProgress` has split ownership: region metadata paths
+  may refresh epoch/peers, but leader ID and term must be published by Raft
+  Ready leader/term transitions.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
 - Store-to-peer broadcasts can fan out one peer message per region. Keep this
@@ -200,6 +211,9 @@ High-risk contracts:
 - Startup and online updates share the
   `consistency_check_interval_seconds` label; online updates must not create a
   separate `consistency_check_interval` series.
+- Resolved-ts CheckLeader anomalies should expose both sides of the decision:
+  leader-side local skip/request/response state and follower-side registry miss
+  or cached leader tuple mismatch details.
 
 Open these first when triaging:
 

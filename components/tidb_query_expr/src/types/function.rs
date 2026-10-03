@@ -26,10 +26,30 @@ use std::{any::Any, convert::TryFrom, marker::PhantomData};
 
 use static_assertions::assert_eq_size;
 use tidb_query_common::Result;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, codec::data_type::*, expr::EvalContext};
-use tipb::{Expr, FieldType};
+use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
+    codec::{batch::LazyBatchColumnVec, data_type::*},
+    expr::EvalContext,
+};
+use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use super::{RpnStackNode, expr_eval::LogicalRows};
+use crate::RpnExpression;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ShortCircuitFnMeta {
+    pub sig: ScalarFuncSig,
+
+    /// A function that evaluates its arguments on demand for selected rows.
+    pub fn_ptr: fn(
+        ctx: &mut EvalContext,
+        schema: &[FieldType],
+        input_physical_columns: &LazyBatchColumnVec,
+        input_logical_rows: &[usize],
+        output_rows: usize,
+        args: &[RpnExpression],
+    ) -> Result<VectorValue>,
+}
 
 /// Metadata of an RPN function.
 #[derive(Clone, Copy)]

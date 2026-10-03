@@ -117,6 +117,17 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   and `statistics/analyze.rs`, and checksum requests use `checksum.rs`.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
+- The DAG `flags` bitmask is a network-facing contract. Bit 12,
+  `Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION`, enables lazy `LogicalAnd`/`LogicalOr`
+  evaluation through `EvalConfig::from_request` and `RpnExpressionBuilder`.
+- Lazy evaluation is left-to-right, row-selective, and must preserve SQL
+  three-valued logic; short-circuit nesting is capped at 32. If the bit is
+  absent or unknown to the server, the expression is not eligible/profitable,
+  or the cap is exceeded, the existing eager `FnCall` path is used.
+- In short-circuit mode, skipped argument functions are not invoked, so their
+  warnings/errors are suppressed, although referenced columns may still be
+  eagerly decoded; when unavailable, the existing eager path and SQL-mode
+  warning/error behavior are preserved.
 
 ## Start Here
 
@@ -208,6 +219,10 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
+- RU-v2 batch-selection work uses expression work units plus column-reference
+  count. Expression work units expand flattened `AND`/`OR` chains back to their
+  conceptual binary logical operations, so flattening must not reduce
+  `tikv_coprocessor_executor_work_total_batch_selection`.
 - Triage starting points:
   `endpoint.rs`, `tracker.rs`, `readpool_impl.rs`, `metrics.rs`,
   `interceptors/deadline.rs`, `interceptors/concurrency_limiter.rs`.
@@ -233,7 +248,8 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Timeout or concurrency admission changes:
   inspect interceptors, `tracker.rs`, metrics, and read-pool behavior
 - DAG execution changes:
-  inspect `dag/*`, snapshot/store setup, and query-side statistics paths
+  inspect `dag/*`, expression evaluation, snapshot/store setup, and query-side
+  statistics paths
 - Analyze or checksum changes:
   inspect `statistics/*` or `checksum.rs` plus exec-detail accounting
 
