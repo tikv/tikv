@@ -47,6 +47,7 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
 }
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
+    /// Start collecting the engine counters for one cursor movement.
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
         let internal_tombstone = collector.internal_delete_skipped_count() as usize;
         let block_read_count = collector.block_read_count() as usize;
@@ -58,6 +59,15 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
             block_read_count,
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
+    }
+
+    /// Add bytes observed at the position reached by this cursor movement.
+    ///
+    /// Value bytes are added separately when the caller accesses the value via
+    /// `Cursor::value_with_stats`, which preserves lazy value loading.
+    #[inline]
+    pub fn add_read_size(&mut self, size: usize) {
+        self.stats.add_read_bytes(size);
     }
 }
 
@@ -71,6 +81,10 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
                 .saturating_sub(self.block_read_count as u64) as usize;
         let internal_tombstone =
             self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
+        // A cursor movement is a read even when it ends at the range boundary. The
+        // operation count is what lets PD see scan pressure that does not return a KV
+        // pair.
+        self.stats.add_read_key();
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;
@@ -120,6 +134,26 @@ pub struct CfStatistics {
 const STATS_COUNT: usize = 14;
 
 impl CfStatistics {
+    /// Count one cursor operation or direct key read.
+    #[inline]
+    pub fn add_read_key(&mut self) {
+        self.flow_stats.read_keys = self.flow_stats.read_keys.saturating_add(1);
+    }
+
+    /// Add bytes read from the current column family.
+    #[inline]
+    pub fn add_read_bytes(&mut self, bytes: usize) {
+        self.flow_stats.read_bytes = self.flow_stats.read_bytes.saturating_add(bytes);
+    }
+
+    /// Record a direct key/value read, including a miss when `value_len` is
+    /// zero.
+    #[inline]
+    pub fn record_read(&mut self, key_len: usize, value_len: usize) {
+        self.add_read_key();
+        self.add_read_bytes(key_len.saturating_add(value_len));
+    }
+
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
@@ -282,6 +316,15 @@ impl Statistics {
         self.write.add(&other.write);
         self.data.add(&other.data);
         self.processed_size += other.processed_size;
+    }
+
+    /// Record a direct read in the column family that owns `cf`.
+    ///
+    /// The read is counted even when the key is absent. An empty CF name is
+    /// treated as the default CF, matching the snapshot API.
+    #[inline]
+    pub fn record_cf_read(&mut self, cf: &str, key_len: usize, value_len: usize) {
+        self.mut_cf_statistics(cf).record_read(key_len, value_len);
     }
 
     /// Deprecated

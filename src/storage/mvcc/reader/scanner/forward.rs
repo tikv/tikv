@@ -87,7 +87,7 @@ impl<S: Snapshot> Cursors<S> {
                 return Ok(());
             }
             {
-                let current_key = self.write.key(&mut statistics.write);
+                let current_key = self.write.key();
                 if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
                     // Found another user key. We are done here.
                     return Ok(());
@@ -207,13 +207,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             // If there is one, it is what current lock cursor pointing to.
             let (mut current_user_key, has_write, has_lock) = {
                 let w_key = if self.cursors.write.valid()? {
-                    Some(self.cursors.write.key(&mut self.statistics.write))
+                    Some(self.cursors.write.key())
                 } else {
                     None
                 };
                 let l_key = if let Some(lock_cursor) = self.cursors.lock.as_mut() {
                     if lock_cursor.valid()? {
-                        Some(lock_cursor.key(&mut self.statistics.lock))
+                        Some(lock_cursor.key())
                     } else {
                         None
                     }
@@ -324,7 +324,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
             {
-                let current_key = self.cursors.write.key(&mut self.statistics.write);
+                let current_key = self.cursors.write.key();
                 if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                     // Meet another key.
                     return Ok(false);
@@ -366,7 +366,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             // Key space ended.
             return Ok(false);
         }
-        let current_key = self.cursors.write.key(&mut self.statistics.write);
+        let current_key = self.cursors.write.key();
         if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
             // Meet another key.
             return Ok(false);
@@ -394,7 +394,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         // Only needs to check lock in SI
         let lock_cursor = cursors.lock.as_mut().unwrap();
         let lock_or_shared_locks = {
-            let lock_value = lock_cursor.value(&mut statistics.lock);
+            let lock_value = lock_cursor.value_with_stats(&mut statistics.lock);
             txn_types::parse_lock(lock_value)?
         };
         lock_cursor.next(&mut statistics.lock);
@@ -438,7 +438,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<ValueEntry> = loop {
-            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            let write = WriteRef::parse(cursors.write.value_with_stats(&mut statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
@@ -447,9 +447,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
             match write.write_type {
                 WriteType::Put => {
                     let commit_ts = if cfg.load_commit_ts {
-                        Some(Key::decode_ts_from(
-                            cursors.write.key(&mut statistics.write),
-                        )?)
+                        Some(Key::decode_ts_from(cursors.write.key())?)
                     } else {
                         None
                     };
@@ -501,7 +499,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 // Key space ended. Needn't move write cursor to next key.
                 return Ok(HandleRes::Skip(current_user_key));
             }
-            let current_key = cursors.write.key(&mut statistics.write);
+            let current_key = cursors.write.key();
             if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
                 // Meet another key. Needn't move write cursor to next key.
                 return Ok(HandleRes::Skip(current_user_key));
@@ -561,13 +559,13 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we
         // may meet `Lock` or `Rollback`. In this case, more versions needs to be looked
         // up.
-        let mut write_key = cursors.write.key(&mut statistics.write);
+        let mut write_key = cursors.write.key();
         let entry: Option<TxnEntry> = loop {
             if Key::decode_ts_from(write_key)? <= self.after_ts {
                 // There are no newer records of this key since `after_ts`.
                 break None;
             }
-            let write_value = cursors.write.value(&mut statistics.write);
+            let write_value = cursors.write.value_with_stats(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
@@ -587,7 +585,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                             start_ts,
                             statistics,
                         )?;
-                        let default_key = default_cursor.key(&mut statistics.data).to_vec();
+                        let default_key = default_cursor.key().to_vec();
                         (default_key, default_value)
                     } else {
                         (Vec::new(), Vec::new())
@@ -618,7 +616,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                 // Key space ended. Needn't move write cursor to next key.
                 return Ok(HandleRes::Skip(current_user_key));
             }
-            write_key = cursors.write.key(&mut statistics.write);
+            write_key = cursors.write.key();
             if !Key::is_user_key_eq(write_key, current_user_key.as_encoded().as_slice()) {
                 // Meet another key. Needn't move write cursor to next key.
                 return Ok(HandleRes::Skip(current_user_key));
@@ -648,7 +646,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     // Only needs to check lock in SI
     let lock_cursor = cursors.lock.as_mut().unwrap();
     let lock_or_shared_locks = {
-        let lock_value = lock_cursor.value(&mut statistics.lock);
+        let lock_value = lock_cursor.value_with_stats(&mut statistics.lock);
         txn_types::parse_lock(lock_value)?
     };
     lock_cursor.next(&mut statistics.lock);
@@ -705,7 +703,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             .lock
             .as_mut()
             .unwrap()
-            .value(&mut statistics.lock)
+            .value_with_stats(&mut statistics.lock)
             .to_owned();
         match txn_types::parse_lock(&lock_value)? {
             Either::Left(lock) => {
@@ -722,7 +720,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                                 statistics,
                             )
                             .map(|v| {
-                                let key = default_cursor.key(&mut statistics.data).to_vec();
+                                let key = default_cursor.key().to_vec();
                                 (key, v)
                             })
                         } else {
@@ -782,8 +780,8 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         loop {
-            let write_value = cursors.write.value(&mut statistics.write);
-            let commit_ts = Key::decode_ts_from(cursors.write.key(&mut statistics.write))?;
+            let write_value = cursors.write.value_with_stats(&mut statistics.write);
+            let commit_ts = Key::decode_ts_from(cursors.write.key())?;
 
             // commit_ts > cfg.ts never happens since the ForwardScanner will skip those
             // greater versions.
@@ -812,10 +810,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 if !cursors.write.valid()? {
                     return Ok(HandleRes::Skip(current_user_key));
                 }
-                if !Key::is_user_key_eq(
-                    cursors.write.key(&mut statistics.write),
-                    current_user_key.as_encoded(),
-                ) {
+                if !Key::is_user_key_eq(cursors.write.key(), current_user_key.as_encoded()) {
                     return Ok(HandleRes::Skip(current_user_key));
                 }
 
@@ -830,15 +825,18 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     start_ts,
                     statistics,
                 )?;
-                let key = default_cursor.key(&mut statistics.data).to_vec();
+                let key = default_cursor.key().to_vec();
                 (key, value)
             } else {
                 (vec![], vec![])
             };
 
             let write = (
-                cursors.write.key(&mut statistics.write).to_owned(),
-                cursors.write.value(&mut statistics.write).to_owned(),
+                cursors.write.key().to_owned(),
+                cursors
+                    .write
+                    .value_with_stats(&mut statistics.write)
+                    .to_owned(),
             );
             // Move to the next write record early for getting the old value.
             cursors.write.next(&mut statistics.write);
@@ -1237,6 +1235,51 @@ mod latest_kv_tests {
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.processed_size, 0);
+    }
+
+    #[test]
+    fn test_flow_statistics_include_skipped_mvcc_versions() {
+        let key = b"scan-flow";
+        let value = vec![b'x'; 300];
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, key, &value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+        for version in 0..SEEK_BOUND + 2 {
+            let start_ts = 30 + version * 20;
+            let commit_ts = start_ts + 10;
+            must_prewrite_put(&mut engine, key, &value, key, start_ts);
+            must_commit(&mut engine, key, start_ts, commit_ts);
+        }
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 20.into())
+            .range(Some(Key::from_raw(key)), None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key), value.clone()))
+        );
+
+        let statistics = scanner.take_statistics();
+        // The scanner crosses SEEK_BOUND while skipping newer versions and
+        // falls back from `next` to `seek`. Both kinds of cursor operations
+        // must be visible even though only one row is returned.
+        assert_eq!(statistics.write.seek, 2);
+        assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.write.over_seek_bound, 1);
+        assert_eq!(
+            statistics.write.flow_stats.read_keys,
+            statistics.write.total_op_count()
+        );
+        assert!(statistics.write.flow_stats.read_keys > statistics.write.processed_keys);
+
+        let default_key = Key::from_raw(key).append_ts(10.into());
+        assert_eq!(statistics.data.flow_stats.read_keys, 1);
+        assert_eq!(
+            statistics.data.flow_stats.read_bytes,
+            default_key.len() + value.len()
+        );
     }
 
     /// Check whether everything works as usual when
