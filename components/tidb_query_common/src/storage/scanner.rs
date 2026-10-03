@@ -12,9 +12,9 @@ use crate::error::StorageError;
 const KEY_BUFFER_CAPACITY: usize = 64;
 /// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
 /// a coroutine can run without being yielded.
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+const MAX_TIME_SLICE: Duration = Duration::from_millis(10);
 /// the number of scanned keys that should trigger a reschedule.
-const CHECK_KEYS: usize = 32;
+const CHECK_KEYS: usize = 1024;
 
 /// A scanner that scans over multiple ranges. Each range can be a point range
 /// containing only one row, or an interval range containing multiple rows.
