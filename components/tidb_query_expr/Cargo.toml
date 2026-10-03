@@ -16,6 +16,7 @@ codec = { workspace = true }
 crypto = { workspace = true }
 file_system = { workspace = true }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
+geo = "0.33"
 hex = "0.4"
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
