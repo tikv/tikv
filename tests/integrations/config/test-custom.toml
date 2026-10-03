@@ -709,3 +709,5 @@ historical-usage-window-mins = 15
 baseline-burst-pct = 20.0
 admission-max-delayed-count = 10000
 request-base-cost-micros = 40
+quiet-tick = "20s"
+overloaded-tick = "3s"

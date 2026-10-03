@@ -538,6 +538,7 @@ where
             engines.kv.clone(),
             self.region_info_accessor.clone(),
             self.region_info_accessor.as_ref().unwrap().region_leaders(),
+            self.resource_manager.clone(),
         );
 
         self.engines = Some(TikvEngines {

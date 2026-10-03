@@ -72,11 +72,18 @@ impl Deadline {
     }
 }
 
-const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
+pub const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 pub fn set_deadline_exceeded_busy_error(e: &mut errorpb::Error) {
+    set_deadline_exceeded_busy_error_with_reason(e, DEADLINE_EXCEEDED.to_owned());
+}
+
+/// The reason is the caller's, so a caller that can attribute the overload to
+/// one tenant may append its own marker. Kept here rather than taking the
+/// marker itself because this crate sits below resource control.
+pub fn set_deadline_exceeded_busy_error_with_reason(e: &mut errorpb::Error, reason: String) {
     let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-    server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+    server_is_busy_err.set_reason(reason);
     e.set_server_is_busy(server_is_busy_err);
 }
 

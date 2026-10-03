@@ -1,14 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
 use protobuf::Message;
+use resource_control::ResourceGroupManager;
 use tikv_util::{
     future::poll_future_notify,
     mpsc::future::{Sender, WakePolicy},
+    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
     time::Instant,
 };
 use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken};
@@ -86,18 +88,34 @@ impl ReqBatcher {
         &mut self,
         storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) {
         if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
             let trackers = std::mem::take(&mut self.get_trackers);
-            future_batch_get_command(storage, ids, gets, trackers, tx.clone(), self.begin_instant);
+            future_batch_get_command(
+                storage,
+                ids,
+                gets,
+                trackers,
+                tx.clone(),
+                self.begin_instant,
+                resource_manager,
+            );
         }
 
         if self.raw_gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
+            future_batch_raw_get_command(
+                storage,
+                ids,
+                gets,
+                tx.clone(),
+                self.begin_instant,
+                resource_manager,
+            );
         }
     }
 
@@ -105,6 +123,7 @@ impl ReqBatcher {
         self,
         storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) {
         if !self.gets.is_empty() {
             future_batch_get_command(
@@ -114,6 +133,7 @@ impl ReqBatcher {
                 self.get_trackers,
                 tx.clone(),
                 self.begin_instant,
+                resource_manager,
             );
         }
         if !self.raw_gets.is_empty() {
@@ -123,6 +143,7 @@ impl ReqBatcher {
                 self.raw_gets,
                 tx.clone(),
                 self.begin_instant,
+                resource_manager,
             );
         }
     }
@@ -171,6 +192,7 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     ) {
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&res) {
@@ -217,6 +239,7 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
             GrpcTypeKind::kv_batch_get_command,
             request_source,
             resource_priority,
+            resource_group,
         );
         let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
@@ -233,6 +256,7 @@ impl ResponseBatchConsumer<Option<ValueEntry>> for GetCommandResponseConsumer {
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     ) {
         let mut resp = RawGetResponse::default();
         if let Some(err) = extract_region_error(&res) {
@@ -253,6 +277,7 @@ impl ResponseBatchConsumer<Option<ValueEntry>> for GetCommandResponseConsumer {
             GrpcTypeKind::raw_batch_get_command,
             request_source,
             resource_priority,
+            resource_group,
         );
         let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
@@ -268,6 +293,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
     trackers: Vec<TrackerToken>,
     tx: Sender<MeasuredSingleResponse>,
     begin_instant: tikv_util::time::Instant,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .kv_get
@@ -285,6 +311,20 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_resource_control_context()
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
+    // A batch is built from one client connection, so the whole batch shares a
+    // group; take it from the first request and bound it to a configured group.
+    let resource_group = match resource_manager.as_deref() {
+        Some(rm) => rm
+            .bounded_group_name(
+                gets.first()
+                    .unwrap()
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+            )
+            .into_owned(),
+        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+    };
 
     let trackers_by_id: HashMap<u64, TrackerToken> = requests
         .iter()
@@ -320,6 +360,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
                     GrpcTypeKind::kv_batch_get_command,
                     source,
                     resource_priority,
+                    resource_group.clone(),
                 );
                 let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
@@ -337,6 +378,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
     gets: Vec<RawGetRequest>,
     tx: Sender<MeasuredSingleResponse>,
     begin_instant: tikv_util::time::Instant,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .raw_get
@@ -354,6 +396,20 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_resource_control_context()
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
+    // A batch is built from one client connection, so the whole batch shares a
+    // group; take it from the first request and bound it to a configured group.
+    let resource_group = match resource_manager.as_deref() {
+        Some(rm) => rm
+            .bounded_group_name(
+                gets.first()
+                    .unwrap()
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+            )
+            .into_owned(),
+        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+    };
 
     let res = storage.raw_batch_get_command(
         gets,
@@ -379,6 +435,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
                     GrpcTypeKind::raw_batch_get_command,
                     source,
                     resource_priority,
+                    resource_group.clone(),
                 );
                 let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
@@ -417,6 +474,7 @@ mod tests {
             Instant::now(),
             "".to_string(),
             ResourcePriority::unknown,
+            DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
         );
 
         let mut task = rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -445,6 +503,7 @@ mod tests {
             Instant::now(),
             "".to_string(),
             ResourcePriority::unknown,
+            DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
         );
 
         let mut task = rx.recv_timeout(Duration::from_secs(1)).unwrap();

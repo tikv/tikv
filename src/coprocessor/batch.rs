@@ -20,7 +20,7 @@ use tokio::{sync::Semaphore, task::yield_now};
 use super::{
     Error, HandlerOutput, HandlerOutputState, MergeableResult, ResponseMaterializationFailure,
     TracedResponse,
-    endpoint::{make_error_batch_response, make_error_response},
+    endpoint::{make_error_batch_response, make_error_response, read_pool_spawn_error},
     metrics::record_coprocessor_response_size,
 };
 use crate::read_pool::ReadPoolHandle;
@@ -100,7 +100,7 @@ impl BatchMergeFinalizer {
                         {
                             Ok(permit) => Some(permit.expect("the semaphore never be closed")),
                             Err(_) => {
-                                return make_error_response(Error::DeadlineExceeded).into();
+                                return make_error_response(Error::DeadlineExceeded(false)).into();
                             }
                         }
                     }
@@ -132,8 +132,8 @@ impl BatchMergeFinalizer {
         let submission_error = match async_timeout(submission, deadline.remaining_duration()).await
         {
             Ok(Ok(())) => None,
-            Ok(Err(_)) => Some(Error::MaxPendingTasksExceeded),
-            Err(_) => Some(Error::DeadlineExceeded),
+            Ok(Err(e)) => Some(read_pool_spawn_error(e)),
+            Err(_) => Some(Error::DeadlineExceeded(false)),
         };
         // Error returns here and below drop the completed outputs along with
         // their execution details; the endpoint refills only the top task's
@@ -148,14 +148,14 @@ impl BatchMergeFinalizer {
             Ok(Ok(response)) => {
                 return account_returned_response(response, &returned_response_tag, tracker);
             }
-            Ok(Err(_)) => Error::MaxPendingTasksExceeded,
+            Ok(Err(_)) => Error::MaxPendingTasksExceeded(false),
             Err(_) => match response_rx.try_recv() {
                 // The response may already be ready when the timeout wins the poll race.
                 Ok(Some(response)) => {
                     return account_returned_response(response, &returned_response_tag, tracker);
                 }
-                Ok(None) => Error::DeadlineExceeded,
-                Err(_) => Error::MaxPendingTasksExceeded,
+                Ok(None) => Error::DeadlineExceeded(false),
+                Err(_) => Error::MaxPendingTasksExceeded(false),
             },
         };
         make_error_response(completion_error).into()
@@ -234,7 +234,7 @@ pub(super) async fn collect_batch_task_outputs_sequentially(
     match collected {
         Some(batch_outputs) => (output, batch_outputs),
         None => (
-            HandlerOutput::ready(make_error_response(Error::DeadlineExceeded)),
+            HandlerOutput::ready(make_error_response(Error::DeadlineExceeded(false))),
             Vec::new(),
         ),
     }
@@ -258,7 +258,7 @@ async fn merge_batch_task_responses(
 
     for mut batch_output in batch_outputs {
         if deadline.check().is_err() {
-            return make_error_response(Error::DeadlineExceeded).into();
+            return make_error_response(Error::DeadlineExceeded(false)).into();
         }
         let can_merge = merge_batch_results
             && !batch_response_has_error(&batch_output.response)
@@ -276,7 +276,7 @@ async fn merge_batch_task_responses(
     }
 
     if deadline.check().is_err() {
-        return make_error_response(Error::DeadlineExceeded).into();
+        return make_error_response(Error::DeadlineExceeded(false)).into();
     }
     finalize_batch_merge_response(output, batch_responses, deadline)
 }
@@ -306,7 +306,7 @@ fn finalize_batch_merge_response(
         }) => (*partial_response).map(|_| make_error_response(error)),
     };
     if deadline.check().is_err() {
-        return make_error_response(Error::DeadlineExceeded).into();
+        return make_error_response(Error::DeadlineExceeded(false)).into();
     }
     attach_batch_responses(response, batch_responses)
 }

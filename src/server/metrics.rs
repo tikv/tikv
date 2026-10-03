@@ -269,6 +269,18 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    // `GRPC_MSG_HISTOGRAM_VEC` cannot carry the group: it is a static metric, so
+    // every label value has to be a compile-time enum variant, and a group name
+    // arrives as an arbitrary string from the client. Hence a second histogram,
+    // without the 72-variant `type` breakdown -- crossing the two would cost
+    // ~1.1M series across the fleet for no diagnostic gain.
+    pub static ref GRPC_MSG_DURATION_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_grpc_msg_duration_seconds_by_group",
+        "Bucketed histogram of grpc server message duration per resource group",
+        &["resource_group"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_grpc_batch_commands_wait_duration_seconds",
         "Bucketed histogram of grpc server batch commands waiting duration",
@@ -305,13 +317,13 @@ lazy_static! {
     pub static ref GRPC_REQUEST_SOURCE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
             "tikv_grpc_request_source_counter_vec",
             "Counter of different sources of RPC requests",
-            &["source"]
+            &["source", "resource_group"]
         )
         .unwrap();
     pub static ref GRPC_REQUEST_SOURCE_DURATION_VEC: IntCounterVec = register_int_counter_vec!(
             "tikv_grpc_request_source_duration_vec",
             "Total duration of different sources of RPC requests (in microseconds)",
-            &["source"]
+            &["source", "resource_group"]
         )
         .unwrap();
 }
@@ -628,6 +640,18 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
+    // Per-group companion to `ASYNC_REQUESTS_DURATIONS`, which is a static
+    // metric and so cannot carry a client-supplied group name. `type` is kept
+    // here -- unlike the gRPC companion -- because `RequestTypeKind` has only a
+    // handful of variants and splitting read-index propose wait from confirm
+    // wait is the reason to look at this metric at all.
+    pub static ref ASYNC_REQUESTS_DURATIONS_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_storage_engine_async_request_duration_seconds_by_group",
+        "Bucketed histogram of processing successful asynchronous requests per resource group.",
+        &["type", "resource_group"],
+        exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -643,25 +667,25 @@ struct LocalRequestSourceMetrics {
 }
 
 impl LocalRequestSourceMetrics {
-    fn new(source: &str) -> Self {
+    fn new(source: &str, resource_group: &str) -> Self {
         LocalRequestSourceMetrics {
             count: GRPC_REQUEST_SOURCE_COUNTER_VEC
-                .with_label_values(&[source])
+                .with_label_values(&[source, resource_group])
                 .local(),
             duration_us: GRPC_REQUEST_SOURCE_DURATION_VEC
-                .with_label_values(&[source])
+                .with_label_values(&[source, resource_group])
                 .local(),
         }
     }
 }
 
 thread_local! {
-    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<String, LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
+    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<(String, String), LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
 
     static LAST_LOCAL_FLUSH_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
 }
 
-pub fn record_request_source_metrics(source: String, duration: Duration) {
+pub fn record_request_source_metrics(source: String, resource_group: String, duration: Duration) {
     let need_flush = LAST_LOCAL_FLUSH_TIME.with(|last_local_flush_time| {
         let now = Instant::now_coarse();
         if now - last_local_flush_time.get() > Duration::from_secs(1) {
@@ -674,8 +698,8 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
     REQUEST_SOURCE_METRICS_MAP.with(|map| {
         let mut map = map.borrow_mut();
         let metrics = map
-            .entry(source)
-            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(k));
+            .entry((source, resource_group))
+            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(&k.0, &k.1));
         metrics.count.inc();
         metrics.duration_us.inc_by(duration.as_micros() as u64);
         if need_flush {

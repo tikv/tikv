@@ -528,6 +528,24 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
     }
 
+    /// Shed by a full queue, not memory quota; `noisy` blames the group or not.
+    fn fail_with_queue_busy(tag: CommandKind, callback: SchedulerTaskCallback, noisy: bool) {
+        SCHED_TOO_BUSY_COUNTER_VEC.get(tag).inc();
+        callback.execute(ProcessResult::Failed {
+            err: StorageError::from(StorageErrorInner::QueueTooBusy { noisy }),
+        });
+    }
+
+    /// Whether `cmd`'s group is held by the throttle or the scheduler.
+    fn is_noisy_write(&self, cmd: &Command) -> bool {
+        let Some(rm) = self.inner.resource_manager.as_ref() else {
+            return false;
+        };
+        let rg = cmd.resource_control_ctx().get_resource_group_name();
+        let is_background = rm.is_background_request(rg, &cmd.ctx().request_source);
+        rm.is_noisy_request(rg, is_background)
+    }
+
     /// Returns true if admission control consumed the command (reject or
     /// delay); the caller should return without further processing.
     fn apply_admission_control(
@@ -594,14 +612,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // 1) The flow_controller accomplishes the same task, and
         // 2) The "admission control" functionality has been superseded by memory quota.
         if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
-            Self::fail_with_busy(tag, callback.into());
+            Self::fail_with_queue_busy(tag, callback.into(), self.is_noisy_write(&cmd));
             return;
         }
         // Admission control before latch acquisition so a delayed command does
         // not block concurrent writers sharing the same keys.
         match self.apply_admission_control(&cmd) {
             Some(resource_control::AdmissionDecision::Reject) => {
-                Self::fail_with_busy(tag, callback.into());
+                Self::fail_with_queue_busy(tag, callback.into(), self.is_noisy_write(&cmd));
                 return;
             }
             Some(resource_control::AdmissionDecision::Delay(delay)) => {
@@ -2520,6 +2538,17 @@ mod tests {
     fn new_test_scheduler_with_config(
         config: Config,
     ) -> (TxnScheduler<RocksEngine, MockLockManager>, RocksEngine) {
+        let (sched, engine, _) = new_test_scheduler_with_resource_manager(config);
+        (sched, engine)
+    }
+
+    fn new_test_scheduler_with_resource_manager(
+        config: Config,
+    ) -> (
+        TxnScheduler<RocksEngine, MockLockManager>,
+        RocksEngine,
+        Arc<ResourceGroupManager>,
+    ) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let resource_manager = Arc::new(ResourceGroupManager::default());
         let controller = resource_manager.derive_controller("test".into(), false);
@@ -2543,11 +2572,79 @@ mod tests {
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
                 Some(controller),
-                Some(resource_manager),
+                Some(resource_manager.clone()),
                 Arc::new(TxnStatusCache::new_for_test()),
             ),
             engine,
+            resource_manager,
         )
+    }
+
+    #[test]
+    fn test_is_noisy_write_blames_only_the_held_group() {
+        let (sched, _engine, rm) = new_test_scheduler_with_resource_manager(Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        });
+        let ru_group = |name: &str| {
+            use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+            let mut group = ResourceGroup::new();
+            group.set_name(name.to_owned());
+            group.set_mode(GroupMode::RuMode);
+            group.set_priority(1);
+            let mut ru = GroupRequestUnitSettings::new();
+            ru.mut_r_u().mut_settings().set_fill_rate(5000);
+            group.set_r_u_settings(ru);
+            group
+        };
+        rm.add_resource_group(ru_group("rc"));
+        rm.add_resource_group(ru_group("bystander"));
+
+        let cmd_of = |group: &str| -> Command {
+            let mut ctx = Context::default();
+            ctx.mut_resource_control_context()
+                .set_resource_group_name(group.to_owned());
+            commands::Prewrite::with_context(
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
+                b"k".to_vec(),
+                10.into(),
+                ctx,
+            )
+            .into()
+        };
+
+        // Nothing held, so a full queue blames nobody.
+        assert!(!sched.is_noisy_write(&cmd_of("rc")));
+
+        // A loaded node with background at its floor: the throttle takes hold.
+        rm.record_ru_consumption("rc", 10_000_000);
+        rm.set_bg_cpu_at_floor(true);
+        // Two ticks: blame needs `MIN_ENGAGE_TICKS` of sustained overshoot.
+        rm.online_adjust_resource_quota(90.0);
+        rm.online_adjust_resource_quota(90.0);
+
+        // Held, but with every gate at its default nothing reaches a client.
+        assert!(!sched.is_noisy_write(&cmd_of("rc")));
+
+        // Blame reaches a client only behind a gate; open the write one.
+        rm.get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_write_admission_control = true;
+                Ok(())
+            })
+            .unwrap();
+        rm.refresh_cached_config();
+        assert!(
+            sched.is_noisy_write(&cmd_of("rc")),
+            "the group being squeezed is told so"
+        );
+        assert!(
+            !sched.is_noisy_write(&cmd_of("bystander")),
+            "a group sharing the same full queue is not"
+        );
     }
 
     #[test]

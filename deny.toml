@@ -150,3 +150,8 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+# Fork of kvproto release-8.5 adding HealthFeedback.noisy_groups, pinned by the
+# [patch] in Cargo.toml. Allowed by exact repo rather than by org, so the whole
+# account is not trusted; drop this and the patch together once the field is
+# upstream or the fork moves under an allowed org.
+allow-git = ["https://github.com/mittalrishabh/kvproto"]

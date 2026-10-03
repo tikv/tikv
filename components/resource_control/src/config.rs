@@ -1,9 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{error::Error, fmt, sync::Arc};
+use std::{error::Error, fmt, sync::Arc, time::Duration};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::{ReadableSize, VersionTrack};
+use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+
+use crate::{CONTROL_TICK, CONTROL_TICK_OVERLOADED};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -74,6 +76,28 @@ pub struct Config {
     pub admission_max_delayed_count: u64,
     /// RU per arriving request, charged at handler entry so rejections pay.
     pub request_base_cost_micros: u64,
+    /// Period of both control loops -- the quota worker and the unified read
+    /// pool's thread ladder -- while the node is quiet. Detection needs two
+    /// ticks of evidence before a group may be named, so this is what an idle
+    /// node pays to notice load arriving.
+    ///
+    /// Not hot-reloadable; changing requires a restart.
+    #[online_config(skip)]
+    pub quiet_tick: ReadableDuration,
+    /// Period of both control loops while the node is loaded (foreground CPU
+    /// above `fg_cpu_throttle_threshold`). This, not `quiet_tick`, sets how
+    /// long a noisy group goes unblamed, and health feedback reaches the
+    /// client every second, so the tick is what the client waits on.
+    ///
+    /// Everything counted in ticks rather than seconds moves proportionally
+    /// faster under load as a result: the throttle's recovery step and the
+    /// candidacy counter included.
+    ///
+    /// Must not exceed `quiet_tick`. Not hot-reloadable; the tick task is
+    /// woken at this period, and the quiet gate can defer a wakeup but cannot
+    /// create one, so changing it requires a restart.
+    #[online_config(skip)]
+    pub overloaded_tick: ReadableDuration,
 }
 
 impl Default for Config {
@@ -94,6 +118,8 @@ impl Default for Config {
             baseline_burst_pct: 20.0,
             admission_max_delayed_count: 10_000,
             request_base_cost_micros: 40,
+            quiet_tick: ReadableDuration(CONTROL_TICK),
+            overloaded_tick: ReadableDuration(CONTROL_TICK_OVERLOADED),
         }
     }
 }
@@ -103,6 +129,21 @@ const MAX_CPU_PCT: f64 = 99.0;
 const MIN_HISTORICAL_WINDOW_MINS: u64 = 2;
 const MAX_HISTORICAL_WINDOW_MINS: u64 = 60;
 const MAX_REQUEST_BASE_COST_MICROS: u64 = 10_000;
+/// A tick shorter than this is pointless: `adjust_quota` refuses to measure
+/// over a window under a second, so the tick would fire and do nothing.
+const MIN_TICK: Duration = Duration::from_secs(1);
+const MAX_TICK: Duration = Duration::from_secs(60);
+
+fn validate_tick(name: &str, value: Duration) -> Result<(), Box<dyn Error>> {
+    if !(MIN_TICK..=MAX_TICK).contains(&value) {
+        return Err(format!(
+            "resource-control.{} must be in [{:?}, {:?}], but got {:?}",
+            name, MIN_TICK, MAX_TICK, value
+        )
+        .into());
+    }
+    Ok(())
+}
 
 fn validate_cpu_pct(name: &str, value: f64) -> Result<(), Box<dyn Error>> {
     // `!is_finite()` also rejects NaN, which would otherwise compare false
@@ -118,6 +159,15 @@ fn validate_cpu_pct(name: &str, value: f64) -> Result<(), Box<dyn Error>> {
 }
 
 impl Config {
+    /// Whether a client should be told about noisy groups: only once fair
+    /// scheduling or admission control is on. See
+    /// [`ResourceGroupManager::reports_noisy_groups`].
+    pub fn reports_noisy_groups(&self) -> bool {
+        self.enable_fair_scheduling
+            || self.enable_read_admission_control
+            || self.enable_write_admission_control
+    }
+
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         validate_cpu_pct("bg-cpu-throttle-threshold", self.bg_cpu_throttle_threshold)?;
         validate_cpu_pct("fg-cpu-throttle-threshold", self.fg_cpu_throttle_threshold)?;
@@ -160,6 +210,18 @@ impl Config {
                 MIN_HISTORICAL_WINDOW_MINS,
                 MAX_HISTORICAL_WINDOW_MINS,
                 self.historical_usage_window_mins
+            )
+            .into());
+        }
+
+        validate_tick("quiet-tick", self.quiet_tick.0)?;
+        validate_tick("overloaded-tick", self.overloaded_tick.0)?;
+
+        // Loaded must tick faster, or detection slows exactly when it matters.
+        if self.overloaded_tick.0 > self.quiet_tick.0 {
+            return Err(format!(
+                "resource-control.overloaded-tick ({}) must not exceed quiet-tick ({})",
+                self.overloaded_tick, self.quiet_tick
             )
             .into());
         }
@@ -394,6 +456,36 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_rejects_bad_ticks() {
+        for bad in [Duration::from_millis(500), Duration::from_secs(61)] {
+            let mut cfg = Config::default();
+            cfg.quiet_tick = ReadableDuration(bad);
+            assert!(cfg.validate().is_err(), "quiet-tick {:?} accepted", bad);
+
+            let mut cfg = Config::default();
+            cfg.overloaded_tick = ReadableDuration(bad);
+            assert!(
+                cfg.validate().is_err(),
+                "overloaded-tick {:?} accepted",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_inverted_ticks() {
+        let mut cfg = Config::default();
+        cfg.quiet_tick = ReadableDuration::secs(5);
+        cfg.overloaded_tick = ReadableDuration::secs(10);
+        assert!(cfg.validate().is_err());
+
+        // Equal is allowed: one period either way, which is a node that has
+        // simply opted out of ticking faster under load.
+        cfg.overloaded_tick = ReadableDuration::secs(5);
+        cfg.validate().unwrap();
+    }
+
+    #[test]
     fn test_validate_rejects_bad_baseline_burst_pct() {
         for bad in [-1.0, f64::NAN, f64::INFINITY] {
             let mut cfg = Config::default();
@@ -435,5 +527,25 @@ mod tests {
         mgr.dispatch(change).unwrap();
 
         assert_eq!(config.value().fg_cpu_throttle_threshold, 90.0);
+    }
+
+    /// An online change to the noisy-group reporting gate reaches the cached
+    /// copy the coprocessor reads per request on the next tick's refresh.
+    #[test]
+    fn test_online_change_reaches_cached_noisy_reporting_gate() {
+        let resource_ctl = crate::ResourceGroupManager::new(Config::default());
+        let mut mgr = ResourceContrlCfgMgr::new(resource_ctl.get_config().clone());
+        assert!(!resource_ctl.reports_noisy_groups());
+
+        for (name, on) in [
+            ("enable_read_admission_control", true),
+            ("enable_read_admission_control", false),
+        ] {
+            let mut change = ConfigChange::new();
+            change.insert(name.to_owned(), ConfigValue::Bool(on));
+            mgr.dispatch(change).unwrap();
+            resource_ctl.refresh_cached_config();
+            assert_eq!(resource_ctl.reports_noisy_groups(), on, "{name}={on}");
+        }
     }
 }

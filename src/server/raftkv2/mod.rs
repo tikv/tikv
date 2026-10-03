@@ -32,13 +32,16 @@ use raftstore_v2::{
         CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter, message::SimpleWrite,
     },
 };
+use resource_control::ResourceGroupManager;
 use tikv_kv::{Modify, WriteEvent};
-use tikv_util::time::Instant;
+use tikv_util::{resource_control::DEFAULT_RESOURCE_GROUP_NAME, time::Instant};
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
-    metrics::{ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_VEC},
+    metrics::{
+        ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_BY_GROUP, ASYNC_REQUESTS_DURATIONS_VEC,
+    },
     raftkv::{
         check_raft_cmd_response, get_status_kind_from_engine_error, new_flashback_req,
         new_request_header,
@@ -117,6 +120,7 @@ pub struct RaftKv2<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
@@ -124,11 +128,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     pub fn new(
         router: RaftRouter<EK, ER>,
         region_leaders: Arc<RwLock<HashSet<u64>>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> RaftKv2<EK, ER> {
         RaftKv2 {
             router,
             region_leaders,
             txn_extra_scheduler: None,
+            resource_manager,
+        }
+    }
+
+    /// The group name reaches us from the client, so bound it to a configured
+    /// group before it becomes a metric label. See
+    /// `ResourceGroupManager::bounded_group_name`.
+    fn bounded_resource_group(&self, ctx: &kvproto::kvrpcpb::Context) -> String {
+        let name = ctx.get_resource_control_context().get_resource_group_name();
+        match self.resource_manager.as_deref() {
+            Some(rm) => rm.bounded_group_name(name).into_owned(),
+            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
         }
     }
 
@@ -202,6 +219,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let resource_group = self.bounded_resource_group(ctx.pb_ctx);
         let res: tikv_kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
@@ -229,10 +247,28 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                                     tracker.metrics.read_index_propose_wait_nanos as f64
                                         / 1_000_000_000.0,
                                 );
+                            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                                .with_label_values(&[
+                                    "snapshot_read_index_propose_wait",
+                                    &resource_group,
+                                ])
+                                .observe(
+                                    tracker.metrics.read_index_propose_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
                             // snapshot may be handled by lease read in raftstore
                             if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                                 ASYNC_REQUESTS_DURATIONS_VEC
                                     .snapshot_read_index_confirm
+                                    .observe(
+                                        tracker.metrics.read_index_confirm_wait_nanos as f64
+                                            / 1_000_000_000.0,
+                                    );
+                                ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                                    .with_label_values(&[
+                                        "snapshot_read_index_confirm",
+                                        &resource_group,
+                                    ])
                                     .observe(
                                         tracker.metrics.read_index_confirm_wait_nanos as f64
                                             / 1_000_000_000.0,
@@ -242,6 +278,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_local_read
                                 .observe(elapse);
+                            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                                .with_label_values(&["snapshot_local_read", &resource_group])
+                                .observe(elapse);
                         }
                     });
                     // The observed snapshot duration is larger than the actual
@@ -249,6 +288,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     // of this future.
                     // TODO: Fix the inaccuracy, see #17581.
                     ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+                    ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                        .with_label_values(&["snapshot", &resource_group])
+                        .observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(snap)
                 }
@@ -295,6 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let resource_group = self.bounded_resource_group(ctx);
 
         let inject_region_not_found = (|| {
             // If rid is some, only the specified region reports error.
@@ -334,6 +377,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                 ASYNC_REQUESTS_DURATIONS_VEC
                     .write
+                    .observe(begin_instant.saturating_elapsed_secs());
+                ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                    .with_label_values(&["write", &resource_group])
                     .observe(begin_instant.saturating_elapsed_secs());
                 Ok(())
             } else {

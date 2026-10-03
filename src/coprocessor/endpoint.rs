@@ -23,7 +23,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata, busy_reason};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -36,10 +36,11 @@ use tidb_query_common::{
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     DeferContext,
-    deadline::set_deadline_exceeded_busy_error,
+    deadline::{DEADLINE_EXCEEDED, set_deadline_exceeded_busy_error_with_reason},
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
     store::find_peer,
     time::Instant,
 };
@@ -52,7 +53,7 @@ use crate::{
         batch::*, cache::CachedRequestHandler, interceptors::*, metrics::*,
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
-    read_pool::ReadPoolHandle,
+    read_pool::{ReadPoolError, ReadPoolHandle},
     server::Config,
     storage::{
         self, Engine, Snapshot, SnapshotStore,
@@ -217,6 +218,18 @@ impl<E: Engine> Endpoint<E> {
         Box::new(CopConfigManager::new(self.memory_quota.clone()))
     }
 
+    /// The group name reaches us from the client, so bound it to a configured
+    /// group before it becomes a metric label -- otherwise any caller could
+    /// mint a permanently retained series. See
+    /// `ResourceGroupManager::bounded_group_name`.
+    fn bounded_group_name(&self, ctx: &kvrpcpb::Context) -> String {
+        let name = ctx.get_resource_control_context().get_resource_group_name();
+        match self.resource_ctl.as_deref() {
+            Some(rm) => rm.bounded_group_name(name).into_owned(),
+            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+        }
+    }
+
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
         check_memory_locks_for_ranges(&self.concurrency_manager, req_ctx, &req_ctx.ranges)
     }
@@ -267,6 +280,15 @@ impl<E: Engine> Endpoint<E> {
         } else {
             None
         };
+        // Decided once, at admission. A deadline is mostly spent queueing, so
+        // when the queue is this group's own doing the client should back off
+        // rather than retry the same overloaded leader immediately.
+        let is_noisy_tenant = self.read_pool.is_noisy_request(
+            context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+            context.get_request_source(),
+        );
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
@@ -308,6 +330,7 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                     false,
+                    is_noisy_tenant,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorDag;
@@ -392,6 +415,7 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                     false,
+                    is_noisy_tenant,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
@@ -439,6 +463,7 @@ impl<E: Engine> Endpoint<E> {
                     // Checksum is allowed during the flashback period to make sure the tool such
                     // like BR can work.
                     true,
+                    is_noisy_tenant,
                 );
 
                 with_tls_tracker(|tracker| {
@@ -521,7 +546,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot_future = with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, ctx));
         let max_duration_to_get_snapshot = ctx.deadline.remaining_duration();
         if max_duration_to_get_snapshot.is_zero() {
-            return Err(Error::DeadlineExceeded);
+            return Err(Error::DeadlineExceeded(ctx.is_noisy_tenant));
         }
         match async_timeout(snapshot_future, max_duration_to_get_snapshot).await {
             Ok(snapshot) => snapshot,
@@ -531,7 +556,7 @@ impl<E: Engine> Endpoint<E> {
                     "max_duration_to_get_snapshot" => ?max_duration_to_get_snapshot,
                     "err" => ?e,
                 );
-                Err(Error::DeadlineExceeded)
+                Err(Error::DeadlineExceeded(ctx.is_noisy_tenant))
             }
         }
     }
@@ -713,7 +738,13 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let resource_group = self.bounded_group_name(&req_ctx.context);
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
@@ -738,7 +769,8 @@ impl<E: Engine> Endpoint<E> {
         );
         async move {
             spawn_fut_result?.await?;
-            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+            rx.map_err(|_| Error::MaxPendingTasksExceeded(false))
+                .await?
         }
     }
 
@@ -1170,7 +1202,13 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let resource_group = self.bounded_group_name(&req_ctx.context);
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let future = Self::handle_stream_request_impl(
@@ -1196,14 +1234,9 @@ impl<E: Engine> Endpoint<E> {
         // Transparent to caller: embed admission delay into the stream itself.
         // On first poll, drives spawn_fut (sleep if delayed, then submit to
         // yatp). On error yields one error item. Then chains with rx items.
-        let stream = futures::stream::once(Box::pin(async move {
-            spawn_fut
-                .await
-                .err()
-                .map(|_| Err(Error::MaxPendingTasksExceeded))
-        }))
-        .filter_map(futures::future::ready)
-        .chain(rx);
+        let stream = futures::stream::once(Box::pin(async move { spawn_fut.await.err().map(Err) }))
+            .filter_map(futures::future::ready)
+            .chain(rx);
         Ok(stream)
     }
 
@@ -1258,7 +1291,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(self
             .read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
+            .map(|r| r.map_err(read_pool_spawn_error))
             .boxed())
     }
 
@@ -1288,6 +1321,16 @@ impl<E: Engine> Endpoint<E> {
             deadline,
             task_id,
         }
+    }
+}
+
+/// Only the two load-shedding paths carry `noisy`; the rest are nobody's fault.
+pub(super) fn read_pool_spawn_error(err: ReadPoolError) -> Error {
+    match err {
+        ReadPoolError::UnifiedReadPoolFull { noisy } | ReadPoolError::Rejected { noisy } => {
+            Error::MaxPendingTasksExceeded(noisy)
+        }
+        _ => Error::MaxPendingTasksExceeded(false),
     }
 }
 
@@ -1340,17 +1383,20 @@ macro_rules! make_error_response_common {
                 $tag = "meet_lock";
                 $resp.set_locked(info);
             }
-            Error::DeadlineExceeded => {
+            Error::DeadlineExceeded(noisy) => {
                 $tag = "deadline_exceeded";
                 let mut err = errorpb::Error::default();
-                set_deadline_exceeded_busy_error(&mut err);
+                set_deadline_exceeded_busy_error_with_reason(
+                    &mut err,
+                    busy_reason(DEADLINE_EXCEEDED, noisy),
+                );
                 err.set_message($e.to_string());
                 $resp.set_region_error(err);
             }
-            Error::MaxPendingTasksExceeded => {
+            Error::MaxPendingTasksExceeded(noisy) => {
                 $tag = "max_pending_tasks_exceeded";
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-                server_is_busy_err.set_reason($e.to_string());
+                server_is_busy_err.set_reason(busy_reason(&$e.to_string(), noisy));
                 let mut errorpb = errorpb::Error::default();
                 errorpb.set_message($e.to_string());
                 errorpb.set_server_is_busy(server_is_busy_err);
@@ -1893,6 +1939,7 @@ mod tests {
             None,
             PerfLevel::EnableCount,
             false,
+            false,
         );
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
@@ -2284,6 +2331,7 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::analyze_full_sampling,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 background_handler,
                 UnaryOutputMode::Materialize,
@@ -2311,6 +2359,7 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::test,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 shared_handler,
                 UnaryOutputMode::Materialize,
@@ -3327,7 +3376,7 @@ mod tests {
 
     #[test]
     fn test_make_error_response() {
-        let resp = make_error_response(Error::DeadlineExceeded);
+        let resp = make_error_response(Error::DeadlineExceeded(false));
         let region_err = resp.get_region_error();
         assert_eq!(
             region_err.get_server_is_busy().reason,
@@ -3336,6 +3385,27 @@ mod tests {
         assert_eq!(
             region_err.get_message(),
             "Coprocessor task terminated due to exceeding the deadline"
+        );
+    }
+
+    #[test]
+    fn test_a_blamed_tenants_deadline_is_marked_for_backoff() {
+        // Without the marker the client fast-retries a deadline with no
+        // backoff at all, straight back to the same overloaded leader; the
+        // suffix is the only thing that routes it to the backoff path.
+        let plain = make_error_response(Error::DeadlineExceeded(false));
+        assert_eq!(
+            plain.get_region_error().get_server_is_busy().reason,
+            "deadline is exceeded"
+        );
+
+        let blamed = make_error_response(Error::DeadlineExceeded(true));
+        assert_eq!(
+            blamed.get_region_error().get_server_is_busy().reason,
+            format!(
+                "deadline is exceeded{}",
+                resource_control::NOISY_TENANT_REASON_SUFFIX
+            ),
         );
     }
 
@@ -3360,7 +3430,7 @@ mod tests {
             let result =
                 block_on(unsafe { Endpoint::<RocksEngine>::get_snapshot_with_timeout(&req_ctx) });
             assert!(result.is_err());
-            assert!(matches!(result, Err(Error::DeadlineExceeded)));
+            assert!(matches!(result, Err(Error::DeadlineExceeded(_))));
         }
 
         // Test case 2: Snapshot retrieval delayed by failpoint, causing timeout
@@ -3403,7 +3473,7 @@ mod tests {
                     // In production yatp FuturePool environment, this would
                     // timeout correctly
                 } else {
-                    assert!(matches!(result, Err(Error::DeadlineExceeded)));
+                    assert!(matches!(result, Err(Error::DeadlineExceeded(_))));
                     // Verify that timeout happened before the full sleep duration
                     // The timeout should trigger around 100ms, not wait for the full 5000ms sleep
                     assert!(
