@@ -650,6 +650,7 @@ compaction-filter-skip-version-check = true
 num-threads = 2
 
 [gc.auto-compaction]
+redundant-bytes-threshold = "129MB"
 mvcc-read-aware-enabled = true
 mvcc-scan-threshold = 10000
 
