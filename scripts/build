@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# This script runs cargo build with a normal feature set
+# Arguments given will be passed through to "cargo build"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+  COMMAND="$0 $*" exec make run
+fi
+
+cargo build --no-default-features --features "${TIKV_ENABLE_FEATURES}" "$@"
