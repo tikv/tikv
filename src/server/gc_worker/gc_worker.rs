@@ -25,7 +25,7 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -43,7 +43,7 @@ use super::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
     },
-    compaction_runner::{CompactionRunner, CompactionRunnerHandle},
+    compaction_runner::{CompactionControl, CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
     Callback, Error, ErrorInner, Result,
@@ -1199,6 +1199,7 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     compaction_runner_handle: Arc<Mutex<Option<CompactionRunnerHandle>>>,
+    compaction_control: Arc<CompactionControl>,
     feature_gate: FeatureGate,
 }
 
@@ -1216,6 +1217,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             compaction_runner_handle: self.compaction_runner_handle.clone(),
+            compaction_control: self.compaction_control.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
         }
@@ -1263,6 +1265,7 @@ impl<E: Engine> GcWorker<E> {
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             compaction_runner_handle: Arc::new(Mutex::new(None)),
+            compaction_control: Arc::new(CompactionControl::default()),
             feature_gate,
             region_info_provider,
         }
@@ -1311,9 +1314,16 @@ impl<E: Engine> GcWorker<E> {
         &self,
         safe_point_provider: S,
         region_info_provider: R,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Result<()> {
         let mut handle = self.compaction_runner_handle.lock().unwrap();
         assert!(handle.is_none(), "compaction runner already started");
+
+        // Cloned coprocessor hosts share this notifier registry. The split
+        // observer only sets a coalesced wake-up bit; it never submits a
+        // compaction task to the GC or raftstore cleanup workers.
+        CompactionControl::initialize_metrics();
+        coprocessor_host.set_no_valid_split_key_notifier(self.compaction_control.clone());
 
         let kv_engine = match self.engine.kv_engine() {
             Some(engine) => engine,
@@ -1323,11 +1333,12 @@ impl<E: Engine> GcWorker<E> {
             }
         };
 
-        let compaction_runner = CompactionRunner::new(
+        let compaction_runner = CompactionRunner::new_with_control(
             safe_point_provider,
             region_info_provider,
             kv_engine,
             self.config_manager.clone(),
+            self.compaction_control.clone(),
         );
 
         let new_handle = compaction_runner

@@ -20,6 +20,9 @@ pub const PROP_NUM_ROWS: &str = "tikv.num_rows";
 pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
 pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
 pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+pub const PROP_NUM_STALE_DELETES: &str = "tikv.num_stale_deletes";
+pub const PROP_NUM_DEFAULT_PUTS: &str = "tikv.num_default_puts";
+pub const PROP_NUM_STALE_DEFAULT_PUTS: &str = "tikv.num_stale_default_puts";
 pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
 pub const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 pub const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
@@ -143,8 +146,21 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             };
 
             match write_type {
-                WriteType::Put => self.props.num_puts += 1,
-                WriteType::Delete => self.props.num_deletes += 1,
+                WriteType::Put => {
+                    self.props.num_puts += 1;
+                    if matches!(Write::has_short_value(value), Ok(false)) {
+                        self.props.num_default_puts += 1;
+                        if self.row_versions > 1 {
+                            self.props.num_stale_default_puts += 1;
+                        }
+                    }
+                }
+                WriteType::Delete => {
+                    self.props.num_deletes += 1;
+                    if self.row_versions > 1 {
+                        self.props.num_stale_deletes += 1;
+                    }
+                }
                 _ => {}
             }
         }
@@ -213,6 +229,9 @@ fn encode_mvcc(mvcc_props: &MvccProperties, props: &mut impl EncodeProperties) {
     props.encode_u64(PROP_NUM_PUTS, mvcc_props.num_puts);
     props.encode_u64(PROP_NUM_DELETES, mvcc_props.num_deletes);
     props.encode_u64(PROP_NUM_VERSIONS, mvcc_props.num_versions);
+    props.encode_u64(PROP_NUM_STALE_DELETES, mvcc_props.num_stale_deletes);
+    props.encode_u64(PROP_NUM_DEFAULT_PUTS, mvcc_props.num_default_puts);
+    props.encode_u64(PROP_NUM_STALE_DEFAULT_PUTS, mvcc_props.num_stale_default_puts);
     props.encode_u64(PROP_MAX_ROW_VERSIONS, mvcc_props.max_row_versions);
 }
 
@@ -227,6 +246,15 @@ pub(super) fn decode_mvcc(props: &impl DecodeProperties) -> codec::Result<MvccPr
     res.num_deletes = props
         .decode_u64(PROP_NUM_DELETES)
         .unwrap_or(res.num_versions - res.num_puts);
+    res.num_stale_deletes = props.decode_u64(PROP_NUM_STALE_DELETES).unwrap_or(0);
+    // Old SSTs do not carry the split Put counters. Fall back to the
+    // historical lower-bound estimate so they retain the previous score.
+    res.num_default_puts = props
+        .decode_u64(PROP_NUM_DEFAULT_PUTS)
+        .unwrap_or(res.num_puts);
+    res.num_stale_default_puts = props
+        .decode_u64(PROP_NUM_STALE_DEFAULT_PUTS)
+        .unwrap_or(res.num_puts.saturating_sub(res.num_rows));
     res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
     Ok(res)
 }
