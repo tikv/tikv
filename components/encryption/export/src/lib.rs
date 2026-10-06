@@ -5,15 +5,25 @@ use std::path::Path;
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 #[cfg(feature = "cloud-azure")]
 use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
+<<<<<<< HEAD
 use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
+=======
+use cloud::STORAGE_VENDOR_NAME_GCP_V2;
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 pub use encryption::{
     clean_up_dir, clean_up_trash, from_engine_encryption_method, trash_dir_all, AzureConfig,
     Backend, DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
     EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
 };
+<<<<<<< HEAD
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
+=======
+use encryption::{FileBackend, PlaintextBackend, cloud_convert_error};
+use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
+use gcp_v2::GcpKms as GcpKmsV2;
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 use tikv_util::{box_err, error, info};
 
 pub fn data_key_manager_from_config(
@@ -69,6 +79,15 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
                 AzureKms::new(conf).map_err(cloud_convert_error("new Azure KMS".to_owned()))?,
             );
             Ok(Box::new(KmsBackend::new(keyvault_provider)?) as Box<dyn Backend>)
+        }
+        STORAGE_VENDOR_NAME_GCP_V2 => {
+            // sanity check
+            if cloud_config.gcp.is_none() {
+                return Err(Error::Other(box_err!("invalid configurations for GCP KMS")));
+            }
+            let kms_provider = GcpKmsV2::new(cloud_config)
+                .map_err(cloud_convert_error("new GCP KMS".to_owned()))?;
+            Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?))
         }
         provider => Err(Error::Other(box_err!("provider not found {}", provider))),
     }

@@ -9,7 +9,7 @@ async-trait = "0.1"
 cloud = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
-hyper = "0.14"
+hyper = { version = "0.14", features = ["client", "http1", "tcp", "stream"] }
 hyper-tls = "0.5"
 kvproto = { workspace = true }
 slog = { workspace = true }

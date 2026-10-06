@@ -308,10 +308,19 @@ pub struct Config {
     pub temp_file_size_limit: u64,
     pub temp_file_memory_quota: u64,
     pub max_flush_interval: Duration,
+<<<<<<< HEAD
 }
 
 impl From<tikv::config::BackupStreamConfig> for Config {
     fn from(value: tikv::config::BackupStreamConfig) -> Self {
+=======
+    pub s3_multi_part_size: usize,
+    pub gcp_v2_enable: bool,
+}
+
+impl Config {
+    pub fn from_backup_stream_config(value: BackupStreamConfig) -> Self {
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
         let prefix = PathBuf::from(value.temp_path);
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
@@ -321,6 +330,11 @@ impl From<tikv::config::BackupStreamConfig> for Config {
             temp_file_size_limit,
             temp_file_memory_quota,
             max_flush_interval,
+<<<<<<< HEAD
+=======
+            s3_multi_part_size,
+            gcp_v2_enable: value.gcp_v2_enable,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
         }
     }
 }
@@ -367,6 +381,16 @@ pub struct RouterInner {
     temp_file_memory_quota: AtomicU64,
     /// The max duration the local data can be pending.
     max_flush_interval: SyncRwLock<Duration>,
+<<<<<<< HEAD
+=======
+    gcp_v2_enable: bool,
+
+    /// Backup encryption manager
+    backup_encryption_manager: BackupEncryptionManager,
+
+    /// S3 multi part size
+    s3_multi_part_size: AtomicUsize,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -389,6 +413,12 @@ impl RouterInner {
             temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
+<<<<<<< HEAD
+=======
+            gcp_v2_enable: config.gcp_v2_enable,
+            backup_encryption_manager,
+            s3_multi_part_size: AtomicUsize::new(config.s3_multi_part_size),
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
         }
     }
 
@@ -398,9 +428,17 @@ impl RouterInner {
             .store(config.file_size_limit.0, Ordering::SeqCst);
         self.temp_file_memory_quota
             .store(config.temp_file_memory_quota.0, Ordering::SeqCst);
+<<<<<<< HEAD
         let tasks = self.tasks.blocking_lock();
         for task in tasks.values() {
             task.temp_file_pool
+=======
+        self.s3_multi_part_size
+            .store(config.s3_multi_part_size.0 as usize, Ordering::SeqCst);
+        for entry in self.tasks.iter() {
+            entry
+                .temp_file_pool
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
                 .config()
                 .cache_size
                 .store(config.temp_file_memory_quota.0 as usize, Ordering::SeqCst);
@@ -460,12 +498,33 @@ impl RouterInner {
 
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
+<<<<<<< HEAD
         let stream_task =
             StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
         self.tasks
             .lock()
             .await
             .insert(task_name.clone(), Arc::new(stream_task));
+=======
+        let gcp_v2_enable = self.gcp_v2_enable;
+        let backup_encryption_manager =
+            self.build_backup_encryption_manager_for_task(&task).await?;
+        let backend_config = BackendConfig {
+            s3_multi_part_size: self.s3_multi_part_size.load(Ordering::Relaxed),
+            gcp_v2_enable,
+            hdfs_config: HdfsConfig::default(),
+        };
+        let stream_task = StreamTaskHandler::new(
+            task,
+            ranges.clone(),
+            merged_file_size_limit,
+            cfg,
+            backup_encryption_manager,
+            backend_config,
+        )
+        .await?;
+        self.tasks.insert(task_name.clone(), Arc::new(stream_task));
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 
         // register ragnes
         self.register_ranges(&task_name, ranges);
@@ -1723,6 +1782,11 @@ mod tests {
                 temp_file_size_limit: 1024,
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         );
         // -----t1.start-----t1.end-----t2.start-----t2.end------
@@ -1833,6 +1897,11 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         );
         let (stream_task, storage_path) = task_handler("dummy".to_owned()).await.unwrap();
@@ -2088,6 +2157,11 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         ));
         let cx = FlushContext {
@@ -2127,6 +2201,11 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         );
         let mut stream_task = StreamBackupTaskInfo::default();
@@ -2168,6 +2247,11 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         ));
         let (task, _path) = task_handler("cleanup_test".to_owned()).await?;
@@ -2224,6 +2308,11 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         ));
         let (task, _path) = task_handler("flush_failure".to_owned()).await?;
@@ -2486,6 +2575,11 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: cfg.s3_multi_part_size.0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         ));
 
@@ -2542,6 +2636,11 @@ mod tests {
                 temp_file_size_limit: 1000,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+<<<<<<< HEAD
+=======
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             },
         ));
 

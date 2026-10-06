@@ -23,8 +23,14 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+<<<<<<< HEAD
 use external_storage_export::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
+=======
+use external_storage::{
+    BackendConfig, ExternalStorage, RestoreConfig, compression_reader_dispatcher,
+    encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 };
 use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
@@ -50,7 +56,15 @@ use tokio::{
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+<<<<<<< HEAD
     caching::cache_map::{CacheMap, ShareOwned},
+=======
+    Config, ConfigManager as ImportConfigManager, Error, Result,
+    caching::{
+        cache_map::{CacheMap, ShareOwned},
+        storage_cache::StorageBackendFactory,
+    },
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -161,7 +175,8 @@ pub struct SstImporter {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 
-    cached_storage: CacheMap<StorageBackend>,
+    backend_config: BackendConfig,
+    cached_storage: CacheMap<StorageBackendFactory>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
     _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
@@ -215,12 +230,17 @@ impl SstImporter {
             switcher,
             api_version,
             compression_types: HashMap::with_capacity(2),
+            backend_config: Default::default(),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit)),
         })
+    }
+
+    pub fn set_backend_config(&mut self, backend_config: BackendConfig) {
+        self.backend_config = backend_config;
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -408,7 +428,6 @@ impl SstImporter {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
@@ -435,7 +454,100 @@ impl SstImporter {
         }
     }
 
+<<<<<<< HEAD
     pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
+=======
+    pub async fn download_files_ext(
+        &self,
+        basic_meta: &SstMeta,
+        metas: &HashMap<String, SstMeta>,
+        backend: &StorageBackend,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<Range>> {
+        debug!("download start";
+            "metas" => ?basic_meta,
+            "rewrite_rule" => ?rewrite_rule,
+            "speed_limit" => speed_limiter.speed_limit(),
+        );
+        let mut sst_readers = Vec::new();
+        let clean_paths = Mutex::new(Vec::new());
+        defer! {
+            for path in clean_paths.lock().unwrap().iter() {
+                self.remove_file_no_throw(path)
+            }
+        };
+        for (name, meta) in metas {
+            let path = self.dir.join_for_write(meta)?;
+            let dst_file_name = self
+                .do_download_sst_file(
+                    &path,
+                    meta,
+                    backend,
+                    name,
+                    crypter.clone(),
+                    &speed_limiter,
+                    ext.cache_key.unwrap_or(""),
+                )
+                .await?;
+            // now validate the SST file.
+            let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
+            // Use abstracted SstReader after Env is abstracted.
+            let sst_reader = RocksSstReader::open_with_env(&dst_file_name, Some(env))?;
+            sst_reader.verify_checksum()?;
+
+            sst_readers.push(sst_reader);
+            clean_paths.lock().unwrap().push(path.temp);
+        }
+
+        fail::fail_point!("download_files_ext_after_download", |msg| {
+            let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
+            Err(Error::ErrorWrapper(msg))
+        });
+
+        let mut iter_option = IterOptions::default();
+        iter_option.set_fill_cache(false);
+        let mut sst_iters = Vec::with_capacity(sst_readers.len());
+        for sst_reader in &sst_readers {
+            let sst_iter = sst_reader.iter(iter_option.clone())?;
+            sst_iters.push(sst_iter);
+        }
+        let mut sst_iter = BinaryIterator::new(sst_iters);
+
+        let (range_start, range_end) =
+            self.do_pre_rewrite(basic_meta, rewrite_rule, ext.req_type)?;
+        let res = self
+            .do_rewrite_keys(
+                self.dir.join_for_write(basic_meta)?.save,
+                rewrite_rule,
+                range_start,
+                range_end,
+                &mut sst_iter,
+                name_to_cf(basic_meta.get_cf_name()).unwrap(),
+                engine,
+                ext.req_type,
+                Instant::now(),
+            )
+            .await;
+
+        match res {
+            Ok(r) => {
+                let r = r.map(|(range, _)| range);
+                info!("download"; "meta" => ?basic_meta, "range" => ?r);
+                Ok(r)
+            }
+            Err(e) => {
+                error!(%e; "download failed"; "meta" => ?basic_meta,);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn enter_normal_mode(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
         if let Either::Left(ref switcher) = self.switcher {
             switcher.enter_normal_mode(&db, mf)
         } else {
@@ -496,10 +608,17 @@ impl SstImporter {
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
+<<<<<<< HEAD
             let s = external_storage_export::create_storage(backend, Default::default())?;
+=======
+            let s = external_storage::create_storage(backend, self.backend_config.clone())?;
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
             Arc::from(s)
         } else {
-            self.cached_storage.cached_or_create(cache_id, backend)?
+            let backend_factory =
+                StorageBackendFactory::new(backend.clone(), self.backend_config.clone());
+            self.cached_storage
+                .cached_or_create(cache_id, &backend_factory)?
         };
         Ok(ext_storage)
     }
@@ -2072,6 +2191,41 @@ mod tests {
             mem_limit_old / 3,
             mem_limit_new
         );
+    }
+
+    #[test]
+    fn test_external_storage_uses_backup_backend_config() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let mut importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        let mut gcs = kvproto::brpb::Gcs::default();
+        gcs.bucket = "test-bucket".to_owned();
+        gcs.endpoint = "http://127.0.0.1:1".to_owned();
+        gcs.credentials_blob = r#"{"type":"external_account"}"#.to_owned();
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(gcs);
+
+        let mut backend_config = BackendConfig::default();
+        backend_config.gcp_v2_enable = true;
+        importer.set_backend_config(backend_config);
+        importer.external_storage_or_cache(&backend, "").unwrap();
+        importer
+            .external_storage_or_cache(&backend, "cached-gcs-v2")
+            .unwrap();
+
+        importer.set_backend_config(BackendConfig::default());
+        match importer.external_storage_or_cache(&backend, "") {
+            Ok(_) => panic!("gcs v1 should reject external_account credentials"),
+            Err(Error::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 
     #[test]

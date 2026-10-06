@@ -1,0 +1,33 @@
+[package]
+name = "gcp_v2"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+cloud = { workspace = true }
+futures = "0.3"
+futures-util = { version = "0.3", features = ["io"] }
+google-cloud-storage = "1.0.0"
+google-cloud-gax = "1.0.0"
+google-cloud-auth = "1.0.0"
+google-cloud-kms-v1 = "1.0.0"
+kvproto = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "fips"] }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat", "io"] }
+url = "2.0"
+bytes = "1"
+anyhow = "1"
+serde_json = "1"
+slog = { workspace = true }
+slog-global = { workspace = true }
+async-stream = "0.3"
+crc32c = "0.6"
+
+[dev-dependencies]
+prometheus = "0.13"
+tempfile = "3"

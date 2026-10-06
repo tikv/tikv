@@ -368,6 +368,117 @@ fn main() {
                 end_key,
             );
         }
+<<<<<<< HEAD
+=======
+        Cmd::CompactLogBackup {
+            from_ts,
+            until_ts,
+            max_concurrent_compactions: max_compaction_num,
+            storage_base64,
+            compression,
+            compression_level,
+            name,
+            force_regenerate,
+            minimal_compaction_size,
+            prefetch_running_count,
+            prefetch_buffer_count,
+            gcp_v2_enable,
+        } => {
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
+            let maybe_external_storage = base64::decode(storage_base64)
+                .map_err(|err| format!("cannot parse base64: {}", err))
+                .and_then(|storage_bytes| {
+                    let mut ext_storage = brpb::StorageBackend::new();
+                    ext_storage
+                        .merge_from_bytes(&storage_bytes)
+                        .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
+                    Result::Ok(ext_storage)
+                });
+            let external_storage = match maybe_external_storage {
+                Ok(s) => s,
+                Err(err) => {
+                    clap::Error {
+                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+            };
+            let ccfg = compact_log::ExecutionConfig {
+                from_ts,
+                until_ts,
+                prefetch_running_count,
+                prefetch_buffer_count,
+                compression,
+                compression_level,
+            };
+            let mut exec = compact_log::Execution {
+                out_prefix: ccfg.recommended_prefix(&name),
+                cfg: ccfg,
+                max_concurrent_subcompaction: max_compaction_num,
+                external_storage,
+                backend_config: Default::default(),
+                db: Some(tmp_engine.rocks),
+            };
+            exec.backend_config.gcp_v2_enable = gcp_v2_enable;
+
+            use tikv::server::status_server::lite::Server as StatusServerLite;
+            struct ExportTiKVInfo {
+                cfg: TikvConfig,
+            }
+            impl compact_log::hooking::ExecHooks for ExportTiKVInfo {
+                async fn before_execution_started(
+                    &mut self,
+                    cx: compact_log::hooking::BeforeStartCtx<'_>,
+                ) -> compact_log_backup::Result<()> {
+                    use compact_log_backup::OtherErrExt;
+                    tikv_util::info!("Welcome to TiKV control: compact log backup.");
+                    tikv_util::info!("TiKV version info."; "info_string" => tikv::tikv_version_info(None));
+
+                    let level = get_log_level();
+                    if level < Some(Level::Info) {
+                        warn!("Most of compact-log progress logs are only enabled in the `info` level."; "current_level" => ?level);
+                    }
+
+                    let srv = StatusServerLite::new(Arc::new(self.cfg.security.clone()));
+                    let _enter = cx.async_rt.enter();
+                    let hnd = srv
+                        .start(&self.cfg.server.status_addr)
+                        .adapt_err()
+                        .annotate("failed to start status server lite")?;
+                    tikv_util::info!("Started status server lite."; "at" => %hnd.address());
+                    Ok(())
+                }
+            }
+
+            let log_to_term = compact_log_hooks::observability::Observability::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
+            let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
+            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
+            let checkpoint = if force_regenerate {
+                None
+            } else {
+                Some(compact_log_hooks::checkpoint::Checkpoint::default())
+            };
+            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
+            let hooks = (
+                (
+                    (log_to_term, checkpoint),
+                    (with_status_server, skip_small_compaction),
+                ),
+                (save_meta, with_lock),
+            );
+            match exec.run(hooks) {
+                Ok(()) => tikv_util::info!("Compact log backup successfully."),
+                Err(err) => {
+                    tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
+                    std::process::exit(1);
+                }
+            }
+        }
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
         // Commands below requires either the data dir or the host.
         cmd => {
             let data_dir = opt.data_dir.as_deref();

@@ -14,7 +14,11 @@ mod softlimit;
 mod utils;
 mod writer;
 
+<<<<<<< HEAD
 pub use endpoint::{backup_file_name, Endpoint, Task};
+=======
+pub use endpoint::{Endpoint, Task, backup_file_name, storage_backend_config};
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 pub use errors::{Error, Result};
 pub use service::Service;
 pub use writer::{BackupRawKvWriter, BackupWriter};
