@@ -68,8 +68,9 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, ForcePartitionRangeManager,
+        LocalReader, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -267,6 +268,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
+    force_partition_range_mgr: ForcePartitionRangeManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -464,6 +466,7 @@ where
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
+            force_partition_range_mgr: ForcePartitionRangeManager::default(),
         }
     }
 
@@ -1163,6 +1166,7 @@ where
             None,
             self.resource_manager.clone(),
             Arc::new(self.region_info_accessor.clone()),
+            self.force_partition_range_mgr.clone(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1521,6 +1525,7 @@ where
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
+                self.force_partition_range_mgr.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1618,6 +1623,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
             &self.core.config,
             block_cache,
             self.core.encryption_key_manager.clone(),
+            self.force_partition_range_mgr.clone(),
         )
         .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(self.router.clone()),
@@ -1718,7 +1724,8 @@ mod test {
         config.validate().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
