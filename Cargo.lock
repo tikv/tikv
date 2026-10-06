@@ -4416,7 +4416,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/mittalrishabh/kvproto?branch=noisy-groups-health-feedback#fb412a0c0243d42ba4657f14fca5f78ea5f85a37"
+source = "git+https://github.com/pingcap/kvproto.git#121875fd9777215f60983da8943de0398fb5bfab"
 dependencies = [
  "bytes",
  "futures 0.3.15",
