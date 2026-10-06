@@ -149,6 +149,13 @@ impl ResourceLimiter {
         self.egress_limiter.set_rate_limit(bytes_per_sec);
     }
 
+    /// Returns the bytes charged to the background egress limiter so far. For
+    /// tests outside this crate.
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn egress_bytes_charged_for_test(&self) -> u64 {
+        self.egress_limiter.limiter.total_bytes_consumed() as u64
+    }
+
     /// Returns the current token-bucket debt the caller should wait before
     /// entering the thread pool. Reads accumulated debt via `consume(0, ...)`
     /// which returns the existing debt when the rate limit is finite, without

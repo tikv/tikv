@@ -677,10 +677,17 @@ impl<E: Engine> Endpoint<E> {
 
     /// Schedules a unary request on the read pool with the requested output
     /// materialization policy.
+    ///
+    /// With `charge_egress`, a materialized response is charged to the
+    /// background egress limiter as soon as it is built. Requests with batch
+    /// tasks pass `false` for the top task and every child, because their
+    /// responses are only buffered until the outer response is committed,
+    /// which charges them once instead.
     fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
         output_mode: UnaryOutputMode,
+        charge_egress: bool,
     ) -> impl Future<Output = Result<HandlerOutput>> {
         let ParseCopRequestResult {
             req_tag,
@@ -726,7 +733,11 @@ impl<E: Engine> Endpoint<E> {
             tracker,
             handler_builder,
             output_mode,
-            resource_limiter.clone(),
+            if charge_egress {
+                resource_limiter.clone()
+            } else {
+                None
+            },
         )
         .in_resource_metering_tag(resource_tag)
         .map(move |res| {
@@ -758,7 +769,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<TracedResponse>> {
-        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize);
+        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize, true);
         async move {
             let HandlerOutput { response, state } = future.await?;
             match state {
@@ -827,6 +838,21 @@ impl<E: Engine> Endpoint<E> {
                 .set_max_execution_duration_ms(budget.as_millis() as u64);
             Deadline::from_now(budget)
         });
+        // Without merging, the batched response is assembled below and its
+        // egress is charged there, once it is committed (see
+        // `schedule_unary_request`).
+        let batch_egress_limiter = (has_batch_tasks && !merge_batch_tasks)
+            .then(|| {
+                let ctx = req.get_context();
+                self.resource_ctl.as_ref().and_then(|r| {
+                    r.get_resource_limiter(
+                        ctx.get_resource_control_context().get_resource_group_name(),
+                        ctx.get_request_source(),
+                        ctx.get_resource_control_context().get_override_priority(),
+                    )
+                })
+            })
+            .flatten();
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
         let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
@@ -851,7 +877,7 @@ impl<E: Engine> Endpoint<E> {
                 }
                 top_task_id = Some(r.req_ctx.build_task_id());
                 top_task_semaphore_group = r.semaphore_group;
-                self.schedule_unary_request(r, output_mode)
+                self.schedule_unary_request(r, output_mode, !has_batch_tasks)
             });
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
@@ -916,7 +942,16 @@ impl<E: Engine> Endpoint<E> {
                             partial_response,
                         }) => (*partial_response).map(|_| make_error_response(error)),
                     };
-                    attach_batch_responses(response, batch_responses)
+                    let response = attach_batch_responses(response, batch_responses);
+                    // Charge only the data this response returns, so neither a
+                    // later task of the same request nor a timed-out request
+                    // pays for output that is never sent.
+                    update_background_egress(
+                        &batch_egress_limiter,
+                        returned_response_bytes(&response),
+                        true,
+                    );
+                    response
                 }
             };
             if collect_top_details {
@@ -981,7 +1016,7 @@ impl<E: Engine> Endpoint<E> {
                     if let Some(deadline) = serial_deadline {
                         Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
                     }
-                    let fut = self.schedule_unary_request(r, output_mode);
+                    let fut = self.schedule_unary_request(r, output_mode, false);
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
                         let res = fut.await;
@@ -2446,6 +2481,7 @@ mod tests {
         let output = block_on(copr.schedule_unary_request(
             ParseCopRequestResult::default_for_test(handler_builder),
             UnaryOutputMode::PreserveMergeable,
+            true,
         ))
         .unwrap();
         assert!(matches!(&output.state, HandlerOutputState::Mergeable(_)));
@@ -2491,6 +2527,7 @@ mod tests {
         let output = block_on(copr.schedule_unary_request(
             ParseCopRequestResult::default_for_test(handler_builder),
             UnaryOutputMode::PreserveMergeable,
+            true,
         ))
         .unwrap();
 

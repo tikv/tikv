@@ -256,9 +256,15 @@ How it is enforced:
 - Charged where the response is built: callers pass the same bytes they report
   through `record_network_out_bytes` to
   `resource_limiter.rs::update_background_egress` (unary coprocessor in
-  `src/coprocessor/endpoint.rs`, merged batch tasks in
-  `src/coprocessor/batch.rs`, and the transactional KV reads in
+  `src/coprocessor/endpoint.rs`, and the transactional KV reads in
   `src/storage/mod.rs`). Charging only builds debt; it never sleeps.
+- A coprocessor request with batch tasks is charged once, for the data its
+  response returns, when that response is committed: in
+  `batch.rs::account_returned_response` when results are merged, and in
+  `Endpoint::parse_and_handle_unary_request` when they are not. Its top task and
+  children are not charged as they finish, so a later task of the same request
+  never waits at admission for the request's own buffered output, and a request
+  that times out is not charged for data it never returns.
 - Repaid only at background read admission: `ResourceLimiter::admission_delay`
   adds the egress debt when `is_read` and the limiter is background, and
   `src/read_pool.rs::admission_and_enqueue` waits for it before the yatp

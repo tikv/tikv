@@ -159,18 +159,24 @@ impl BatchMergeFinalizer {
 
 /// Records bytes for a response accepted by the caller, charges them to the
 /// background egress limiter, and updates its wire RU details.
+/// Returns the data bytes a returned response carries: its own data and the
+/// data of every attached batch response.
+pub(super) fn returned_response_bytes(response: &coppb::Response) -> u64 {
+    response.get_data().len() as u64
+        + response
+            .get_batch_responses()
+            .iter()
+            .map(|resp| resp.get_data().len() as u64)
+            .sum::<u64>()
+}
+
 fn account_returned_response(
     mut response: TracedResponse,
     returned_response_tag: &ResourceMeteringTag,
     tracker: TrackerToken,
     resource_limiter: &Option<Arc<ResourceLimiter>>,
 ) -> TracedResponse {
-    let bytes = response.get_data().len() as u64
-        + response
-            .get_batch_responses()
-            .iter()
-            .map(|resp| resp.get_data().len() as u64)
-            .sum::<u64>();
+    let bytes = returned_response_bytes(&response);
     let _tag_guard = returned_response_tag.attach();
     record_coprocessor_response_size(bytes, tracker);
     update_background_egress(resource_limiter, bytes, true);
