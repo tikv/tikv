@@ -347,6 +347,7 @@ pub mod tests {
             snap.iter(CF_DEFAULT, iter_op).unwrap(),
             ScanMode::Forward,
             false,
+            false,
         );
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
@@ -356,6 +357,7 @@ pub mod tests {
         let mut cursor = Cursor::new(
             snap.iter(CF_DEFAULT, iter_op).unwrap(),
             ScanMode::Forward,
+            false,
             false,
         );
 

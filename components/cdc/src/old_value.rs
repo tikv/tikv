@@ -165,6 +165,7 @@ pub fn new_old_value_cursor<S: EngineSnapshot>(snapshot: &S, cf: &'static str) -
         .fill_cache(false)
         .scan_mode(ScanMode::Mixed)
         .range(lower, upper)
+        .missing_range(cf == CF_WRITE)
         .build()
         .unwrap()
 }
