@@ -73,7 +73,19 @@ pub fn get_region(region: &str, endpoint: &str) -> io::Result<Region> {
             )
         })
     } else {
+<<<<<<< HEAD
         Ok(Region::default())
+=======
+        loader
+    }
+}
+
+pub fn configure_region(loader: ConfigLoader, region: &str) -> io::Result<ConfigLoader> {
+    if !region.is_empty() {
+        Ok(loader.region(Region::new(region.to_owned())))
+    } else {
+        Ok(loader.region(DefaultRegionProvider::new()))
+>>>>>>> 3c4cd29dd6 (aws: remove region check when create s3 storage (#18158))
     }
 }
 
