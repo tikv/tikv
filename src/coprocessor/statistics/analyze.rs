@@ -85,18 +85,20 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     }
 
     fn new_collector(&mut self) -> Box<dyn RowSampleCollector> {
+        let target_count = self.columns_info.len() + self.column_groups.len();
         if self.max_sample_size > 0 {
-            return Box::new(ReservoirRowSampleCollector::new(
+            Box::new(ReservoirRowSampleCollector::new(
                 self.max_sample_size,
                 self.max_fm_sketch_size,
-                self.columns_info.len() + self.column_groups.len(),
-            ));
+                target_count,
+            ))
+        } else {
+            Box::new(BernoulliRowSampleCollector::new(
+                self.sample_rate,
+                self.max_fm_sketch_size,
+                target_count,
+            ))
         }
-        Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
-            self.max_fm_sketch_size,
-            self.columns_info.len() + self.column_groups.len(),
-        ))
     }
 
     /// Merges accumulated storage statistics into `dest`. Used by the context
