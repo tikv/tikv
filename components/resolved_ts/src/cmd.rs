@@ -54,7 +54,7 @@ impl ChangeLog {
             .map(|cmd| {
                 let Cmd {
                     index,
-                    term: _,
+                    term,
                     mut request,
                     mut response,
                 } = cmd;
@@ -63,7 +63,14 @@ impl ChangeLog {
                         let flags =
                             WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
                         let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                        let (changes, has_ingest_sst) = group_row_changes(request.requests.into());
+                        let cmd_info = CmdInfo {
+                            region_id,
+                            index,
+                            term,
+                            is_one_pc,
+                        };
+                        let (changes, has_ingest_sst) =
+                            group_row_changes(request.requests.into(), cmd_info);
                         let mut rows = Self::encode_rows(changes, is_one_pc);
                         if has_ingest_sst {
                             rows.push(ChangeRow::IngestSsT);
@@ -231,13 +238,22 @@ struct RowChange {
     default: Option<KeyOp>,
 }
 
-fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) {
+#[derive(Default)]
+struct CmdInfo {
+    region_id: u64,
+    index: u64,
+    term: u64,
+    is_one_pc: bool,
+}
+
+fn group_row_changes(requests: Vec<Request>, cmd_info: CmdInfo) -> (HashMap<Key, RowChange>, bool) {
+    let request_count = requests.len();
     let mut changes: HashMap<Key, RowChange> = HashMap::default();
     // The changes about default cf was recorded here and need to be matched with a
     // `write` or a `lock`.
     let mut unmatched_default = HashMap::default();
     let mut has_ingest_sst = false;
-    for mut req in requests {
+    for (request_pos, mut req) in requests.into_iter().enumerate() {
         match req.get_cmd_type() {
             CmdType::IngestSst => {
                 has_ingest_sst = true;
@@ -250,7 +266,59 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                     CF_WRITE => {
                         if let Ok(ts) = key.decode_ts() {
                             let key = key.truncate_ts().unwrap();
-                            let row = changes.entry(key).or_default();
+                            let entry = changes.entry(key);
+                            if let std::collections::hash_map::Entry::Occupied(ref occupied) = entry
+                            {
+                                if let Some(KeyOp::Put(prev_ts, prev_value)) =
+                                    occupied.get().write.as_ref()
+                                {
+                                    let prev_write = WriteRef::parse(prev_value).ok();
+                                    let new_write = WriteRef::parse(&value).ok();
+                                    let prev_write_type =
+                                        prev_write.as_ref().map(|write| write.write_type);
+                                    let prev_start_ts =
+                                        prev_write.as_ref().map(|write| write.start_ts);
+                                    let new_write_type =
+                                        new_write.as_ref().map(|write| write.write_type);
+                                    let new_start_ts =
+                                        new_write.as_ref().map(|write| write.start_ts);
+                                    let same_mvcc_key = *prev_ts == Some(ts);
+                                    error!("resolved_ts duplicate CF_WRITE for one row in a raft command";
+                                        "region_id" => cmd_info.region_id,
+                                        "index" => cmd_info.index,
+                                        "term" => cmd_info.term,
+                                        "is_one_pc" => cmd_info.is_one_pc,
+                                        "request_pos" => request_pos,
+                                        "request_count" => request_count,
+                                        "key" => log_wrappers::Value::key(occupied.key().as_encoded()),
+                                        "prev_commit_ts" => ?prev_ts,
+                                        "prev_write_type" => ?prev_write_type,
+                                        "prev_start_ts" => ?prev_start_ts,
+                                        "new_commit_ts" => ts,
+                                        "new_write_type" => ?new_write_type,
+                                        "new_start_ts" => ?new_start_ts,
+                                        "same_mvcc_key" => same_mvcc_key,
+                                    );
+                                    // The panic hook may exit before the preceding log is flushed.
+                                    panic!(
+                                        "resolved_ts duplicate CF_WRITE: region_id={} index={} term={} request_pos={}/{} key={} prev=({:?}, {:?}, {:?}) new=({:?}, {:?}, {:?}) same_mvcc_key={}",
+                                        cmd_info.region_id,
+                                        cmd_info.index,
+                                        cmd_info.term,
+                                        request_pos,
+                                        request_count,
+                                        log_wrappers::Value::key(occupied.key().as_encoded()),
+                                        prev_ts,
+                                        prev_write_type,
+                                        prev_start_ts,
+                                        ts,
+                                        new_write_type,
+                                        new_start_ts,
+                                        same_mvcc_key,
+                                    );
+                                }
+                            }
+                            let row = entry.or_default();
                             assert!(row.write.is_none());
                             row.write = Some(KeyOp::Put(Some(ts), value));
                         }
@@ -361,9 +429,39 @@ mod tests {
         },
     };
     use tikv_kv::Modify;
-    use txn_types::{Key, LockType, WriteType};
+    use txn_types::{Key, LockType, Write, WriteType};
 
-    use super::{ChangeLog, ChangeRow, group_row_changes};
+    use super::{ChangeLog, ChangeRow, CmdInfo, group_row_changes};
+
+    #[test]
+    #[should_panic(expected = "region_id=42 index=7 term=3 request_pos=1/2")]
+    fn test_duplicate_write_panic_includes_raft_command_context() {
+        let key = Key::from_raw(b"duplicate-write");
+        let requests = [
+            (2, Write::new(WriteType::Put, 1.into(), None)),
+            (4, Write::new(WriteType::Put, 3.into(), None)),
+        ]
+        .into_iter()
+        .map(|(commit_ts, write)| {
+            Modify::Put(
+                "write",
+                key.clone().append_ts(commit_ts.into()),
+                write.as_ref().to_bytes(),
+            )
+            .into()
+        })
+        .collect();
+
+        group_row_changes(
+            requests,
+            CmdInfo {
+                region_id: 42,
+                index: 7,
+                term: 3,
+                is_one_pc: false,
+            },
+        );
+    }
 
     #[test]
     fn test_cmd_encode() {
@@ -374,7 +472,7 @@ mod tests {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::IngestSst);
         reqs.push(req);
-        let (changes, has_ingest_sst) = group_row_changes(reqs);
+        let (changes, has_ingest_sst) = group_row_changes(reqs, Default::default());
         assert_eq!(has_ingest_sst, true);
         assert!(ChangeLog::encode_rows(changes, false).is_empty());
 
@@ -402,7 +500,7 @@ mod tests {
             .into_iter()
             .flat_map(|m| {
                 let reqs: Vec<Request> = m.into_iter().map(Into::into).collect();
-                let (changes, has_ingest_sst) = group_row_changes(reqs);
+                let (changes, has_ingest_sst) = group_row_changes(reqs, Default::default());
                 assert_eq!(has_ingest_sst, false);
                 ChangeLog::encode_rows(changes, false)
             })
@@ -519,7 +617,7 @@ mod tests {
             .into_iter()
             .flat_map(|m| {
                 let reqs = m.into_iter().map(Into::into).collect();
-                let (changes, has_ingest_sst) = group_row_changes(reqs);
+                let (changes, has_ingest_sst) = group_row_changes(reqs, Default::default());
                 assert_eq!(has_ingest_sst, false);
                 ChangeLog::encode_rows(changes, true)
             })
