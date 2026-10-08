@@ -356,6 +356,13 @@ pub struct SnapContext<'a> {
     // it will set this field to get the extra region snapshot
     // in lookup phase.
     pub extra_region_override: Option<ExtraRegionOverride>,
+
+    /// The absolute deadline for this snapshot request, inherited from the
+    /// caller's original request deadline (e.g. `Storage::get_deadline`).
+    /// If set, `snapshot()` bounds acquisition using this deadline's
+    /// remaining duration, rather than reconstructing a fresh timeout
+    /// window from `pb_ctx.max_execution_duration_ms`.
+    pub deadline: Option<tikv_util::deadline::Deadline>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -745,10 +752,35 @@ pub fn snapshot<E: Engine>(
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
+
+    // Prefer the caller's original deadline (threaded through SnapContext
+    // from Storage::get_deadline) so we bound acquisition using the
+    // *remaining* budget, not a freshly restarted one. Without this, a
+    // request that already spent most of its budget before reaching
+    // snapshot acquisition would wrongly be granted a full new timeout
+    // window here. Fall back to reconstructing one from
+    // pb_ctx.max_execution_duration_ms only for callers that don't yet
+    // pass a deadline through SnapContext.
+    let remaining = match ctx.deadline {
+        Some(deadline) => deadline.remaining_duration(),
+        None => {
+            let max_execution_duration_ms = ctx.pb_ctx.max_execution_duration_ms;
+            let execution_duration_limit = if max_execution_duration_ms == 0 {
+                tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT
+            } else {
+                std::time::Duration::from_millis(max_execution_duration_ms)
+            };
+            tikv_util::deadline::Deadline::from_now(execution_duration_limit).remaining_duration()
+        }
+    };
+
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        let result = val.await;
+        let result = match tikv_util::future::async_timeout(val, remaining).await {
+            Ok(result) => result,
+            Err(_) => Err(Error::from(ErrorInner::Timeout(remaining))),
+        };
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
@@ -1495,5 +1527,129 @@ mod unit_tests {
                 .collect::<Vec<Modify>>(),
             expect_requests
         )
+    }
+}
+
+#[cfg(test)]
+mod snapshot_timeout_tests {
+
+    use kvproto::kvrpcpb::Context;
+
+    use super::*;
+    use crate::btree_engine::BTreeEngine;
+
+    /// An engine whose `async_snapshot` never completes, simulating a
+    /// raftstore callback that's never invoked (e.g. lost leadership,
+    /// dropped propose, stuck queue).
+    #[derive(Clone)]
+    struct HangingEngine {
+        base: BTreeEngine,
+    }
+
+    impl HangingEngine {
+        fn new() -> Self {
+            Self {
+                base: BTreeEngine::default(),
+            }
+        }
+    }
+
+    impl Engine for HangingEngine {
+        type Snap = <BTreeEngine as Engine>::Snap;
+        type Local = <BTreeEngine as Engine>::Local;
+
+        fn kv_engine(&self) -> Option<Self::Local> {
+            self.base.kv_engine()
+        }
+
+        fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+            self.base.modify_on_kv_engine(region_modifies)
+        }
+
+        type SnapshotRes = std::future::Pending<Result<Self::Snap>>;
+        fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
+            std::future::pending()
+        }
+
+        type IMSnap = Self::Snap;
+        type IMSnapshotRes = Self::SnapshotRes;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
+        }
+
+        type WriteRes = <BTreeEngine as Engine>::WriteRes;
+        fn async_write(
+            &self,
+            ctx: &Context,
+            batch: WriteData,
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
+            self.base.async_write(ctx, batch, subscribed, on_applied)
+        }
+    }
+
+    #[test]
+    fn test_snapshot_times_out_instead_of_hanging() {
+        let mut engine = HangingEngine::new();
+        let mut pb_ctx = Context::default();
+        pb_ctx.set_max_execution_duration_ms(50);
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        // Run under `block_on`, not a Tokio runtime, to prove the fix works
+        // under the same executor-agnostic conditions real callers use
+        // (YATP read pools, `block_on` in GC), not just under Tokio.
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
+
+        match outcome {
+            Err(e) => match *e.0 {
+                ErrorInner::Timeout(_) => {}
+                other => panic!("expected ErrorInner::Timeout, got: {:?}", other),
+            },
+            Ok(_) => panic!("expected snapshot() to time out, but it returned Ok"),
+        }
+    }
+
+    #[test]
+    fn test_snapshot_succeeds_within_deadline() {
+        let mut engine = BTreeEngine::default();
+        let mut pb_ctx = Context::default();
+        pb_ctx.set_max_execution_duration_ms(5_000);
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
+
+        assert!(
+            outcome.is_ok(),
+            "expected snapshot() to succeed within the deadline, got: {:?}",
+            outcome
+        );
+    }
+
+    #[test]
+    fn test_snapshot_uses_default_deadline_when_unset() {
+        let mut engine = BTreeEngine::default();
+        let pb_ctx = Context::default();
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
+
+        assert!(
+            outcome.is_ok(),
+            "expected snapshot() to succeed under the default (24h) deadline, got: {:?}",
+            outcome
+        );
     }
 }
