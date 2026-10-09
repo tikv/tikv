@@ -160,6 +160,21 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   warnings/errors are suppressed, although referenced columns may still be
   eagerly decoded; when unavailable, the existing eager path and SQL-mode
   warning/error behavior are preserved.
+- Full-sampling Analyze requests with `ndv_rate` below 1 select NDV rows
+  after MVCC visibility checks and before filling column vectors. Histogram
+  rows come from the selected rows: Bernoulli sampling keeps each at
+  `sample_rate / ndv_rate`, and fixed-size reservoirs see only selected rows.
+  Scan batches count skipped rows and remain bounded by visible rows.
+  Sampled Analyze charges background read bandwidth for all scanned KV bytes,
+  including rows not selected for NDV.
+- Sampled responses set `RowSampleCollector.ndv_sample_count`, including zero.
+  `count` counts all visible rows. TiKV scales NULL counts and sizes by the
+  actual visible-row / selected-row ratio when serializing the response, after
+  any batch merges. TiDB adds these population estimates as usual.
+  Each FMSketch keeps disjoint singleton and repeated hash sets under one mask
+  and size limit. TiDB estimates NDV after merging the sketches. Missing
+  `ndv_rate` or a rate of one keeps the full-input path and omits
+  `ndv_sample_count`.
 
 ## Start Here
 
