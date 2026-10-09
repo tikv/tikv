@@ -702,9 +702,14 @@ pub fn record_request_source_metrics(source: String, resource_group: String, dur
             .or_insert_with_key(|k| LocalRequestSourceMetrics::new(&k.0, &k.1));
         metrics.count.inc();
         metrics.duration_us.inc_by(duration.as_micros() as u64);
+        // The clock is shared by every entry, so flush them all: a group whose
+        // requests rarely coincide with the expiry would otherwise accumulate
+        // until it did and then appear as a spike.
         if need_flush {
-            metrics.count.flush();
-            metrics.duration_us.flush();
+            for metrics in map.values() {
+                metrics.count.flush();
+                metrics.duration_us.flush();
+            }
         }
     });
 }
