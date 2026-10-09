@@ -245,10 +245,34 @@ impl<Res> BaseSubscriber<Res> {
         check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some()
     }
 
-    /// Synchronous version of `result`. It cannot be called concurrently with
-    /// another `try_result`, `take_result` or `result`.
+    /// Synchronous version of `result`, moving the payload out.
+    ///
+    /// Takes `&mut self` rather than `&self`. The payload lives behind an
+    /// `UnsafeCell` (see [`try_result`](Self::try_result)), so the borrow
+    /// checker cannot see into it on its own; requiring a unique borrow of
+    /// `self` here is what lets the borrow checker reject calling
+    /// `take_result` while a reference returned by `try_result` is still
+    /// alive. Previously both methods took `&self`, so the following
+    /// borrow-then-move-out sequence compiled and dangled `borrowed` once
+    /// the taken value was dropped (see
+    /// [issue #20096](https://github.com/tikv/tikv/issues/20096)); it is
+    /// now rejected at compile time:
+    ///
+    /// ```compile_fail
+    /// # use kvproto::raft_cmdpb::RaftCmdResponse;
+    /// # use raftstore_v2::router::build_any_channel;
+    /// let (channel, mut subscriber) = build_any_channel(Box::new(|_| {}));
+    /// channel.set_result((RaftCmdResponse::default(), None));
+    ///
+    /// let borrowed = subscriber.try_result().unwrap();
+    /// let taken = subscriber.take_result(); // error[E0502]: cannot borrow
+    ///                                        // `subscriber` as mutable
+    ///                                        // because it is also borrowed
+    ///                                        // as immutable
+    /// drop((borrowed, taken));
+    /// ```
     #[inline]
-    pub fn take_result(&self) -> Option<Res> {
+    pub fn take_result(&mut self) -> Option<Res> {
         // Acquire: pair with set_result's AcqRel; Relaxed races on UnsafeCell.
         let e = self.core.event.load(Ordering::Acquire);
         if check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some() {
@@ -260,8 +284,10 @@ impl<Res> BaseSubscriber<Res> {
         }
     }
 
-    /// Return an reference of the result. It be called concurrently with
-    /// other `try_result`.
+    /// Return a reference of the result. It can be called concurrently with
+    /// other `try_result` calls, and with `take_result` as long as no
+    /// reference returned from here is still borrowed (the borrow checker
+    /// enforces the latter, since `take_result` now requires `&mut self`).
     pub fn try_result(&self) -> Option<&Res> {
         if self.has_result() {
             unsafe { (*self.core.res.get()).as_ref() }
@@ -843,6 +869,31 @@ mod tests {
         assert!(block_on(stream.next()).is_none());
     }
 
+    /// Regression test for #20096: a `try_result` borrow that has already
+    /// ended does not stop a later `take_result` on the same subscriber
+    /// (the sequence the fix still allows), while the borrow-then-take
+    /// sequence from the issue no longer compiles at all (see the
+    /// `compile_fail` example on `BaseSubscriber::take_result`).
+    #[test]
+    fn test_take_result_after_try_result_borrow_ends() {
+        let (chan, mut sub) = QueryResChannel::pair();
+        let expected = QueryResult::Response(RaftCmdResponse::default());
+        chan.set_result(expected.clone());
+
+        {
+            let borrowed = sub.try_result().unwrap();
+            assert_eq!(borrowed, &expected);
+            // `borrowed` goes out of scope here, releasing the immutable
+            // borrow of `sub` before `take_result` needs a unique one.
+        }
+        assert_eq!(sub.take_result(), Some(expected));
+        // The payload has been moved out; a further `try_result` correctly
+        // reports it is gone (unlike `take_result`, which asserts the
+        // payload is still present and is documented as callable only
+        // once the event has fired).
+        assert!(sub.try_result().is_none());
+    }
+
     /// Miri regression: concurrent `set_result` + sync `take_result` /
     /// `has_result`.
     ///
@@ -868,7 +919,7 @@ mod tests {
         let iterations = if cfg!(miri) { 16 } else { 64 };
         let done = Arc::new(AtomicUsize::new(0));
         for i in 0..iterations {
-            let (chan, sub) = QueryResChannel::pair();
+            let (chan, mut sub) = QueryResChannel::pair();
             let expected = QueryResult::Read(ReadResponse::new(i as u64));
             let expected2 = expected.clone();
             let done2 = done.clone();
