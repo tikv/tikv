@@ -153,6 +153,14 @@ High-risk contracts:
 - Max-ts relational validation must use the same whole-millisecond precision as
   runtime TSO enforcement.
 - Memory quota and pending-write thresholds must remain operationally effective.
+- `StorageConfigManger` and `TxnScheduler` must not carry hand-written
+  `unsafe impl Send/Sync`: their thread-safety is compiler-derived from their
+  fields, so the configurable DB handle `K` must be `Send + Sync` to implement
+  `ConfigManager`. `TxnScheduler` stores no engine value (engines live in
+  scheduler-thread TLS); its `PhantomData<fn() -> E>` marker keeps the engine
+  type parameter without inheriting `E`'s auto traits. Revisit the marker if
+  the scheduler ever starts retaining an engine. Compile-time regression
+  assertions live in `src/storage/config_manager.rs` tests.
 
 ## Observability And Operational Signals
 
