@@ -891,7 +891,7 @@ impl ResourceGroupManager {
 
     /// Whether an overload has been detected and attributed to some group.
     pub fn has_noisy_groups(&self) -> bool {
-        self.has_noisy_groups.load(Ordering::Relaxed)
+        self.has_noisy_groups.load(Ordering::Acquire)
     }
 
     /// The period both control loops should run at, from the last tick's
@@ -1071,23 +1071,30 @@ impl ResourceGroupManager {
     /// unreported, so that switching the gates off online clears what clients
     /// already know instead of leaving the groups pinned.
     pub fn noisy_group_names(&self) -> Vec<String> {
-        if !self.reports_noisy_groups() || !self.has_noisy_groups.load(Ordering::Relaxed) {
+        if !self.reports_noisy_groups() || !self.has_noisy_groups() {
             return Vec::new();
         }
         self.noisy_groups.read().iter().cloned().collect()
     }
 
-    /// The only writer, so `has_noisy_groups` cannot drift from the set.
+    /// The flag is stored while the set's write lock is held, with release
+    /// ordering: the detection tick and the read pool's reset run on different
+    /// threads, and a reader that sees the flag must then find a set that
+    /// agrees with it. A stale flag would skip the busy threshold on an
+    /// unattributed overload or report nobody noisy while groups are still
+    /// held.
     fn set_noisy_groups(&self, groups: HashSet<String>) {
+        let mut set = self.noisy_groups.write();
         let empty = groups.is_empty();
-        *self.noisy_groups.write() = groups;
-        self.has_noisy_groups.store(!empty, Ordering::Relaxed);
+        *set = groups;
+        self.has_noisy_groups.store(!empty, Ordering::Release);
     }
 
     /// Ends the episode. Callers must first check nothing is `is_held`.
     fn clear_noisy_groups(&self) {
-        self.noisy_groups.write().clear();
-        self.has_noisy_groups.store(false, Ordering::Relaxed);
+        let mut set = self.noisy_groups.write();
+        set.clear();
+        self.has_noisy_groups.store(false, Ordering::Release);
     }
 
     /// The biggest movers, taken until they cover the overshoot.
@@ -2053,6 +2060,53 @@ pub(crate) mod tests {
         // pinning the group.
         mgr.clear_noisy_groups();
         assert!(mgr.noisy_group_names().is_empty());
+    }
+
+    // The detection tick sets the group set while the read pool's reset clears
+    // it, from different threads. Whatever a reader observes, the flag and the
+    // set must agree, or the busy threshold is skipped on an unattributed
+    // overload.
+    #[test]
+    fn test_noisy_flag_agrees_with_set_under_concurrent_set_and_clear() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let setter = {
+            let (mgr, stop) = (mgr.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    mgr.set_noisy_groups(HashSet::from(["tenant1".to_owned()]));
+                    mgr.clear_noisy_groups();
+                }
+            })
+        };
+        let clearer = {
+            let (mgr, stop) = (mgr.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    mgr.clear_noisy_groups();
+                }
+            })
+        };
+
+        for _ in 0..20_000 {
+            // Take the read lock first so the writer cannot slip between the two
+            // observations; the invariant is about the pair the writer publishes.
+            let set = mgr.noisy_groups.read();
+            let flag = mgr.has_noisy_groups();
+            assert_eq!(
+                flag,
+                !set.is_empty(),
+                "flag {flag} disagrees with set {set:?}"
+            );
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        setter.join().unwrap();
+        clearer.join().unwrap();
     }
 
     #[test]
