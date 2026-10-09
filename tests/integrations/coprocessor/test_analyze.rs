@@ -487,3 +487,204 @@ fn test_batched_full_sampling_responses() {
         }
     }
 }
+
+// A background batched request is charged to `bg-egress-limit` once, for the
+// data its response returns: tasks of the same request must not wait at
+// admission for each other's buffered output, and a request that times out
+// returns no data and must not be charged, whether or not results are merged
+// and whether tasks run serially or concurrently.
+#[test]
+fn test_background_batch_egress_charged_once_returned() {
+    use std::{sync::Arc, time::Duration};
+
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+    use raftstore::store::{ReadStats, WriteStats};
+    use resource_control::ResourceGroupManager;
+    use resource_metering::ResourceTagFactory;
+    use tikv::{
+        config::UnifiedReadPoolConfig,
+        coprocessor::Endpoint,
+        read_pool::{ReadPool, build_yatp_read_pool},
+        server::Config,
+        storage::{Engine, kv::FlowStatsReporter},
+    };
+    use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, yatp_pool::CleanupMethod};
+
+    #[derive(Clone)]
+    struct NoopReporter;
+    impl FlowStatsReporter for NoopReporter {
+        fn report_read_stats(&self, _: ReadStats) {}
+        fn report_write_stats(&self, _: WriteStats) {}
+    }
+
+    fn new_endpoint<E: Engine>(
+        _: &E,
+        read_pool: &ReadPool,
+        manager: Arc<ResourceGroupManager>,
+    ) -> Endpoint<E> {
+        Endpoint::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        )
+    }
+
+    fn returned_bytes(resp: &kvproto::coprocessor::Response) -> u64 {
+        resp.get_data().len() as u64
+            + resp
+                .get_batch_responses()
+                .iter()
+                .map(|r| r.get_data().len() as u64)
+                .sum::<u64>()
+    }
+
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+    let product = ProductTable::new();
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (store, ..) = init_data_with_engine_and_commit(ctx, raft_engine, &product, &data, true);
+
+    // The region is split into [1, 2], [4, 5], [9, 10].
+    let region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(1, 1).start).as_encoded());
+    let split_key = Key::from_raw(&product.get_record_range(3, 3).start);
+    cluster.must_split(&region, split_key.as_encoded());
+    let second_region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(4, 4).start).as_encoded());
+    let second_split_key = Key::from_raw(&product.get_record_range(8, 8).start);
+    cluster.must_split(&second_region, second_split_key.as_encoded());
+
+    let mut build_req = |allow_merge: bool, execute_serially: bool, timeout_ms: u64| -> Request {
+        let mut col_req = AnalyzeColumnsReq::default();
+        col_req.set_columns_info(product.columns_info().into());
+        col_req.set_sample_rate(1.0);
+        col_req.set_sketch_size(1000);
+        let mut analyze_req = AnalyzeReq::default();
+        analyze_req.set_tp(AnalyzeType::TypeFullSampling);
+        analyze_req.set_col_req(col_req);
+
+        let top_range = product.get_record_range(1, 2);
+        let top_region = cluster.get_region(Key::from_raw(&top_range.start).as_encoded());
+        let mut top_ctx = Context::default();
+        top_ctx.set_region_id(top_region.get_id());
+        top_ctx.set_region_epoch(top_region.get_region_epoch().clone());
+        top_ctx.set_peer(cluster.leader_of_region(top_region.get_id()).unwrap());
+        // `ddl` is a background task type of the default group below.
+        top_ctx.set_request_source("internal_ddl".to_owned());
+        top_ctx.set_max_execution_duration_ms(timeout_ms);
+
+        let mut req = Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze_req.write_to_bytes().unwrap());
+        req.set_ranges(vec![top_range].into());
+        req.set_start_ts(100);
+        req.set_context(top_ctx);
+        req.set_allow_batch_task_data_merge(allow_merge);
+        req.set_execute_batch_tasks_serially(execute_serially);
+        for (task_id, (start, end)) in [(1, (4, 5)), (2, (9, 10))] {
+            let range = product.get_record_range(start, end);
+            let batch_region = cluster.get_region(Key::from_raw(&range.start).as_encoded());
+            let mut task = StoreBatchTask::new();
+            task.set_region_id(batch_region.get_id());
+            task.set_region_epoch(batch_region.get_region_epoch().clone());
+            task.set_peer(cluster.leader_of_region(batch_region.get_id()).unwrap());
+            task.set_ranges(vec![range].into());
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+        req
+    };
+
+    for (allow_merge, execute_serially) in
+        [(false, true), (false, false), (true, true), (true, false)]
+    {
+        let case = format!("allow_merge={allow_merge} execute_serially={execute_serially}");
+        // A fresh background limiter per case, so cases do not share debt. At
+        // 64 B/s one task's response is several seconds of debt, much longer
+        // than the request deadline.
+        let manager = Arc::new(ResourceGroupManager::default());
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(64.0);
+
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            NoopReporter,
+            store.get_engine(),
+            None,
+            Some(manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let engine = store.get_engine();
+        let endpoint = new_endpoint(&engine, &read_pool, manager);
+
+        // With no debt yet, the whole request is returned and charged exactly
+        // the data it returns.
+        let before = bg_limiter.egress_bytes_charged_for_test();
+        let resp = handle_request(&endpoint, build_req(allow_merge, execute_serially, 1000));
+        assert!(!resp.has_region_error(), "{case}: {resp:?}");
+        assert!(resp.get_other_error().is_empty(), "{case}: {resp:?}");
+        assert!(!resp.get_data().is_empty(), "{case}");
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 2, "{case}");
+        for batch_resp in batch_resps {
+            assert!(!batch_resp.has_region_error(), "{case}: {batch_resp:?}");
+            assert!(batch_resp.get_other_error().is_empty(), "{case}");
+            assert!(
+                batch_resp.get_data_merged_into_response() || !batch_resp.get_data().is_empty(),
+                "{case}: {batch_resp:?}"
+            );
+        }
+        let charged = bg_limiter.egress_bytes_charged_for_test() - before;
+        assert_eq!(charged, returned_bytes(&resp), "{case}");
+        assert!(
+            bg_limiter.admission_delay(true) > Duration::from_secs(1),
+            "{case}"
+        );
+
+        // A retry waits behind that debt, gives up at its deadline without
+        // returning data, and is not charged.
+        for _ in 0..2 {
+            let before = bg_limiter.egress_bytes_charged_for_test();
+            let started_at = Instant::now();
+            let resp = handle_request(&endpoint, build_req(allow_merge, execute_serially, 200));
+            assert!(
+                resp.get_region_error().has_server_is_busy(),
+                "{case}: {resp:?}"
+            );
+            assert_eq!(
+                resp.get_region_error().get_server_is_busy().get_reason(),
+                "deadline is exceeded",
+                "{case}"
+            );
+            assert!(
+                started_at.saturating_elapsed() < Duration::from_secs(10),
+                "{case}"
+            );
+            assert_eq!(bg_limiter.egress_bytes_charged_for_test(), before, "{case}");
+        }
+    }
+}
