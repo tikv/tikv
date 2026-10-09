@@ -186,6 +186,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
         db,
         None,
         Arc::new(RwLock::new(HashSet::default())),
+        None,
     );
 
     let mut ctx = Context::default();
@@ -221,6 +222,7 @@ fn bench_async_write(b: &mut test::Bencher) {
         db,
         None,
         Arc::new(RwLock::new(HashSet::default())),
+        None,
     );
 
     let mut ctx = Context::default();

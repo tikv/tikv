@@ -242,7 +242,9 @@ fn handle_qe_response(
         }
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
-            ErrorInner::Evaluate(EvaluateError::DeadlineExceeded) => Err(Error::DeadlineExceeded),
+            ErrorInner::Evaluate(EvaluateError::DeadlineExceeded) => {
+                Err(Error::DeadlineExceeded(false))
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut sel_resp = SelectResponse::default();
@@ -275,7 +277,9 @@ fn handle_qe_stream_response(
         Ok((None, finished)) => Ok((None, finished)),
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
-            ErrorInner::Evaluate(EvaluateError::DeadlineExceeded) => Err(Error::DeadlineExceeded),
+            ErrorInner::Evaluate(EvaluateError::DeadlineExceeded) => {
+                Err(Error::DeadlineExceeded(false))
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut s_resp = StreamResponse::default();
@@ -316,7 +320,7 @@ mod tests {
         // Evaluate Error
         let err = CommonError::from(EvaluateError::DeadlineExceeded);
         let res = handle_qe_response(Err(err), false, None);
-        assert!(matches!(res, Err(Error::DeadlineExceeded)));
+        assert!(matches!(res, Err(Error::DeadlineExceeded(_))));
 
         let err = CommonError::from(EvaluateError::InvalidCharacterString {
             charset: "test".into(),

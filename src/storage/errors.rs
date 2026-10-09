@@ -11,6 +11,7 @@ use std::{
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
+use resource_control::busy_reason;
 use thiserror::Error;
 use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
 use txn_types::{KvPair, KvPairEntry, TimeStamp, ValueEntry};
@@ -48,6 +49,10 @@ pub enum ErrorInner {
 
     #[error("scheduler is too busy")]
     SchedTooBusy,
+
+    /// Shed by a full queue. Split from `SchedTooBusy` only to carry `noisy`.
+    #[error("a request queue is too busy")]
+    QueueTooBusy { noisy: bool },
 
     #[error("gc worker is too busy")]
     GcWorkerTooBusy,
@@ -152,7 +157,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
-            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::SchedTooBusy | ErrorInner::QueueTooBusy { .. } => {
+                error_code::storage::SCHED_TOO_BUSY
+            }
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
@@ -322,6 +329,14 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        Error(box ErrorInner::QueueTooBusy { noisy }) => {
+            let mut err = errorpb::Error::default();
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            // Same base reason, so a client without the marker is unaffected.
+            server_is_busy_err.set_reason(busy_reason(SCHEDULER_IS_BUSY, *noisy));
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }

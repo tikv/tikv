@@ -21,11 +21,16 @@ pub enum Error {
     #[error("Key is locked (will clean up) {0:?}")]
     Locked(kvproto::kvrpcpb::LockInfo),
 
+    /// True when the requesting group is itself the noisy one, so the
+    /// client can back off instead of retrying the same overloaded leader at
+    /// once. A deadline is usually spent queueing, which the blamed tenant
+    /// caused.
     #[error("Coprocessor task terminated due to exceeding the deadline")]
-    DeadlineExceeded,
+    DeadlineExceeded(bool),
 
+    /// True when the requesting group is itself the noisy one.
     #[error("Coprocessor task canceled due to exceeding max pending tasks")]
-    MaxPendingTasksExceeded,
+    MaxPendingTasksExceeded(bool),
 
     #[error("Coprocessor task canceled due to exceeding memory quota")]
     MemoryQuotaExceeded,
@@ -114,7 +119,9 @@ impl From<TxnError> for Error {
 
 impl From<tikv_util::deadline::DeadlineError> for Error {
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
-        Error::DeadlineExceeded
+        // No request context here, so blame cannot be decided; the sites that
+        // know pass it explicitly.
+        Error::DeadlineExceeded(false)
     }
 }
 
@@ -138,13 +145,27 @@ impl From<MemoryQuotaExceeded> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// Puts the request's own verdict on a deadline error that was converted
+    /// without one, such as the executor's or the concurrency limiter's. Other
+    /// errors pass through unchanged.
+    pub fn blame_deadline(self, noisy: bool) -> Error {
+        match self {
+            Error::DeadlineExceeded(_) => Error::DeadlineExceeded(noisy),
+            other => other,
+        }
+    }
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::Region(e) => e.error_code(),
             Error::Locked(_) => error_code::coprocessor::LOCKED,
-            Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
-            Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
+            Error::DeadlineExceeded(_) => error_code::coprocessor::DEADLINE_EXCEEDED,
+            Error::MaxPendingTasksExceeded(_) => {
+                error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED
+            }
             Error::MemoryQuotaExceeded => error_code::coprocessor::MEMORY_QUOTA_EXCEEDED,
             Error::InvalidMaxTsUpdate(_) => error_code::coprocessor::INVALID_MAX_TS_UPDATE,
             Error::DefaultNotFound { .. } => error_code::coprocessor::DEFAULT_NOT_FOUND,

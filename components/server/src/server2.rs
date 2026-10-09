@@ -1701,7 +1701,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         ));
         let txn_extra_scheduler =
             cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
-        let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        let mut engine = RaftKv2::new(
+            router.clone(),
+            region_info_accessor.region_leaders(),
+            self.resource_manager.clone(),
+        );
         // Set txn extra scheduler immediately to make sure every clone has the
         // scheduler.
         engine.set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));

@@ -24,7 +24,7 @@ use tokio::{sync::Semaphore, task::yield_now};
 use super::{
     Error, HandlerOutput, HandlerOutputState, MergeableResult, ResponseMaterializationFailure,
     TracedResponse,
-    endpoint::{make_error_batch_response, make_error_response},
+    endpoint::{make_error_batch_response, make_error_response, read_pool_spawn_error},
     metrics::record_coprocessor_response_size,
 };
 use crate::read_pool::ReadPoolHandle;
@@ -136,13 +136,13 @@ impl BatchMergeFinalizer {
         // Error returns here and below drop the completed outputs along with
         // their execution details; the endpoint refills only the top task's
         // scan and time details from the tracker. Accepted for atomic retries.
-        if submission.await.is_err() {
-            return make_error_response(Error::MaxPendingTasksExceeded).into();
+        if let Err(e) = submission.await {
+            return make_error_response(read_pool_spawn_error(e)).into();
         }
 
         match response_rx.await {
             Ok(response) => account_returned_response(response, &returned_response_tag, tracker),
-            Err(_) => make_error_response(Error::MaxPendingTasksExceeded).into(),
+            Err(_) => make_error_response(Error::MaxPendingTasksExceeded(false)).into(),
         }
     }
 }
@@ -215,10 +215,12 @@ pub(super) fn serial_batch_task_budget(request_budget: Duration, task_count: usi
 ///
 /// The outputs of the tasks that complete in time are kept. The first task that
 /// does not is abandoned, and it and the tasks after it, which never start, are
-/// answered as deadline exceeded, so the client retries exactly those.
+/// answered as deadline exceeded, so the client retries exactly those. `noisy`
+/// is the request's verdict, which marks those answers for backoff.
 pub(super) fn serial_batch_task_outputs<F>(
     tasks: Vec<(u64, F)>,
     deadline: Deadline,
+    noisy: bool,
 ) -> impl Stream<Item = BatchTaskOutput>
 where
     F: Future<Output = BatchTaskOutput> + Send,
@@ -237,13 +239,13 @@ where
             match completed {
                 Some(batch_output) => yield batch_output,
                 None => {
-                    yield deadline_exceeded_output(task_id);
+                    yield deadline_exceeded_output(task_id, noisy);
                     break;
                 }
             }
         }
         for (task_id, _) in tasks {
-            yield deadline_exceeded_output(task_id);
+            yield deadline_exceeded_output(task_id, noisy);
         }
     }
 }
@@ -256,6 +258,7 @@ pub(super) async fn collect_batch_task_outputs_sequentially(
     top_output: impl Future<Output = HandlerOutput> + Send,
     batch_outputs: impl Stream<Item = BatchTaskOutput>,
     deadline: Deadline,
+    noisy: bool,
 ) -> (HandlerOutput, Vec<BatchTaskOutput>) {
     // Admission and queueing do not observe the task's deadline. Bound the
     // caller's wait too, just as the serial stream does for child tasks.
@@ -265,16 +268,17 @@ pub(super) async fn collect_batch_task_outputs_sequentially(
     } else {
         async_timeout(top_output, remaining).await.ok()
     };
-    let output = completed
-        .unwrap_or_else(|| HandlerOutput::ready(make_error_response(Error::DeadlineExceeded)));
+    let output = completed.unwrap_or_else(|| {
+        HandlerOutput::ready(make_error_response(Error::DeadlineExceeded(noisy)))
+    });
     (output, batch_outputs.collect().await)
 }
 
 /// The output of a batched task that the batch ran out of time for.
-fn deadline_exceeded_output(task_id: u64) -> BatchTaskOutput {
+fn deadline_exceeded_output(task_id: u64, noisy: bool) -> BatchTaskOutput {
     let mut response = coppb::StoreBatchTaskResponse::new();
     response.set_task_id(task_id);
-    make_error_batch_response(&mut response, Error::DeadlineExceeded);
+    make_error_batch_response(&mut response, Error::DeadlineExceeded(noisy));
     BatchTaskOutput {
         response: response.into(),
         mergeable_result: None,
@@ -865,12 +869,13 @@ mod tests {
             ),
         ];
         let deadline = Deadline::from_now(Duration::from_secs(60));
-        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline);
+        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline, false);
 
         let (_, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
             top,
             batch_outputs,
             deadline,
+            false,
         ));
 
         assert_eq!(batch_outputs.len(), 2);
@@ -887,12 +892,13 @@ mod tests {
             (4, future::ready(batch_output(4)).boxed()),
         ];
         let deadline = Deadline::from_now(Duration::from_millis(50));
-        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline);
+        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline, false);
 
         let (output, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
             top,
             batch_outputs,
             deadline,
+            false,
         ));
 
         // The completed task is kept; the running task and the one never
@@ -924,7 +930,8 @@ mod tests {
         )];
 
         let batch_outputs: Vec<_> = block_on(
-            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::ZERO)).collect(),
+            serial_batch_task_outputs(batch_tasks, Deadline::from_now(Duration::ZERO), false)
+                .collect(),
         );
 
         // No task starts once the deadline has passed.
@@ -934,6 +941,38 @@ mod tests {
             server_is_busy_reason(&batch_outputs[0]),
             "deadline is exceeded"
         );
+    }
+
+    // A blamed tenant's batch tasks that never start are marked for backoff,
+    // the same as its top response.
+    #[test]
+    fn test_a_noisy_tenants_serial_batch_deadlines_are_marked() {
+        let top = future::pending().boxed();
+        let batch_tasks = vec![(2, future::ready(batch_output(2)).boxed())];
+        let deadline = Deadline::from_now(Duration::ZERO);
+        let batch_outputs = serial_batch_task_outputs(batch_tasks, deadline, true);
+
+        let (output, batch_outputs) = block_on(collect_batch_task_outputs_sequentially(
+            top,
+            batch_outputs,
+            deadline,
+            true,
+        ));
+
+        let blamed_reason = format!(
+            "deadline is exceeded{}",
+            resource_control::NOISY_TENANT_REASON_SUFFIX
+        );
+        assert_eq!(
+            output
+                .response
+                .get_region_error()
+                .get_server_is_busy()
+                .reason,
+            blamed_reason
+        );
+        assert_eq!(batch_outputs.len(), 1);
+        assert_eq!(server_is_busy_reason(&batch_outputs[0]), blamed_reason);
     }
 
     #[test]

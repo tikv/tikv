@@ -103,6 +103,7 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
+    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
     time::{Instant, InstantExt, ThreadReadId, duration_to_ms, duration_to_sec},
 };
 use tracker::{
@@ -129,7 +130,7 @@ pub use self::{
     },
 };
 use crate::{
-    read_pool::{ReadPool, ReadPoolHandle},
+    read_pool::{ReadPool, ReadPoolError, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
@@ -847,6 +848,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group; bound it to a configured group here so
+        // the consumer can use it directly as a metric label.
+        let resource_group = match self.resource_manager.as_deref() {
+            Some(rm) => rm
+                .bounded_group_name(
+                    requests[0]
+                        .get_context()
+                        .get_resource_control_context()
+                        .get_resource_group_name(),
+                )
+                .into_owned(),
+            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+        };
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -930,7 +944,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                             continue;
                         }
                     };
@@ -977,6 +998,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             begin_instant,
                             source,
                             resource_priority,
+                            resource_group.clone(),
                         );
                         continue;
                     }
@@ -1021,6 +1043,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                                 Err(e) => {
@@ -1030,12 +1053,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                         }
                     }
                 }
@@ -1859,10 +1890,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             metadata,
             resource_limiter,
         );
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     // The entry point of the storage scheduler. Not only transaction commands need
@@ -2145,6 +2173,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group; bound it to a configured group here so
+        // the consumer can use it directly as a metric label.
+        let resource_group = match self.resource_manager.as_deref() {
+            Some(rm) => rm
+                .bounded_group_name(
+                    gets[0]
+                        .get_context()
+                        .get_resource_control_context()
+                        .get_resource_group_name(),
+                )
+                .into_owned(),
+            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+        };
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -2232,6 +2273,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -2248,6 +2290,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
@@ -2259,6 +2302,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 begin_instant,
                                 ctx.take_request_source(),
                                 resource_priority,
+                                resource_group.clone(),
                             );
                         }
                     }
@@ -3368,10 +3412,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_limiter,
         );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     fn read_pool_spawn_with_busy_check<Fut, T>(
@@ -3401,7 +3442,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         FuturesEither::Right(async move {
             read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
-                .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .map_err(read_pool_spawn_error)
                 .await?
         })
     }
@@ -3487,6 +3528,16 @@ pub struct DynamicConfigs {
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
     pub in_memory_peer_size_limit: Arc<AtomicU64>,
     pub in_memory_instance_size_limit: Arc<AtomicU64>,
+}
+
+/// Only the two load-shedding paths carry `noisy`; the rest stay plain.
+fn read_pool_spawn_error(err: ReadPoolError) -> Error {
+    match err {
+        ReadPoolError::UnifiedReadPoolFull { noisy } | ReadPoolError::Rejected { noisy } => {
+            Error::from(ErrorInner::QueueTooBusy { noisy })
+        }
+        _ => Error::from(ErrorInner::SchedTooBusy),
+    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -3907,6 +3958,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     );
 }
 
@@ -3978,7 +4030,8 @@ pub mod test_util {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
-                    Error(box ErrorInner::SchedTooBusy) => {}
+                    Error(box ErrorInner::SchedTooBusy)
+                    | Error(box ErrorInner::QueueTooBusy { .. }) => {}
                     e => panic!("unexpected error chain: {:?}, expect too busy", e),
                 },
                 x,
@@ -4336,6 +4389,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -4352,6 +4406,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
@@ -4471,6 +4526,37 @@ mod tests {
             types::{PessimisticLockKeyResult, PessimisticLockResults},
         },
     };
+
+    /// Both shedding paths must carry the verdict; nothing else may.
+    #[test]
+    fn test_read_pool_spawn_error_carries_the_noisy_verdict() {
+        let noisy_of = |err: ReadPoolError| match read_pool_spawn_error(err) {
+            Error(box ErrorInner::QueueTooBusy { noisy }) => Some(noisy),
+            _ => None,
+        };
+        assert_eq!(
+            noisy_of(ReadPoolError::UnifiedReadPoolFull { noisy: true }),
+            Some(true)
+        );
+        assert_eq!(
+            noisy_of(ReadPoolError::UnifiedReadPoolFull { noisy: false }),
+            Some(false)
+        );
+        assert_eq!(
+            noisy_of(ReadPoolError::Rejected { noisy: true }),
+            Some(true)
+        );
+        assert_eq!(
+            noisy_of(ReadPoolError::Rejected { noisy: false }),
+            Some(false)
+        );
+
+        // A cancelled task is not load shedding, so it stays plain.
+        assert!(matches!(
+            read_pool_spawn_error(ReadPoolError::Canceled(futures::channel::oneshot::Canceled)),
+            Error(box ErrorInner::SchedTooBusy)
+        ));
+    }
 
     #[test]
     fn test_prewrite_blocks_read() {

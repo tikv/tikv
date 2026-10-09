@@ -10920,6 +10920,162 @@ def LoadShedding() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Read Pool Rejections",
+                description="Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the queue capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` is neither: it counts requests that bypassed the estimated-wait gate because resource control owns the read queue for them, so it should rise as the other two fall.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_unified_read_pool_busy_threshold_rejected_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="busy-threshold-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_unified_read_pool_full_rejected_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="pool-full-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_unified_read_pool_busy_threshold_skipped_total",
+                            by_labels=["instance"],
+                        ).extra(" > 0"),
+                        legend_format="busy-threshold-skipped-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def ResourceGroups() -> RowPanel:
+    layout = Layout(title="Resource Groups")
+    # Request volume first, then latency at each point the request path
+    # attributes work to a group. Only the 99.99% series is shown: with one
+    # series per group, four per group made the panels unreadable. The others
+    # are hidden rather than removed, so they can be switched back on.
+    layout.row(
+        [
+            graph_panel(
+                title="gRPC resource group QPS",
+                description='The QPS of different resource groups of gRPC request. Grouped by `resource_group` rather than the `name` label, which carries the same value and is marked for deprecation. Note this is the one per-group series whose label is not passed through `ResourceGroupManager::bounded_group_name`, so an unconfigured name reaching it appears verbatim rather than collapsing to "default".',
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_resource_group_total",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="gRPC Message Duration by Resource Group",
+                description="End-to-end duration of gRPC requests, attributed to the resource group named on the request. Carries no `type` breakdown on purpose: crossing 72 request types with an unbounded group name would cost ~1.1M series for no diagnostic gain, so use the per-type panels in the gRPC row to identify a slow request kind and this one to find out whose it was.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_grpc_msg_duration_seconds_by_group",
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Coprocessor Request Duration by Resource Group",
+                description="Total coprocessor request duration per resource group, queueing included. The `req` breakdown is dropped to keep the cross product with the group name small.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_duration_seconds_by_group",
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Coprocessor Request Wait Duration by Resource Group",
+                description="Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Throttling a noisy group shows up here first, and separating the two is the reason this metric keeps its `type` label.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_wait_seconds_by_group",
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Storage Async Snapshot Duration by Resource Group",
+                description="Total async snapshot duration per resource group. The label is the group that issued the request, not the group responsible for the latency: raft traffic is invisible to resource control, so a group can be slow here while its own RU consumption looks modest. The three panels below split this total into where the time went.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
+                label_selectors=['type="snapshot"'],
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Storage Async Snapshot Duration (pure local read) by Resource Group",
+                description="Snapshots served by lease read, without involving raftstore. Read against the total snapshot panel to see what share of a group's reads took the read-index path at all -- pinning leaders moves reads into this panel and out of the two read-index ones.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
+                label_selectors=['type="snapshot_local_read"'],
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="ReadIndex Propose Wait by Resource Group",
+                description="Time a group's read-index request waited to be proposed, i.e. queueing on the raftstore FSM before the peer even sent it. Whether a read takes the read-index path at all is decided by region state -- leader lease validity, applied_term lag, an in-flight split or merge -- and none of those depend on who is asking, so this panel says which group paid the cost and never which group caused it. Query it per instance rather than fleet-wide: a fleet p99 of ~1ms routinely hides individual stores running 10-22ms.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
+                label_selectors=['type="snapshot_read_index_propose_wait"'],
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="ReadIndex Confirm by Resource Group",
+                description="Time from proposing a read index to being allowed to read: quorum acknowledgement plus the `ready_to_handle_read` gate, which also blocks on applied_term lagging and on an in-flight split or merge. It is not store_meta contention, so check batch-split activity before blaming a lock. Read it together with the panel beside it: a leader lease expiry is region-wide and pushes every group reading that region onto this path at once, so all groups on one instance rising together points at lease renewal or an FSM backlog, while a single group rising alone points at its own reads.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
+                label_selectors=['type="snapshot_read_index_confirm"'],
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Storage Async Write Duration by Resource Group",
+                description="Async write duration per resource group. Useful as a control: if a victim group is hurting here as well as on the read panels the cause is below resource control, and if only the read panels move the damage is on the read path.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
+                label_selectors=['type="write"'],
+                by_labels=["resource_group"],
+                hide_p99=True,
+                hide_avg=True,
+                hide_count=True,
+            ),
         ]
     )
     return layout.row_panel
@@ -11061,6 +11217,7 @@ dashboard = Dashboard(
         # Infrequently Used
         ResourceControl(),
         LoadShedding(),
+        ResourceGroups(),
         StatusServer(),
         Encryption(),
         TTL(),

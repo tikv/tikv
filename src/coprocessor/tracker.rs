@@ -83,6 +83,10 @@ pub struct Tracker<E: Engine> {
 
     req_tag: ReqTag,
 
+    // Already bounded to a configured group by the caller, so it is safe to use
+    // directly as a metric label.
+    resource_group: String,
+
     _phantom: PhantomData<fn() -> E>,
 }
 
@@ -90,7 +94,12 @@ impl<E: Engine> Tracker<E> {
     /// Initialize the tracker. Normally it is called outside future pool's
     /// factory context, because the future pool might be full and we need
     /// to wait it. This kind of wait time has to be recorded.
-    pub fn new(req_ctx: ReqContext, req_tag: ReqTag, slow_log_threshold: Duration) -> Self {
+    pub fn new(
+        req_ctx: ReqContext,
+        req_tag: ReqTag,
+        slow_log_threshold: Duration,
+        resource_group: String,
+    ) -> Self {
         let now = Instant::now();
         Tracker {
             request_begin_at: now,
@@ -109,6 +118,7 @@ impl<E: Engine> Tracker<E> {
             slow_log_threshold,
             req_ctx,
             req_tag,
+            resource_group,
             buckets: None,
             _phantom: PhantomData,
         }
@@ -340,11 +350,19 @@ impl<E: Engine> Tracker<E> {
         COPR_REQ_HISTOGRAM_STATIC
             .get(self.req_tag)
             .observe(time::duration_to_sec(self.req_lifetime));
+        COPR_REQ_DURATION_BY_GROUP
+            .with_label_values(&[&self.resource_group])
+            .observe(time::duration_to_sec(self.req_lifetime));
 
         // total wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_tag)
             .all
+            .observe(time::duration_to_sec(self.wait_time));
+        // Only `schedule` and `snapshot` are split out per group: they are the
+        // two waits a co-tenant can inflict, `all` is their sum plus suspend.
+        COPR_REQ_WAIT_TIME_BY_GROUP
+            .with_label_values(&[&self.resource_group, "all"])
             .observe(time::duration_to_sec(self.wait_time));
 
         // schedule wait time
@@ -352,11 +370,17 @@ impl<E: Engine> Tracker<E> {
             .get(self.req_tag)
             .schedule
             .observe(time::duration_to_sec(self.schedule_wait_time));
+        COPR_REQ_WAIT_TIME_BY_GROUP
+            .with_label_values(&[&self.resource_group, "schedule"])
+            .observe(time::duration_to_sec(self.schedule_wait_time));
 
         // snapshot wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_tag)
             .snapshot
+            .observe(time::duration_to_sec(self.snapshot_wait_time));
+        COPR_REQ_WAIT_TIME_BY_GROUP
+            .with_label_values(&[&self.resource_group, "snapshot"])
             .observe(time::duration_to_sec(self.snapshot_wait_time));
 
         // suspend wait time
@@ -582,6 +606,7 @@ mod tests {
     use kvproto::kvrpcpb;
     use pd_client::BucketMeta;
     use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine};
+    use tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
     use tracker::track;
 
     use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
@@ -623,9 +648,14 @@ mod tests {
             None,
             PerfLevel::EnableCount,
             false,
+            false,
         );
-        let mut tracker: Tracker<RocksEngine> =
-            Tracker::new(req_ctx_inner.into(), ReqTag::select, Duration::default());
+        let mut tracker: Tracker<RocksEngine> = Tracker::new(
+            req_ctx_inner.into(),
+            ReqTag::select,
+            Duration::default(),
+            DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+        );
         tracker.on_scheduled();
         tracker.on_snapshot_finished();
         tracker.on_begin_all_items();
@@ -660,6 +690,7 @@ mod tests {
                 None,
                 PerfLevel::EnableCount,
                 false,
+                false,
             );
 
             req_ctx_inner.lower_bound = vec![
@@ -668,8 +699,12 @@ mod tests {
             req_ctx_inner.upper_bound = vec![
                 116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
             ];
-            let mut track: Tracker<RocksEngine> =
-                Tracker::new(req_ctx_inner.into(), tag, Duration::default());
+            let mut track: Tracker<RocksEngine> = Tracker::new(
+                req_ctx_inner.into(),
+                tag,
+                Duration::default(),
+                DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+            );
             let mut bucket = BucketMeta::default();
             bucket.region_id = 1;
             bucket.version = 1;

@@ -52,11 +52,13 @@ use raftstore::{
         RegionSnapshot, StoreMsg, WriteResponse, util::encode_start_ts_into_flag_data,
     },
 };
+use resource_control::ResourceGroupManager;
 use thiserror::Error;
 use tikv_kv::{ExtraRegionOverride, OnAppliedCb, WriteEvent, write_modifies};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
+    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
     time::Instant,
 };
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
@@ -380,6 +382,7 @@ where
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_info_accessor: Option<RegionInfoAccessor>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -393,6 +396,7 @@ where
         engine: E,
         region_info_accessor: Option<RegionInfoAccessor>,
         region_leaders: Arc<RwLock<HashSet<u64>>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
@@ -400,11 +404,26 @@ where
             txn_extra_scheduler: None,
             region_info_accessor,
             region_leaders,
+            resource_manager,
         }
     }
 
     pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
+    }
+}
+
+/// The group name reaches us from the client, so bound it to a configured group
+/// before it becomes a metric label. See
+/// `ResourceGroupManager::bounded_group_name`.
+fn bounded_resource_group(
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
+    ctx: &Context,
+) -> String {
+    let name = ctx.get_resource_control_context().get_resource_group_name();
+    match resource_manager.as_deref() {
+        Some(rm) => rm.bounded_group_name(name).into_owned(),
+        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
     }
 }
 
@@ -516,6 +535,7 @@ where
         })();
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let resource_group = bounded_resource_group(&self.resource_manager, ctx);
         let begin_instant = Instant::now_coarse();
 
         if res.is_ok() {
@@ -609,6 +629,9 @@ where
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .write
                                 .observe(begin_instant.saturating_elapsed_secs());
+                            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                                .with_label_values(&["write", &resource_group])
+                                .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
                         }
@@ -651,7 +674,8 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        async_snapshot(&mut self.router, ctx)
+        let resource_group = bounded_resource_group(&self.resource_manager, ctx.pb_ctx);
+        async_snapshot(&mut self.router, ctx, resource_group)
     }
 
     fn release_snapshot(&mut self) {
@@ -661,7 +685,8 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
+        let resource_group = bounded_resource_group(&self.resource_manager, ctx.pb_ctx);
+        async_snapshot(&mut self.router, ctx, resource_group).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
@@ -737,6 +762,7 @@ where
 fn async_snapshot<E, S>(
     router: &mut RaftRouterWrap<S, E>,
     mut ctx: SnapContext<'_>,
+    resource_group: String,
 ) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
 where
     E: KvEngine,
@@ -791,10 +817,21 @@ where
                         .observe(
                             tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
                         );
+                    ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                        .with_label_values(&["snapshot_read_index_propose_wait", &resource_group])
+                        .observe(
+                            tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
+                        );
                     // snapshot may be handled by lease read in raftstore
                     if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                         ASYNC_REQUESTS_DURATIONS_VEC
                             .snapshot_read_index_confirm
+                            .observe(
+                                tracker.metrics.read_index_confirm_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                        ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                            .with_label_values(&["snapshot_read_index_confirm", &resource_group])
                             .observe(
                                 tracker.metrics.read_index_confirm_wait_nanos as f64
                                     / 1_000_000_000.0,
@@ -804,9 +841,15 @@ where
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot_local_read
                         .observe(elapse);
+                    ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                        .with_label_values(&["snapshot_local_read", &resource_group])
+                        .observe(elapse);
                 }
             });
             ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                .with_label_values(&["snapshot", &resource_group])
+                .observe(elapse);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
         }
         cb(res);

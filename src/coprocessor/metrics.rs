@@ -138,6 +138,26 @@ lazy_static! {
     .unwrap();
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
         auto_flush_from!(COPR_REQ_WAIT_TIME, ReqWaitHistogram);
+    // Per-group companions to the static metrics above. `resource_group` is a
+    // client-supplied string, which `make_static_metric!` cannot express, and it
+    // is bounded to a configured group before it becomes a label -- see
+    // `ResourceGroupManager::bounded_group_name`. The `req` breakdown is dropped
+    // to keep the cross product small; `type` is kept on the wait histogram
+    // because separating schedule from snapshot wait is the whole point of it.
+    pub static ref COPR_REQ_DURATION_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_duration_seconds_by_group",
+        "Bucketed histogram of coprocessor request duration per resource group",
+        &["resource_group"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
+    pub static ref COPR_REQ_WAIT_TIME_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_wait_seconds_by_group",
+        "Bucketed histogram of coprocessor request wait duration per resource group",
+        &["resource_group", "type"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",

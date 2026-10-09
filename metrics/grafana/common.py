@@ -1055,6 +1055,7 @@ def graph_panel_histogram_quantiles(
     label_selectors: list[str] = [],
     by_labels: list[str] = [],
     hide_p9999=False,
+    hide_p99=False,
     hide_avg=False,
     hide_count=False,
     additional_groupby=True,
@@ -1099,6 +1100,7 @@ def graph_panel_histogram_quantiles(
                     by_labels=by_labels,
                 ),
                 legend_format=legend("99%", by_labels),
+                hide=hide_p99,
                 additional_groupby=additional_groupby,
             ),
             target(
