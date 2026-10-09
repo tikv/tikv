@@ -50,7 +50,7 @@ use tracker::{
 };
 use txn_types::{self, Key};
 
-use super::batch::{BatcherBuilder, ReqBatcher};
+use super::batch::{BatchKey, BatcherBuilder, ReqBatcher};
 use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
@@ -1450,7 +1450,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id);
+                        let key = BatchKey::of(resource_manager, req.get_context());
+                        batcher.as_mut().unwrap().add_get_request(key, req, id);
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.get_context().get_request_source().to_owned();
@@ -1475,7 +1476,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_raw_get_request(req, id);
+                        let key = BatchKey::of(resource_manager, req.get_context());
+                        batcher.as_mut().unwrap().add_raw_get_request(key, req, id);
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.get_context().get_request_source().to_owned();
