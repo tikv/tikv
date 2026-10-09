@@ -11,9 +11,9 @@ use tikv_util::time::Instant;
 
 mod resource_group;
 pub use resource_group::{
-    AdmissionDecision, CONTROL_TICK, CONTROL_TICK_OVERLOADED, DelaySlotGuard, LEEWAY_FACTOR,
-    LEEWAY_FRACTION, MIN_PRIORITY_UPDATE_INTERVAL, NOISY_TENANT_REASON_SUFFIX, ResourceConsumeType,
-    ResourceController, ResourceGroupManager, busy_reason,
+    AdmissionDecision, CONTROL_TICK, CONTROL_TICK_OVERLOADED, DelaySlotGuard, HIGH_PRIORITY,
+    LEEWAY_FACTOR, LEEWAY_FRACTION, MIN_PRIORITY_UPDATE_INTERVAL, NOISY_TENANT_REASON_SUFFIX,
+    ResourceConsumeType, ResourceController, ResourceGroupManager, busy_reason,
 };
 pub use tikv_util::resource_control::*;
 

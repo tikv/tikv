@@ -248,17 +248,15 @@ pub struct ReqContextInner {
     pub is_noisy_tenant: bool,
 }
 
+/// The execution time the client granted the request, or the store's default
+/// when the client granted none.
 #[inline]
-fn deadline_from_request_context(
-    context: &kvrpcpb::Context,
-    default_max_handle_duration: Duration,
-) -> Deadline {
-    let duration = if context.max_execution_duration_ms > 0 {
+fn max_execution_duration(context: &kvrpcpb::Context, default: Duration) -> Duration {
+    if context.max_execution_duration_ms > 0 {
         Duration::from_millis(context.max_execution_duration_ms)
     } else {
-        default_max_handle_duration
-    };
-    Deadline::from_now(duration)
+        default
+    }
 }
 
 impl ReqContextInner {
@@ -275,7 +273,7 @@ impl ReqContextInner {
         allowed_in_flashback: bool,
         is_noisy_tenant: bool,
     ) -> Self {
-        let deadline = deadline_from_request_context(&context, max_handle_duration);
+        let deadline = Deadline::from_now(max_execution_duration(&context, max_handle_duration));
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {
