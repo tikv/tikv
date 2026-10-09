@@ -235,6 +235,10 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
             .as_deref()
             .unwrap_or_else(|| self.inner.value())
     }
+
+    fn cached_value_size(&self) -> Option<usize> {
+        self.cur_value.as_ref().map(Vec::len)
+    }
 }
 
 pub struct RawMvccIterMetricsCollector;
