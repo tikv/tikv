@@ -96,22 +96,14 @@ impl RpnExpressionNode {
         metadata.node_count += 1;
         match self {
             RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
-                // A flattened logical call represents a chain of binary
-                // operations. Keep those operations in the work estimate even
-                // though flattening stores them in one physical node.
-                metadata.work_count += args.len().saturating_sub(1);
                 for arg in args {
                     arg.collect_metadata(metadata);
                 }
             }
             RpnExpressionNode::ColumnRef { offset } => {
-                metadata.work_count += 1;
-                metadata.column_ref_count += 1;
                 metadata.referenced_column_offsets.push(*offset);
             }
-            _ => {
-                metadata.work_count += 1;
-            }
+            _ => {}
         }
     }
 }
@@ -119,8 +111,6 @@ impl RpnExpressionNode {
 #[derive(Debug, Default)]
 struct RpnExpressionMetadata {
     node_count: usize,
-    work_count: usize,
-    column_ref_count: usize,
     referenced_column_offsets: Vec<usize>,
 }
 
@@ -224,22 +214,6 @@ impl RpnExpression {
         self.metadata().node_count
     }
 
-    /// Returns the approximate executor work units for this expression,
-    /// including nodes nested in short-circuit arguments.
-    ///
-    /// A flattened short-circuit call is counted as one unit per logical
-    /// operation (`args.len() - 1`) so flattening does not hide the work of the
-    /// logical operations it replaces.
-    pub fn work_count(&self) -> usize {
-        self.metadata().work_count
-    }
-
-    /// Returns the number of column references, including references nested in
-    /// short-circuit arguments.
-    pub fn column_ref_count(&self) -> usize {
-        self.metadata().column_ref_count
-    }
-
     /// Returns sorted, deduplicated offsets of all referenced columns,
     /// including references nested in short-circuit arguments.
     pub(crate) fn referenced_column_offsets(&self) -> &[usize] {
@@ -262,15 +236,11 @@ mod tests {
         ]);
 
         assert_eq!(expr.node_count(), 3);
-        assert_eq!(expr.work_count(), 3);
-        assert_eq!(expr.column_ref_count(), 3);
         assert_eq!(expr.referenced_column_offsets(), &[0, 2]);
 
         expr.push(RpnExpressionNode::ColumnRef { offset: 1 });
 
         assert_eq!(expr.node_count(), 4);
-        assert_eq!(expr.work_count(), 4);
-        assert_eq!(expr.column_ref_count(), 4);
         assert_eq!(expr.referenced_column_offsets(), &[0, 1, 2]);
     }
 }
