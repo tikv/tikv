@@ -16,6 +16,21 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    // Response bytes of background reads charged to `bg-egress-limit`, counted
+    // whether or not the limit is set.
+    pub static ref BACKGROUND_EGRESS_CONSUMPTION: IntCounter =
+        BACKGROUND_RESOURCE_CONSUMPTION.with_label_values(&["egress"]);
+    pub static ref BACKGROUND_EGRESS_WAIT_DURATION: Histogram = register_histogram!(
+        "tikv_resource_control_background_egress_wait_duration_seconds",
+        "Histogram of the background egress debt a background read must wait for before admission",
+        exponential_buckets(1e-4, 2.0, 20).unwrap() // 100us ~ 52s
+    )
+    .unwrap();
+    pub static ref BACKGROUND_EGRESS_UNCHARGED_BYTES: IntCounter = register_int_counter!(
+        "tikv_resource_control_background_egress_uncharged_bytes_total",
+        "Response bytes of background reads that are not charged to bg-egress-limit (streaming coprocessor responses)"
+    )
+    .unwrap();
     pub static ref PRIORITY_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_priority_quota_limit",
         "The quota limiter for each priority in resource control",

@@ -27,7 +27,7 @@ pub use channel::ResourceMetered;
 pub mod config;
 
 mod resource_limiter;
-pub use resource_limiter::ResourceLimiter;
+pub use resource_limiter::{ResourceLimiter, update_background_egress};
 use tikv_util::worker::Worker;
 use worker::GroupQuotaAdjustWorker;
 
