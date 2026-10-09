@@ -1980,16 +1980,18 @@ where
 
 unsafe impl<Q, R, K, V> Send for RefRange<'_, Q, R, K, V>
 where
-    K: Ord + Borrow<Q>,
-    R: RangeBounds<Q>,
+    K: Ord + Borrow<Q> + Send + Sync,
+    V: Send + Sync,
+    R: RangeBounds<Q> + Send,
     Q: Ord + ?Sized,
 {
 }
 
 unsafe impl<Q, R, K, V> Sync for RefRange<'_, Q, R, K, V>
 where
-    K: Ord + Borrow<Q>,
-    R: RangeBounds<Q>,
+    K: Ord + Borrow<Q> + Send + Sync,
+    V: Send + Sync,
+    R: RangeBounds<Q> + Sync,
     Q: Ord + ?Sized,
 {
 }
