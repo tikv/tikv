@@ -49,8 +49,8 @@ const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 #[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
-#[cfg(test)]
-const HIGH_PRIORITY: u32 = 16;
+
+pub const HIGH_PRIORITY: u32 = 16;
 
 // the global maximum of virtual time is u64::MAX / 16, so when the virtual
 // time of all groups are bigger than half of this value, we rest them to avoid
