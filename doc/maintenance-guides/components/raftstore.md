@@ -137,6 +137,23 @@ High-risk contracts:
 - `store/worker/read.rs`: local reader and read delegates
 - `store/worker/refresh_config.rs`: runtime config propagation
 
+A `qps_threshold` or `byte_threshold` of 0 disables that load-fit gate; the
+other gates still apply. `qps_threshold = 0` must not treat every Region as
+hot.
+
+Load-based split sampling keeps an explicit item-count budget. `sample_num` is
+bounded to 1..=64, `detect_times` to 1..=20, and the product
+`sample_num * detect_times` to 1280. Each per-Region recorder keeps a sliding
+window of at most `detect_times` observation rounds, and each round is limited
+to `sample_num` ranges. `sample_threshold` must not exceed
+`sample_num * detect_times`, so a full retained window can satisfy the minimum
+observation requirement. These are not global byte limits: key payloads,
+producer threads, active Regions, and spare `Vec` capacity add memory beyond the
+item counts. Producer reservoirs initially reserve at most the default sample
+count and grow with observations. Split-key collection can compare up to twice
+`sample_num` candidate keys against the bounded retained history, so changes to
+either limit require benchmarking.
+
 ### Coprocessor hooks
 
 - `coprocessor/dispatcher.rs` hosts raftstore observers.
