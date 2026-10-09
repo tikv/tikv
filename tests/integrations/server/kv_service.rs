@@ -2098,17 +2098,28 @@ macro_rules! test_func {
 }
 
 macro_rules! test_func_init {
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident $(, $field:ident = $value:expr)*) => {{
+        test_func!($client, $ctx, $call_opt, $func, $req {
+            $($field: $value,)*
+            ..Default::default()
+        })
+    }};
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch $(, $field:ident = $value:expr)*) => {{
         test_func!($client, $ctx, $call_opt, $func, {
-            let mut req = $req::default();
+            let mut req = $req {
+                $($field: $value,)*
+                ..Default::default()
+            };
             req.set_keys(vec![b"key".to_vec()].into());
             req
         })
     }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, $op:expr) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, $op:expr $(, $field:ident = $value:expr)*) => {{
         test_func!($client, $ctx, $call_opt, $func, {
-            let mut req = $req::default();
+            let mut req = $req {
+                $($field: $value,)*
+                ..Default::default()
+            };
             let mut m = Mutation::default();
             m.set_op($op);
             m.key = b"key".to_vec();
@@ -2137,14 +2148,26 @@ fn test_tikv_forwarding() {
 
     test_func_init!(client, ctx, call_opt, kv_get, GetRequest);
     test_func_init!(client, ctx, call_opt, kv_scan, ScanRequest);
-    test_func_init!(client, ctx, call_opt, kv_prewrite, PrewriteRequest, Op::Put);
+    // Transactional writes need nonzero timestamps to pass request validation
+    // before reaching the store/leader checks exercised by this test.
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_prewrite,
+        PrewriteRequest,
+        Op::Put,
+        start_version = 1
+    );
     test_func_init!(
         client,
         ctx,
         call_opt,
         kv_pessimistic_lock,
         PessimisticLockRequest,
-        Op::PessimisticLock
+        Op::PessimisticLock,
+        start_version = 1,
+        for_update_ts = 2
     );
     test_func_init!(
         client,
@@ -2152,10 +2175,28 @@ fn test_tikv_forwarding() {
         call_opt,
         kv_pessimistic_rollback,
         PessimisticRollbackRequest,
-        batch
+        batch,
+        start_version = 1,
+        for_update_ts = 2
     );
-    test_func_init!(client, ctx, call_opt, kv_commit, CommitRequest, batch);
-    test_func_init!(client, ctx, call_opt, kv_cleanup, CleanupRequest);
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_commit,
+        CommitRequest,
+        batch,
+        start_version = 1,
+        commit_version = 2
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_cleanup,
+        CleanupRequest,
+        start_version = 1
+    );
     test_func_init!(client, ctx, call_opt, kv_batch_get, BatchGetRequest);
     test_func_init!(
         client,
@@ -2163,21 +2204,24 @@ fn test_tikv_forwarding() {
         call_opt,
         kv_batch_rollback,
         BatchRollbackRequest,
-        batch
+        batch,
+        start_version = 1
     );
     test_func_init!(
         client,
         ctx,
         call_opt,
         kv_txn_heart_beat,
-        TxnHeartBeatRequest
+        TxnHeartBeatRequest,
+        start_version = 1
     );
     test_func_init!(
         client,
         ctx,
         call_opt,
         kv_check_txn_status,
-        CheckTxnStatusRequest
+        CheckTxnStatusRequest,
+        lock_ts = 1
     );
     test_func_init!(
         client,
@@ -2185,7 +2229,8 @@ fn test_tikv_forwarding() {
         call_opt,
         kv_check_secondary_locks,
         CheckSecondaryLocksRequest,
-        batch
+        batch,
+        start_version = 1
     );
     test_func_init!(client, ctx, call_opt, kv_scan_lock, ScanLockRequest);
     test_func_init!(client, ctx, call_opt, kv_resolve_lock, ResolveLockRequest);

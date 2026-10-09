@@ -3,7 +3,10 @@
 use std::{
     cmp,
     ops::{Div, Mul},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -29,6 +32,32 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
+
+/// Shared runtime state for transaction-protocol admission.
+///
+/// The state remains separate from the persisted server configuration so KV
+/// request handling can read it without taking the config tracker's lock.
+#[derive(Clone, Debug)]
+pub struct TxnProtocolAdmissionConfig {
+    enabled: Arc<AtomicBool>,
+}
+
+impl TxnProtocolAdmissionConfig {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled: Arc::new(AtomicBool::new(enabled)),
+        }
+    }
+
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+}
 
 fn calculate_cpu_quota_base_num() -> usize {
     // Use 8c as the default quota unit for the limit calculations
@@ -232,6 +261,8 @@ pub struct Config {
     pub heavy_load_wait_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub enable_request_batch: bool,
+    /// Reject transaction RPCs whose protocol declaration is incompatible.
+    pub enable_txn_protocol_admission: bool,
     #[online_config(skip)]
     pub background_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
@@ -358,6 +389,7 @@ impl Default for Config {
             heavy_load_threshold: 75,
             heavy_load_wait_duration: None,
             enable_request_batch: true,
+            enable_txn_protocol_admission: true,
             reject_messages_on_memory_ratio: 0.2,
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
@@ -574,6 +606,7 @@ pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
     grpc_mem_quota: ResourceQuota,
+    txn_protocol_admission: TxnProtocolAdmissionConfig,
     copr_config_manager: Box<dyn ConfigManager>,
 }
 
@@ -585,12 +618,14 @@ impl ServerConfigManager {
         tx: Scheduler<SnapTask>,
         config: Arc<VersionTrack<Config>>,
         grpc_mem_quota: ResourceQuota,
+        txn_protocol_admission: TxnProtocolAdmissionConfig,
         copr_config_manager: Box<dyn ConfigManager>,
     ) -> ServerConfigManager {
         ServerConfigManager {
             tx,
             config,
             grpc_mem_quota,
+            txn_protocol_admission,
             copr_config_manager,
         }
     }
@@ -607,6 +642,11 @@ impl ConfigManager for ServerConfigManager {
             self.grpc_mem_quota
                 .clone()
                 .resize_memory(mem_quota.0 as usize);
+        }
+        if let Some(online_config::ConfigValue::Bool(enabled)) =
+            c.get("enable_txn_protocol_admission")
+        {
+            self.txn_protocol_admission.set_enabled(*enabled);
         }
         if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
             error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);

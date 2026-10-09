@@ -56,6 +56,7 @@ pub(crate) mod metrics;
 pub mod mvcc;
 pub mod raw;
 pub mod txn;
+pub mod txn_protocol;
 
 mod read_pool;
 mod types;

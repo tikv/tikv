@@ -195,6 +195,9 @@ pub enum ErrorInner {
     NotInShrinkMode(SharedLocks),
 
     #[error("{0:?}")]
+    IncompatibleRequest(crate::storage::txn_protocol::IncompatibleRequest),
+
+    #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
@@ -341,6 +344,9 @@ impl ErrorInner {
             ErrorInner::NotInShrinkMode(shared_locks) => {
                 Some(ErrorInner::NotInShrinkMode(shared_locks.clone()))
             }
+            ErrorInner::IncompatibleRequest(err) => {
+                Some(ErrorInner::IncompatibleRequest(err.clone()))
+            }
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -452,6 +458,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::GenerationOutOfOrder(..) => error_code::storage::GENERATION_OUT_OF_ORDER,
             ErrorInner::InvalidMaxTsUpdate(_) => error_code::storage::INVALID_MAX_TS_UPDATE,
             ErrorInner::NotInShrinkMode(_) => error_code::storage::KEY_IS_LOCKED,
+            ErrorInner::IncompatibleRequest(_) => error_code::storage::TXN_PROTOCOL_INCOMPATIBLE,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
