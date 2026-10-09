@@ -302,6 +302,14 @@ impl ReqContextInner {
         }
     }
 
+    /// Checks the deadline, blaming this request's group when it is the noisy
+    /// one so the client backs off instead of retrying the same leader at once.
+    pub fn check_deadline(&self) -> Result<()> {
+        self.deadline
+            .check()
+            .map_err(|_| Error::DeadlineExceeded(self.is_noisy_tenant))
+    }
+
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(

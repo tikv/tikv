@@ -145,6 +145,18 @@ impl From<MemoryQuotaExceeded> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// Puts the request's own verdict on a deadline error that was converted
+    /// without one, such as the executor's or the concurrency limiter's. Other
+    /// errors pass through unchanged.
+    pub fn blame_deadline(self, noisy: bool) -> Error {
+        match self {
+            Error::DeadlineExceeded(_) => Error::DeadlineExceeded(noisy),
+            other => other,
+        }
+    }
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {

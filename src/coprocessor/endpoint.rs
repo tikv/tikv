@@ -584,7 +584,7 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
-        tracker.req_ctx.deadline.check()?;
+        tracker.req_ctx.check_deadline()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
@@ -611,7 +611,7 @@ impl<E: Engine> Endpoint<E> {
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
-        tracker.req_ctx.deadline.check()?;
+        tracker.req_ctx.check_deadline()?;
         tracker.buckets = latest_buckets;
         let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
@@ -655,7 +655,13 @@ impl<E: Engine> Endpoint<E> {
         } else {
             process_future.await
         };
-        let result = deadline_res.map_err(Error::from).and_then(|res| res);
+        // The limiter's timeout and the executor's deadline errors are
+        // converted without a request context; put this request's verdict on
+        // them so a blamed tenant's deadline is marked on every path.
+        let result = deadline_res
+            .map_err(Error::from)
+            .and_then(|res| res)
+            .map_err(|e| e.blame_deadline(tracker.req_ctx.is_noisy_tenant));
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -865,6 +871,9 @@ impl<E: Engine> Endpoint<E> {
         // A parse failure creates no top read-pool ID. The finalizer then uses a
         // random ID below so unrelated failures do not share Yatp runtime accounting.
         let mut top_task_id = None;
+        // The batch shares the top request's group, so its verdict marks the
+        // batch's deadline responses too.
+        let mut top_is_noisy = false;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|mut r| {
@@ -872,6 +881,7 @@ impl<E: Engine> Endpoint<E> {
                     Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
                 }
                 top_task_id = Some(r.req_ctx.build_task_id());
+                top_is_noisy = r.req_ctx.is_noisy_tenant;
                 top_task_semaphore_group = r.semaphore_group;
                 self.schedule_unary_request(r, output_mode)
             });
@@ -905,8 +915,13 @@ impl<E: Engine> Endpoint<E> {
                 // twice over in its layout.
                 Some(batch_outputs) => {
                     let collect = if let Some(deadline) = serial_deadline {
-                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
-                            .boxed()
+                        collect_batch_task_outputs_sequentially(
+                            top_output,
+                            batch_outputs,
+                            deadline,
+                            top_is_noisy,
+                        )
+                        .boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -969,6 +984,9 @@ impl<E: Engine> Endpoint<E> {
         // read pool task; with it, results stay unserialized for
         // `merge_batch_task_responses`.
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
+        // Every task carries the request's context, so one verdict serves the
+        // serial stream's deadline responses for the tasks that never start.
+        let mut batch_is_noisy = false;
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
             .iter_mut()
@@ -995,6 +1013,7 @@ impl<E: Engine> Endpoint<E> {
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok(mut r) => {
+                    batch_is_noisy |= r.req_ctx.is_noisy_tenant;
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     let tracker_guard = DeferContext::new(move || {
                         GLOBAL_TRACKERS.remove(cur_tracker);
@@ -1068,7 +1087,11 @@ impl<E: Engine> Endpoint<E> {
             }
         }
         match serial_deadline {
-            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            Some(deadline) => Either::Left(serial_batch_task_outputs(
+                batch_futs,
+                deadline,
+                batch_is_noisy,
+            )),
             None => Either::Right(stream::FuturesOrdered::from_iter(
                 batch_futs.into_iter().map(|(_, fut)| fut),
             )),
@@ -1099,14 +1122,14 @@ impl<E: Engine> Endpoint<E> {
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.on_scheduled();
-            tracker.req_ctx.deadline.check()?;
+            tracker.req_ctx.check_deadline()?;
 
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
             let snapshot = unsafe { Self::get_snapshot_with_timeout(&tracker.req_ctx).await }?;
             // When snapshot is retrieved, deadline may exceed.
             tracker.on_snapshot_finished();
-            tracker.req_ctx.deadline.check()?;
+            tracker.req_ctx.check_deadline()?;
 
             let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
 
@@ -1131,6 +1154,7 @@ impl<E: Engine> Endpoint<E> {
 
                 match result {
                     Err(e) => {
+                        let e = e.blame_deadline(tracker.req_ctx.is_noisy_tenant);
                         let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
                         record_logical_read_bytes(
                             exec_details_v2
@@ -3314,6 +3338,106 @@ mod tests {
             assert_eq!(
                 region_err.get_server_is_busy().reason,
                 "deadline is exceeded".to_string()
+            );
+        }
+    }
+
+    // The queue-entry check and the executor's own deadline error are converted
+    // without a request context. A blamed tenant must still see the marker on
+    // both, or the client fast-retries straight back to the overloaded leader.
+    #[test]
+    fn test_a_noisy_tenants_deadline_is_marked_on_every_path() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        let blamed_reason = format!(
+            "deadline is exceeded{}",
+            resource_control::NOISY_TENANT_REASON_SUFFIX
+        );
+        let expired =
+            || Deadline::new(tikv_util::time::Instant::now_coarse() - Duration::from_millis(100));
+
+        // Queue entry: the deadline has passed before the task is scheduled.
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+            let mut inner = ReqContextInner::default_for_test();
+            inner.is_noisy_tenant = true;
+            inner.deadline = expired();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: inner.into(),
+                semaphore_group: SemaphoreGroup::Shared,
+                handler_builder,
+            }))
+            // The server turns a handler error into an error response before
+            // it reaches the client; do the same here.
+            .unwrap_or_else(|e| make_error_response(e).into());
+            assert_eq!(
+                resp.get_region_error().get_server_is_busy().reason,
+                blamed_reason
+            );
+        }
+
+        // Execution: the handler outlives the deadline, which the concurrency
+        // limiter reports as a plain `DeadlineError`.
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Ok(coppb::Response::default()),
+                    Duration::from_millis(1500),
+                )
+                .into_boxed())
+            });
+            let mut inner = ReqContextInner::default_for_test();
+            inner.is_noisy_tenant = true;
+            inner.deadline = Deadline::from_now(Duration::from_millis(300));
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: inner.into(),
+                semaphore_group: SemaphoreGroup::Shared,
+                handler_builder,
+            }))
+            // The server turns a handler error into an error response before
+            // it reaches the client; do the same here.
+            .unwrap_or_else(|e| make_error_response(e).into());
+            assert_eq!(
+                resp.get_region_error().get_server_is_busy().reason,
+                blamed_reason
+            );
+        }
+
+        // Not noisy: no marker.
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+            let mut inner = ReqContextInner::default_for_test();
+            inner.deadline = expired();
+            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
+                req_tag: ReqTag::test,
+                req_ctx: inner.into(),
+                semaphore_group: SemaphoreGroup::Shared,
+                handler_builder,
+            }))
+            // The server turns a handler error into an error response before
+            // it reaches the client; do the same here.
+            .unwrap_or_else(|e| make_error_response(e).into());
+            assert_eq!(
+                resp.get_region_error().get_server_is_busy().reason,
+                "deadline is exceeded"
             );
         }
     }
