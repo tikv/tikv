@@ -475,7 +475,17 @@ impl Interval {
             fields[index as usize - i] = matched;
         }
 
-        // Helper to parse integer fields and handle errors
+        // Helper to parse integer fields and handle errors.
+        //
+        // Every field only consists of ASCII digits (see `NUMERIC_REGEX`), so
+        // the only way `i64::from_str` can fail here is an out-of-range value.
+        // Like TiDB's `parseTimeValue`, the error is reported once (as a
+        // warning in non-strict mode) and the field is saturated to `i64::MAX`
+        // instead of being silently replaced with 0, so that the subsequent
+        // overflow checks fire and the whole result becomes NULL instead of
+        // adding a wrong (zero) interval. See
+        // https://github.com/tikv/tikv/issues/20169.
+        let mut parse_error_reported = false;
         let mut parse_field = |field: &str| -> Result<i64> {
             match i64::from_str(field) {
                 Ok(val) => Ok(val),
@@ -483,8 +493,13 @@ impl Interval {
                     if for_duration {
                         return Err(Error::incorrect_datetime_value(original_input));
                     }
-                    ctx.handle_invalid_time_error(Error::incorrect_datetime_value(original_input))?;
-                    Ok(0)
+                    if !parse_error_reported {
+                        parse_error_reported = true;
+                        ctx.handle_invalid_time_error(Error::incorrect_datetime_value(
+                            original_input,
+                        ))?;
+                    }
+                    Ok(i64::MAX)
                 }
             }
         };
@@ -769,8 +784,10 @@ impl ConvertToIntervalStr for Decimal {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use crate::expr::{EvalConfig, Flag};
+    use crate::expr::{EvalConfig, Flag, SqlMode};
 
     #[test]
     fn test_is_clock_unit() -> Result<()> {
@@ -1925,6 +1942,152 @@ mod tests {
                 unit
             );
         }
+    }
+
+    /// A field of a compound interval that does not fit in i64 must not be
+    /// treated as 0. Like TiDB, the field is saturated so that the interval
+    /// overflows and the result becomes NULL (with warnings) in non-strict
+    /// mode. See https://github.com/tikv/tikv/issues/20169.
+    #[test]
+    fn test_interval_parse_from_str_field_overflow() {
+        use IntervalUnit::*;
+
+        // (input, unit) that should produce `None` in non-strict mode and an
+        // error in strict mode.
+        let none_cases = vec![
+            // the case from the issue: year does not fit in i64.
+            ("9223372036854775808:1", YearMonth),
+            ("-9223372036854775808:1", YearMonth),
+            ("9223372036854775808-1", YearMonth),
+            ("99999999999999999999 1", YearMonth),
+            // month does not fit, year is non-zero: year * 12 + month overflows.
+            ("1-9223372036854775808", YearMonth),
+            ("-1-9223372036854775808", YearMonth),
+            // day/hour/minute do not fit.
+            ("9223372036854775808 1:1:1", DaySecond),
+            ("1 9223372036854775808:1:1", DaySecond),
+            ("1 1:9223372036854775808:1", DaySecond),
+            ("9223372036854775808:1", HourMinute),
+            ("1:9223372036854775808", HourMinute),
+            ("9223372036854775808 1", DayHour),
+            // second does not fit and is combined with other fields.
+            ("1 1:1:9223372036854775808", DaySecond),
+            ("1:9223372036854775808", MinuteSecond),
+            // microsecond part does not fit after being aligned to 6 digits.
+            ("1.9223372036854775808", SecondMicrosecond),
+            ("1:1.99999999999999999999", MinuteMicrosecond),
+            // several fields overflow at once.
+            (
+                "9223372036854775808 9223372036854775808:9223372036854775808:9223372036854775808",
+                DaySecond,
+            ),
+        ];
+        for (input, unit) in &none_cases {
+            // Non-strict mode: NULL with a warning.
+            let mut ctx = EvalContext::default();
+            let result = Interval::parse_from_str(&mut ctx, unit, input).unwrap();
+            assert!(
+                result.is_none(),
+                "Failed for input: {}, unit: {:?}, got {:?}",
+                input,
+                unit,
+                result
+            );
+            assert!(
+                ctx.take_warnings().warning_cnt > 0,
+                "Expected a warning for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+
+            // Strict mode in a DML statement: an error.
+            let mut cfg = EvalConfig::new();
+            cfg.set_sql_mode(SqlMode::STRICT_ALL_TABLES);
+            cfg.set_flag(Flag::IN_INSERT_STMT);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            let result = Interval::parse_from_str(&mut ctx, unit, input);
+            assert!(
+                result.is_err(),
+                "Expected an error for input: {}, unit: {:?}, got {:?}",
+                input,
+                unit,
+                result
+            );
+        }
+
+        // When only the lowest field overflows and nothing else contributes
+        // to the same component, the saturated value is kept so that the
+        // caller overflows when applying the interval. In particular, the
+        // overflowed field must not be replaced by 0.
+        let saturated_cases = vec![
+            (
+                "0-9223372036854775808",
+                YearMonth,
+                Interval {
+                    month: i64::MAX,
+                    sec: 0,
+                    nano: 0,
+                    fsp: MIN_FSP,
+                },
+            ),
+            (
+                "-0-9223372036854775808",
+                YearMonth,
+                Interval {
+                    month: -i64::MAX,
+                    sec: 0,
+                    nano: 0,
+                    fsp: MIN_FSP,
+                },
+            ),
+            (
+                "0 0:0:9223372036854775808",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    sec: i64::MAX,
+                    nano: 0,
+                    fsp: MIN_FSP,
+                },
+            ),
+            (
+                "-0:9223372036854775808",
+                MinuteSecond,
+                Interval {
+                    month: 0,
+                    sec: -i64::MAX,
+                    nano: 0,
+                    fsp: MIN_FSP,
+                },
+            ),
+        ];
+        for (input, unit, expected) in saturated_cases {
+            let mut ctx = EvalContext::default();
+            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            assert_eq!(
+                result,
+                Some(expected),
+                "Failed for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+            // The parse failure is reported exactly once.
+            assert_eq!(
+                ctx.take_warnings().warning_cnt,
+                1,
+                "Expected exactly one warning for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+        }
+
+        // A field that just fits in i64 is still parsed without any warning.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &YearMonth, "0:9223372036854775807")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.month(), i64::MAX);
+        assert_eq!(ctx.take_warnings().warning_cnt, 0);
     }
 
     #[test]

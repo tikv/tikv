@@ -4067,6 +4067,109 @@ mod tests {
                 (SubDateIntString, Some("20240901"), None, "second", None),
                 (AddDateIntInt, Some("0"), Some("0"), "day_hour", None),
                 (SubDateIntDecimal, Some("0"), Some("0.0"), "minute", None),
+                // A field of a compound interval that does not fit in i64
+                // makes the result NULL instead of being treated as 0.
+                // See https://github.com/tikv/tikv/issues/20169.
+                (
+                    AddDateStringString,
+                    Some("2024-01-01"),
+                    Some("9223372036854775808:1"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    SubDateStringString,
+                    Some("2024-01-01"),
+                    Some("9223372036854775808:1"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01"),
+                    Some("-9223372036854775808:1"),
+                    "year_month",
+                    None,
+                ),
+                (
+                    AddDateStringString,
+                    Some("2024-01-01"),
+                    Some("0-9223372036854775808"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    SubDateDatetimeString,
+                    Some("2024-01-01"),
+                    Some("0-9223372036854775808"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    AddDateStringString,
+                    Some("2024-01-01"),
+                    Some("1-9223372036854775808"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01 00:00:00"),
+                    Some("9223372036854775808 1:1:1"),
+                    "DAY_SECOND",
+                    None,
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01 00:00:00"),
+                    Some("0 0:0:9223372036854775808"),
+                    "DAY_SECOND",
+                    None,
+                ),
+                (
+                    SubDateDatetimeString,
+                    Some("2024-01-01 00:00:00"),
+                    Some("0:9223372036854775808"),
+                    "MINUTE_SECOND",
+                    None,
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01 00:00:00"),
+                    Some("1:9223372036854775808"),
+                    "HOUR_MINUTE",
+                    None,
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01 00:00:00"),
+                    Some("1.99999999999999999999"),
+                    "SECOND_MICROSECOND",
+                    None,
+                ),
+                (
+                    AddDateDurationStringDatetime,
+                    Some("12:00:00"),
+                    Some("9223372036854775808:1"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                // The largest field value that fits in i64 is parsed as is
+                // and overflows when it is applied to the date.
+                (
+                    AddDateStringString,
+                    Some("2024-01-01"),
+                    Some("0:9223372036854775807"),
+                    "YEAR_MONTH",
+                    None,
+                ),
+                (
+                    AddDateStringString,
+                    Some("2024-01-01"),
+                    Some("1:1"),
+                    "YEAR_MONTH",
+                    Some("2025-02-01"),
+                ),
             ]
         };
         let builder_push_param = |ctx: &mut EvalContext,

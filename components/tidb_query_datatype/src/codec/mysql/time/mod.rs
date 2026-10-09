@@ -2297,19 +2297,17 @@ impl Time {
         let mut current_month = self.get_month() as i64 - 1;
         let current_day = self.get_day();
 
-        // Calculate new month and year
-        current_month += months;
-        if current_month >= 0 {
-            current_year += current_month / 12;
-            current_month %= 12;
-        } else {
-            let mut year_decrease = (-current_month) / 12;
-            if (-current_month) % 12 != 0 {
-                year_decrease += 1;
-            }
-            current_month += year_decrease * 12;
-            current_year -= year_decrease;
-        }
+        // Calculate new month and year. `months` may be as large as
+        // `i64::MAX` in magnitude (e.g. an INTERVAL whose field overflowed and
+        // was saturated by `Interval::parse_from_str`), so the arithmetic
+        // must not overflow; any such value is an overflow of the result.
+        current_month = current_month
+            .checked_add(months)
+            .ok_or_else(Error::datetime_function_overflow)?;
+        // `div_euclid`/`rem_euclid` round towards negative infinity, so a
+        // negative month borrows from the year and the month stays in 0..12.
+        current_year += current_month.div_euclid(12);
+        current_month = current_month.rem_euclid(12);
 
         // Overflow check: year must be between 0 and 9999
         if !(0..=9999).contains(&current_year) {
@@ -4340,6 +4338,22 @@ mod tests {
             // Overflow
             (0, 1, 1, -1, 0, 0, 0, true),
             (9999, 12, 31, 1, 0, 0, 0, true),
+            // Extreme values (e.g. from a saturated INTERVAL field, see
+            // https://github.com/tikv/tikv/issues/20169) must report an
+            // overflow instead of panicking or wrapping around.
+            (2024, 1, 1, i64::MAX, 0, 0, 0, true),
+            (2024, 12, 1, i64::MAX, 0, 0, 0, true),
+            (2024, 1, 1, -i64::MAX, 0, 0, 0, true),
+            (2024, 12, 1, -i64::MAX, 0, 0, 0, true),
+            (2024, 1, 1, i64::MIN, 0, 0, 0, true),
+            (0, 0, 0, i64::MIN, 0, 0, 0, true),
+            (0, 0, 0, i64::MAX, 0, 0, 0, true),
+            (2024, 1, 1, 12 * 8000, 0, 0, 0, true),
+            (2024, 1, 1, -12 * 2025, 0, 0, 0, true),
+            // Large but valid values.
+            (0, 1, 1, 12 * 9999 + 11, 9999, 12, 1, false),
+            (9999, 12, 1, -(12 * 9998 + 11), 1, 1, 1, false),
+            (9999, 12, 1, -(12 * 9999 + 11), 0, 0, 0, false),
         ];
 
         // Iterate over each test case and run the test
