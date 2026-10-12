@@ -37,6 +37,7 @@ testexport = [
   "engine_panic/testexport",
   "encryption/testexport",
   "file_system/testexport",
+  "resource_control/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
@@ -198,6 +199,7 @@ hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
+resource_control = { workspace = true, features = ["testexport"] }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
