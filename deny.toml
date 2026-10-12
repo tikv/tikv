@@ -101,10 +101,18 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+    # aws-sdk-s3 1.40.0 requires lru 0.12.x, while RUSTSEC-2026-0253
+    # is fixed in lru >=0.18.2. Defer the AWS SDK migration outside this
+    # release hotfix, as it would introduce unrelated dependency changes.
+    "RUSTSEC-2026-0253",
     # aws-sdk-* transitively depends on time 0.3.36, which triggers
     # RUSTSEC-2026-0009 (DoS via stack exhaustion). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0009",
+    # hyper 0.14 and aws-smithy-runtime 1.7 require h2 0.3.x, while
+    # RUSTSEC-2026-0258 is fixed in h2 >=0.4.16. Defer the HTTP/AWS
+    # dependency migration outside this release hotfix.
+    "RUSTSEC-2026-0258",
     # Ignore the following advisories because this branch is for a hotfix.
     # Upgrading these dependencies would introduce unrelated changes and
     # increase regression risk.
