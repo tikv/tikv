@@ -496,13 +496,13 @@ impl ReadPoolHandle {
         }
     }
 
-    /// Whether resource control has named the groups causing an overload.
+    /// Whether resource control reports the groups causing an overload.
     fn overload_is_attributed(&self) -> bool {
         match self {
             ReadPoolHandle::Yatp {
                 resource_manager: Some(rm),
                 ..
-            } => rm.has_noisy_groups(),
+            } => rm.reports_noisy_groups() && rm.has_noisy_groups(),
             _ => false,
         }
     }
@@ -2594,6 +2594,19 @@ mod tests {
             resource_manager.has_noisy_groups(),
             "the overload is attributed"
         );
+        assert!(!resource_manager.reports_noisy_groups());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("with reporting disabled the advisory still applies");
+
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_read_admission_control = true;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
 
         let before = UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.get();
         handle
@@ -2607,6 +2620,19 @@ mod tests {
         handle
             .check_busy_threshold(threshold, b"rc")
             .expect("and so the gate stays out of the way");
+
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_read_admission_control = false;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
+        assert!(resource_manager.has_noisy_groups(), "still throttled");
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("disabling reporting online restores the advisory");
 
         // A quiet node ramps the limit back, then release finds nothing held.
         for _ in 0..100 {
