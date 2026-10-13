@@ -567,6 +567,17 @@ where
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
+            // Must be found before deregistering: the stale metadata of this very region
+            // is the most likely parent.
+            let parent = self.subs.find_enclosing_region(region);
+            let mut tso : Option<TimeStamp> = None;
+            if let Some(parent) = parent {
+                let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
+                if checkpoint_ts.contains_key(&parent.id) {
+                    tso = Some(checkpoint_ts.get(&parent.id).unwrap().checkpoint);
+                }
+            }
+
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -574,11 +585,19 @@ where
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["region-changed"])
                         .inc();
+
+                    if tso.is_none() {
+                        tso = Some(self
+                            .get_last_checkpoint_of(&for_task, region)
+                            .await
+                            // TODO: Fix this later to go into the retry block.
+                            .expect("Last checkpoint of task should always be available"));
+                    }
                     let r = async {
                         self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
-                            self.get_last_checkpoint_of(&for_task, region).await?,
+                            tso.unwrap(),
                             handle.clone(),
                         )
                         .await;
@@ -624,8 +643,23 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-                let tso = self.get_last_checkpoint_of(&for_task, region).await?;
-                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
+
+                // If a tracked region fully encloses this one (it was split from it), start
+                // from the parent's checkpoint: this region has no checkpoint of its own.
+                let parent = self.subs.find_enclosing_region(region);
+                let mut tso : Option<TimeStamp> = None;
+                if let Some(parent) = parent {
+                    let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
+                    if checkpoint_ts.contains_key(&parent.id) {
+                        tso = Some(checkpoint_ts.get(&parent.id).unwrap().checkpoint);
+                    }
+                }
+                if tso.is_none() {
+                    tso = Some(self
+                        .get_last_checkpoint_of(&for_task, region)
+                        .await?);
+                }
+                self.observe_over_with_initial_data_from_checkpoint(region, tso.unwrap(), handle.clone())
                     .await;
             }
         }
