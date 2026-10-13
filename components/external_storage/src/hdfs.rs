@@ -37,7 +37,7 @@ pub struct HdfsStorage {
 
 impl HdfsStorage {
     pub fn new(remote: &str, config: HdfsConfig) -> io::Result<HdfsStorage> {
-        let mut remote = Url::parse(remote).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut remote = Url::parse(remote).map_err(|e| io::Error::other(e))?;
         if !remote.path().ends_with('/') {
             let mut new_path = remote.path().to_owned();
             new_path.push('/');
@@ -88,17 +88,14 @@ impl ExternalStorage for HdfsStorage {
         _content_length: u64,
     ) -> io::Result<()> {
         if name.contains(path::MAIN_SEPARATOR) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("[{}] parent is not allowed in storage", name),
-            ));
+            return Err(io::Error::other(format!(
+                "[{}] parent is not allowed in storage",
+                name
+            )));
         }
 
         let cmd_path = self.get_hdfs_bin().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Cannot found hdfs command, please specify HADOOP_HOME",
-            )
+            io::Error::other("Cannot found hdfs command, please specify HADOOP_HOME")
         })?;
         let remote_url = self.remote.clone().join(name).unwrap();
         let path = try_convert_to_path(&remote_url);
@@ -134,10 +131,10 @@ impl ExternalStorage for HdfsStorage {
                 "stdout" => stdout.as_ref(),
                 "stderr" => stderr.as_ref(),
             );
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("hdfs returned non-zero status: {:?}", output.status.code()),
-            ))
+            Err(io::Error::other(format!(
+                "hdfs returned non-zero status: {:?}",
+                output.status.code()
+            )))
         }
     }
 

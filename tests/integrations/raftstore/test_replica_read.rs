@@ -4,9 +4,9 @@ use std::{
     collections::HashMap,
     mem,
     sync::{
+        Arc, Mutex,
         atomic::AtomicBool,
         mpsc::{self, RecvTimeoutError},
-        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -16,10 +16,10 @@ use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::{store::ReadIndexContext, Result};
+use raftstore::{Result, store::ReadIndexContext};
 use test_raftstore::{Simulator as S1, *};
 use test_raftstore_macro::test_case;
-use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::*, future::block_on_timeout, time::Instant};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
 
@@ -397,7 +397,7 @@ fn test_read_index_retry_lock_checking() {
             && resp
                 .get_responses()
                 .first()
-                .map_or(true, |r| !r.get_read_index().has_locked()),
+                .is_none_or(|r| !r.get_read_index().has_locked()),
         "{:?}",
         resp,
     );

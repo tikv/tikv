@@ -2,7 +2,7 @@
 
 //! Reading and writing
 
-use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, Peekable, SyncMutable};
 
 use super::engine_cfs;
 

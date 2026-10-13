@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, error::Error as StdError, result, thread::JoinHandle};
 
-use engine_traits::{Engines, KvEngine, RaftEngine, CF_RAFT};
+use engine_traits::{CF_RAFT, Engines, KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},

@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{
-    bit_vec::BitVec, ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref,
+    ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref, bit_vec::BitVec,
 };
 use crate::{
     codec::mysql::{VectorFloat32Decoder, VectorFloat32Encoder},
@@ -128,7 +128,7 @@ impl From<Vec<Option<VectorFloat32>>> for ChunkedVecVectorFloat32 {
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecVectorFloat32> for &'a ChunkedVecVectorFloat32 {
+impl UnsafeRefInto<&'static ChunkedVecVectorFloat32> for &ChunkedVecVectorFloat32 {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecVectorFloat32 {
         std::mem::transmute(self)
     }

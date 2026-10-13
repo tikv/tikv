@@ -1,5 +1,5 @@
 use engine_rocks::BlobRunMode;
-use engine_traits::{CompactExt, ManualCompactionOptions, MiscExt, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt};
 use futures::executor::block_on;
 use test_raftstore::*;
 use tikv_util::config::{ReadableDuration, ReadableSize};

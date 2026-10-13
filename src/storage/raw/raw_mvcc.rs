@@ -2,8 +2,8 @@
 
 use engine_rocks::PerfContext;
 use engine_traits::{
-    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT,
-    DATA_KEY_PREFIX_LEN,
+    CF_DEFAULT, CfName, DATA_KEY_PREFIX_LEN, IterMetricsCollector, IterOptions, MetricsExt,
+    ReadOptions,
 };
 use txn_types::{Key, TimeStamp, Value};
 
@@ -28,7 +28,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         key: &Key,
     ) -> Result<Option<Value>> {
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
+        iter_opt.set_fill_cache(opts.is_none_or(|v| v.fill_cache()));
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
         let upper_bound = key.clone().append_ts(TimeStamp::zero()).into_encoded();
@@ -44,7 +44,10 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     type Iter = RawMvccIterator<S::Iter>;
-    type Ext<'a> = S::Ext<'a> where S: 'a;
+    type Ext<'a>
+        = S::Ext<'a>
+    where
+        S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.seek_first_key_value_cf(CF_DEFAULT, None, key)
@@ -259,12 +262,12 @@ mod tests {
     use std::iter::Iterator as StdIterator;
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_traits::{raw_ttl::ttl_to_expire_ts, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, raw_ttl::ttl_to_expire_ts};
     use kvproto::kvrpcpb::Context;
     use tikv_kv::{Engine, Iterator as EngineIterator, Modify, WriteData};
 
     use super::*;
-    use crate::storage::{kv, raw::encoded::RawEncodeSnapshot, TestEngineBuilder};
+    use crate::storage::{TestEngineBuilder, kv, raw::encoded::RawEncodeSnapshot};
 
     #[test]
     fn test_raw_mvcc_snapshot() {

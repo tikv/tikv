@@ -2,8 +2,8 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The expected total size (in duration) of TSO cache is specified by
-//! config item `causal-ts.alloc-ahead-buffer`.
+//! 1. The expected total size (in duration) of TSO cache is specified by config
+//!    item `causal-ts.alloc-ahead-buffer`.
 //!
 //! 2. Count usage of TSO on every renew interval.
 //!
@@ -11,10 +11,10 @@
 //! causal-ts.renew-interval`.
 //!
 //! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
-//! be cached.
+//!    be cached.
 //!
 //! 5. And `tso_usage x cache_multiplier - tso_remain` is the expected number of
-//! TSO to be requested from TSO service (if it's not a flush).
+//!    TSO to be requested from TSO service (if it's not a flush).
 //!
 //! Others:
 //! * `cache_multiplier` is also used as capacity of TSO batch list, as we
@@ -25,8 +25,8 @@ use std::{
     collections::BTreeMap,
     error, result,
     sync::{
-        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -47,9 +47,9 @@ use tokio::sync::{
 use txn_types::TimeStamp;
 
 use crate::{
+    CausalTsProvider,
     errors::{Error, Result},
     metrics::*,
-    CausalTsProvider,
 };
 
 /// Renew on every 100ms, to adjust batch size rapidly enough.
@@ -131,11 +131,11 @@ impl TsoBatch {
 /// `TsoBatchList` is a ordered list of `TsoBatch`. It aims to:
 ///
 /// 1. Cache more number of TSO to improve high availability. See issue #12794.
-/// `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
+///    `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
 ///
 /// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
-/// the scenario of leader transfer). Other regions without the requirement can
-/// still use older TSO cache.
+///    the scenario of leader transfer). Other regions without the requirement
+///    can still use older TSO cache.
 #[derive(Default, Debug)]
 pub struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
@@ -157,11 +157,11 @@ pub struct TsoBatchList {
 /// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
 ///
 /// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
-/// after the it is removed, which would violate the causality requirement.
-/// The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
+///    after the it is removed, which would violate the causality requirement.
+///    The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
 ///
 /// 2. It is a scenario with much more reads than writes. The `RwLock` would not
-/// be less efficient than lock free implementation.
+///    be less efficient than lock free implementation.
 type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
 
 impl TsoBatchList {
@@ -423,11 +423,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             Ok(ts) => {
                 tso_batch_list
                     .push(new_batch_size, ts, need_flush)
-                    .map_err(|e| {
+                    .inspect_err(|_e| {
                         if need_flush {
                             tso_batch_list.flush();
                         }
-                        e
                     })?;
                 debug!("BatchTsoProvider::renew_tso_batch";
                     "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);

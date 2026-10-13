@@ -8,7 +8,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, store::find_peer, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, store::find_peer};
 
 macro_rules! confirm_quorum_is_lost {
     ($cluster:expr, $region:expr) => {{

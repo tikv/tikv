@@ -2,9 +2,9 @@
 
 use std::{iter::Iterator as StdIterator, sync::mpsc::channel, time::Duration};
 
-use api_version::{test_kv_format_impl, ApiV1Ttl, KvFormat, RawValue};
+use api_version::{ApiV1Ttl, KvFormat, RawValue, test_kv_format_impl};
 use engine_rocks::{raw::CompactOptions, util::get_cf_handle};
-use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, IterOptions, MiscExt, Peekable, SyncMutable};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb, kvrpcpb::Context};
 use tikv::{
@@ -14,11 +14,11 @@ use tikv::{
         ttl::check_ttl_and_compact_files,
     },
     storage::{
+        Engine, Iterator, Snapshot, Statistics, TestStorageBuilder,
         kv::{SnapContext, TestEngineBuilder},
         lock_manager::MockLockManager,
         raw::encoded::RawEncodeSnapshot,
         test_util::{expect_ok_callback, expect_value},
-        Engine, Iterator, Snapshot, Statistics, TestStorageBuilder,
     },
 };
 use txn_types::Key;

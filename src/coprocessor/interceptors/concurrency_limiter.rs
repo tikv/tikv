@@ -53,7 +53,7 @@ where
 enum LimitationState<'a> {
     NotLimited,
     Acquiring,
-    Acuqired(SemaphorePermit<'a>),
+    Acuqired { _permit: SemaphorePermit<'a> },
 }
 
 impl<'a, PF, F> ConcurrencyLimiter<'a, PF, F>
@@ -86,7 +86,7 @@ where
             LimitationState::NotLimited if this.execution_time > this.time_limit_without_permit => {
                 match this.permit_fut.poll(cx) {
                     Poll::Ready(permit) => {
-                        *this.state = LimitationState::Acuqired(permit);
+                        *this.state = LimitationState::Acuqired { _permit: permit };
                         COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                     }
                     Poll::Pending => {
@@ -98,7 +98,7 @@ where
             }
             LimitationState::Acquiring => match this.permit_fut.poll(cx) {
                 Poll::Ready(permit) => {
-                    *this.state = LimitationState::Acuqired(permit);
+                    *this.state = LimitationState::Acuqired { _permit: permit };
                     COPR_WAITING_FOR_SEMAPHORE.dec();
                     COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                 }
@@ -128,8 +128,8 @@ where
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread,
     };

@@ -4,7 +4,7 @@ use std::{fmt::Debug, io::Write, path::Path, sync::Arc, time::Duration};
 
 use engine_rocks::RocksEngine;
 use engine_rocks_helper::sst_recovery::*;
-use engine_traits::{CompactExt, Peekable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, CompactExt, Peekable};
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
 

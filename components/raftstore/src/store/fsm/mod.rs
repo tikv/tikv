@@ -12,14 +12,14 @@ pub mod store;
 
 pub use self::{
     apply::{
-        check_sst_for_ingestion, create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics,
-        ApplyRes, ApplyRouter, Builder as ApplyPollerBuilder, CatchUpLogs, ChangeObserver,
-        ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, Proposal,
-        Registration, SwitchWitness, TaskRes as ApplyTaskRes,
+        Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
+        Builder as ApplyPollerBuilder, CatchUpLogs, ChangeObserver, ChangePeer, ExecResult,
+        GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, Proposal, Registration,
+        SwitchWitness, TaskRes as ApplyTaskRes, check_sst_for_ingestion, create_apply_batch_system,
     },
     metrics::{GlobalStoreStat, LocalStoreStat},
     peer::{
-        new_admin_request, new_read_index_request, DestroyPeerJob, PeerFsm, MAX_PROPOSAL_SIZE_RATIO,
+        DestroyPeerJob, MAX_PROPOSAL_SIZE_RATIO, PeerFsm, new_admin_request, new_read_index_request,
     },
-    store::{create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreMeta},
+    store::{RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreMeta, create_raft_batch_system},
 };

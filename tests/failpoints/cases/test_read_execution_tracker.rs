@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::*;
-use test_coprocessor::{init_with_data, DagSelect, ProductTable};
+use test_coprocessor::{DagSelect, ProductTable, init_with_data};
 use test_raftstore::{
     configure_for_lease_read, kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite,
 };

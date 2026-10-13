@@ -6,13 +6,13 @@ use std::marker::PhantomData;
 use api_version::KvFormat;
 use engine_rocks::PerfContext;
 use engine_traits::{
-    raw_ttl::ttl_current_ts, CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions,
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, raw_ttl::ttl_current_ts,
 };
 use txn_types::{Key, Value};
 
 use crate::storage::{
-    kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE},
     Statistics,
+    kv::{Iterator, RAW_VALUE_TOMBSTONE, Result, Snapshot},
 };
 
 #[derive(Clone)]
@@ -64,7 +64,10 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
 
 impl<S: Snapshot, F: KvFormat> Snapshot for RawEncodeSnapshot<S, F> {
     type Iter = RawEncodeIterator<S::Iter, F>;
-    type Ext<'a> = S::Ext<'a> where S: 'a;
+    type Ext<'a>
+        = S::Ext<'a>
+    where
+        S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.map_value(self.snap.get(key))

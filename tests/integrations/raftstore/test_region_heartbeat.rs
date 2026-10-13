@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread::sleep,
     time::Duration,
 };
@@ -9,9 +9,9 @@ use std::{
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv_util::{
+    HandyRwLock,
     config::*,
     time::{Instant, UnixSecs as PdInstant},
-    HandyRwLock,
 };
 
 macro_rules! test_down_peers {

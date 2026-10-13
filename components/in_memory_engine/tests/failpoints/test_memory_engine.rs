@@ -1,28 +1,28 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::sync_channel, Arc},
+    sync::{Arc, mpsc::sync_channel},
     time::Duration,
 };
 
 use crossbeam::epoch;
 use engine_rocks::util::new_engine;
 use engine_traits::{
-    CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, DATA_CFS, EvictReason, Mutable, RegionCacheEngine,
+    RegionCacheEngineExt, RegionEvent, WriteBatch, WriteBatchExt,
 };
 use in_memory_engine::{
-    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
-    test_util::{new_region, put_data, put_data_in_rocks},
     BackgroundTask, InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, InternalKey,
-    RegionCacheMemoryEngine, RegionState, SkiplistHandle, ValueType,
+    RegionCacheMemoryEngine, RegionState, SkiplistHandle, ValueType, decode_key,
+    encode_key_for_boundary_without_mvcc, encoding_for_filter,
+    test_util::{new_region, put_data, put_data_in_rocks},
 };
-use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+use keys::{DATA_MAX_KEY, DATA_MIN_KEY, data_key};
 use kvproto::metapb::Region;
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use tokio::{
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     time::timeout,
 };
 use txn_types::{Key, TimeStamp, WriteType};

@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
@@ -14,13 +14,13 @@ use test_util::alloc_port;
 use tidb_query_datatype::codec::Datum;
 use tikv::{
     config::CoprReadPoolConfig,
-    coprocessor::{readpool_impl, Endpoint},
+    coprocessor::{Endpoint, readpool_impl},
     read_pool::ReadPool,
     storage::{Engine, RocksEngine},
 };
 use tikv_util::{
-    config::ReadableDuration, quota_limiter::QuotaLimiter, thread_group::GroupProperties,
-    HandyRwLock,
+    HandyRwLock, config::ReadableDuration, quota_limiter::QuotaLimiter,
+    thread_group::GroupProperties,
 };
 use tipb::SelectResponse;
 

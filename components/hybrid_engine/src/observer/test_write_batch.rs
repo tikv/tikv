@@ -5,8 +5,8 @@ use std::{sync::mpsc::sync_channel, time::Duration};
 use crossbeam::epoch;
 use engine_traits::{CacheRegion, Mutable, Peekable, RegionCacheEngine, WriteBatch, WriteBatchExt};
 use in_memory_engine::{
-    decode_key, test_util::new_region, InMemoryEngineConfig, InternalKey, RegionCacheStatus,
-    ValueType,
+    InMemoryEngineConfig, InternalKey, RegionCacheStatus, ValueType, decode_key,
+    test_util::new_region,
 };
 use raftstore::coprocessor::{WriteBatchObserver, WriteBatchWrapper};
 

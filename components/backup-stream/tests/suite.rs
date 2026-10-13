@@ -10,47 +10,48 @@ use std::{
 
 use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
+    BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
+    RegionCheckpointOperation, RegionSet, Task,
     errors::Result,
     metadata::{
+        MetadataClient, StreamTask,
         keys::{KeyValue, MetaKey},
         store::{MetaStore, SlashEtcStore},
-        MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
-    RegionCheckpointOperation, RegionSet, Task,
+    utils,
 };
 use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
-use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
+use futures::{AsyncWriteExt, Future, Stream, StreamExt, executor::block_on};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     encryptionpb::EncryptionMethod,
     kvrpcpb::*,
     logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
-    logbackuppb_grpc::{create_log_backup, LogBackupClient},
+    logbackuppb_grpc::{LogBackupClient, create_log_backup},
     tikvpb::*,
 };
 use pd_client::PdClient;
-use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
+use raftstore::{RegionInfoAccessor, router::CdcRaftRouter};
 use resolved_ts::LeadershipResolver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
+use test_raftstore::{Cluster, Config, ServerCluster, new_server_cluster};
 use test_util::retry;
 use tikv::{
     config::{BackupStreamConfig, ResolvedTsConfig},
     storage::txn::txn_status_cache::TxnStatusCache,
 };
 use tikv_util::{
+    HandyRwLock,
     codec::{
         number::NumberEncoder,
         stream_event::{EventIterator, Iterator},
     },
     debug, info,
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;

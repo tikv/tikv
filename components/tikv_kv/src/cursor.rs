@@ -2,7 +2,7 @@
 
 use std::{cell::Cell, cmp::Ordering, ops::Bound};
 
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, DATA_KEY_PREFIX_LEN, IterOptions};
 use tikv_util::{
     keybuilder::KeyBuilder, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data,
     set_panic_mark,
@@ -10,8 +10,8 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp};
 
 use crate::{
+    CfStatistics, Error, Iterator, Result, SEEK_BOUND, ScanMode, Snapshot,
     stats::{StatsCollector, StatsKind},
-    CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND,
 };
 
 pub struct Cursor<I: Iterator> {
@@ -83,11 +83,7 @@ impl<I: Iterator> Cursor<I> {
         });
 
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -130,11 +126,7 @@ impl<I: Iterator> Cursor<I> {
         {
             return Ok(true);
         }
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -201,11 +193,7 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -238,11 +226,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(true);
         }
 
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -585,10 +569,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{
-        util::{new_engine_opt, FixedPrefixSliceTransform},
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
+        util::{FixedPrefixSliceTransform, new_engine_opt},
     };
-    use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, IterOptions, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;

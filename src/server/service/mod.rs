@@ -9,9 +9,9 @@ pub use self::{
     debug::{ResolvedTsDiagnosisCallback, Service as DebugService},
     diagnostics::Service as DiagnosticsService,
     kv::{
+        GrpcRequestDuration, MeasuredBatchResponse, MeasuredSingleResponse, Service as KvService,
         batch_commands_request, batch_commands_response, future_flashback_to_version,
-        future_prepare_flashback_to_version, GrpcRequestDuration, MeasuredBatchResponse,
-        MeasuredSingleResponse, Service as KvService,
+        future_prepare_flashback_to_version,
     },
 };
 

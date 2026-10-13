@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -11,7 +11,9 @@ use std::{
 use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
-use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    error, info, resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE, warn,
+};
 
 use super::{Config, Result};
 
@@ -242,7 +244,7 @@ impl ImportModeCfOptions {
 mod tests {
     use std::thread;
 
-    use engine_traits::{KvEngine, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, KvEngine};
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};

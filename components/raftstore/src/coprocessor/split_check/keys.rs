@@ -7,12 +7,11 @@ use tikv_util::{box_try, debug, info, warn};
 
 use super::{
     super::{
-        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
-        SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
+        metrics::*,
     },
-    calc_split_keys_count,
+    Host, calc_split_keys_count,
     size::get_approximate_split_keys,
-    Host,
 };
 use crate::coprocessor::dispatcher::StoreHandle;
 
@@ -209,10 +208,10 @@ pub fn get_region_approximate_keys(
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp, sync::mpsc, u64};
+    use std::{cmp, sync::mpsc};
 
     use engine_test::ctor::{CfOptions, DbOptions};
-    use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, KvEngine, LARGE_CFS, MiscExt, SyncMutable};
     use kvproto::{
         metapb::{Peer, Region},
         pdpb::CheckPolicy,
@@ -232,7 +231,7 @@ mod tests {
         *,
     };
     use crate::{
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        coprocessor::{Config, CoprocessorHost, dispatcher::SchedTask},
         store::{SplitCheckRunner, SplitCheckTask},
     };
 

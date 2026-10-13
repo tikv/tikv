@@ -15,11 +15,10 @@ use std::{
     fmt::Debug,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant as StdInstant},
-    u64,
 };
 
 use fail::fail_point;
@@ -53,11 +52,11 @@ use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use txn_types::TimeStamp;
 
 use super::{
+    Config, Error, FeatureGate, REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC, RegionInfo, Result,
+    UnixSecs,
     client::{CLIENT_PREFIX, CQ_COUNT},
     metrics::*,
-    util::{check_resp_header, PdConnector, TargetInfo},
-    Config, Error, FeatureGate, RegionInfo, Result, UnixSecs,
-    REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC,
+    util::{PdConnector, TargetInfo, check_resp_header},
 };
 use crate::PdFuture;
 
@@ -88,7 +87,7 @@ impl RawClient {
     async fn connect(ctx: &ConnectContext) -> Result<Self> {
         // -1 means the max.
         let retries = match ctx.cfg.retry_max_count {
-            -1 => std::isize::MAX,
+            -1 => isize::MAX,
             v => v.saturating_add(1),
         };
         for i in 0..retries {

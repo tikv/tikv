@@ -1,8 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{char, str, u32};
+use std::{char, str};
 
 use super::{super::Result, JsonRef, JsonType};
+use crate::codec::convert::ToStringValue;
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
@@ -12,7 +13,7 @@ const CHAR_LINEFEED: char = '\x0A';
 const CHAR_FORMFEED: char = '\x0C';
 const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// `unquote` recognizes the escape sequences shown in:
     /// <https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html>
     /// json-unquote-character-escape-sequences
@@ -29,12 +30,12 @@ impl<'a> JsonRef<'a> {
             | JsonType::Timestamp
             | JsonType::Time
             | JsonType::Opaque => {
-                let s = self.to_string();
+                let s = self.to_string_value();
                 // Remove the quotes of output
                 assert!(s.len() > 2);
                 Ok(s[1..s.len() - 1].to_string())
             }
-            _ => Ok(self.to_string()),
+            _ => Ok(self.to_string_value()),
         }
     }
 }

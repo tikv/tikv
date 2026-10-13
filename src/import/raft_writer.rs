@@ -10,7 +10,7 @@ use std::{
 use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};
-use tikv_kv::{with_tls_engine, Engine, WriteData, WriteEvent};
+use tikv_kv::{Engine, WriteData, WriteEvent, with_tls_engine};
 use tikv_util::time::Instant;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -168,8 +168,8 @@ mod test {
     use std::{convert::identity, iter::IntoIterator, sync::Mutex, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
-    use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use futures::{future::join_all, Future};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, Iterator};
+    use futures::{Future, future::join_all};
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, string::ToString};
 
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
+use tikv_util::sys::{SysQuota, cpu_time::LinuxStyleCpuTime, ioload, *};
 use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::SYS_INFO;

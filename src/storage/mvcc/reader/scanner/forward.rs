@@ -11,10 +11,10 @@ use txn_types::{
 
 use super::ScannerConfig;
 use crate::storage::{
+    Cursor, Snapshot, Statistics,
     kv::SEEK_BOUND,
     mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
     txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
-    Cursor, Snapshot, Statistics,
 };
 
 /// Defines the behavior of the scanner.
@@ -423,8 +423,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 .map(|val| match val {
                     Some(v) => HandleRes::Return((current_user_key, ValueEntry::new(v, None))),
                     None => HandleRes::MoveToNext,
-                })
-                .map_err(Into::into);
+                });
             }
             return Err(e.into());
         }
@@ -756,7 +755,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
         cursors.lock.as_mut().unwrap().next(&mut statistics.lock);
 
-        result.map_err(Into::into)
+        result
     }
 
     fn handle_write(
@@ -892,12 +891,12 @@ pub mod test_util {
 
     use super::*;
     use crate::storage::{
+        Engine,
         mvcc::Write,
         txn::tests::{
             must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
             must_prewrite_put,
         },
-        Engine,
     };
 
     pub struct EntryBuilder {
@@ -1152,10 +1151,10 @@ mod latest_kv_tests {
 
     use super::{super::ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence, *};
     use crate::storage::{
+        Scanner,
         kv::{Engine, Modify, TestEngineBuilder},
         mvcc::tests::write,
         txn::tests::*,
-        Scanner,
     };
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()`
@@ -1717,12 +1716,12 @@ mod latest_entry_tests {
 
     use super::{super::ScannerBuilder, test_util::*, *};
     use crate::storage::{
+        Engine, Modify, TestEngineBuilder,
         mvcc::tests::write,
         txn::{
-            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
             EntryBatch,
+            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
         },
-        Engine, Modify, TestEngineBuilder,
     };
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes
@@ -2153,10 +2152,10 @@ mod latest_entry_tests {
 mod delta_entry_tests {
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, is_short_value};
 
     use super::{super::ScannerBuilder, test_util::*, *};
-    use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
+    use crate::storage::{Engine, Modify, TestEngineBuilder, mvcc::tests::write, txn::tests::*};
 
     /// Check whether everything works as usual when `Delta::get()` goes out of
     /// bound.
@@ -2711,18 +2710,18 @@ mod delta_entry_tests {
             }
         };
 
-        check(b"", b"", 0, u64::max_value());
+        check(b"", b"", 0, u64::MAX);
         check(b"", b"", 20, 30);
         check(b"", b"", 14, 24);
         check(b"", b"", 15, 16);
         check(b"", b"", 80, 90);
-        check(b"", b"", 24, u64::max_value());
-        check(b"a", b"g", 0, u64::max_value());
+        check(b"", b"", 24, u64::MAX);
+        check(b"a", b"g", 0, u64::MAX);
         check(b"b", b"c", 20, 30);
         check(b"g", b"h", 14, 24);
         check(b"", b"a", 80, 90);
-        check(b"h", b"", 24, u64::max_value());
-        check(b"c", b"d", 0, u64::max_value());
+        check(b"h", b"", 24, u64::MAX);
+        check(b"c", b"d", 0, u64::MAX);
     }
 
     #[test]

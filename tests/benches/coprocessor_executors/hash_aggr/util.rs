@@ -5,12 +5,12 @@ use std::sync::Arc;
 use criterion::{black_box, measurement::Measurement};
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::{
-    interface::*, BatchFastHashAggregationExecutor, BatchSlowHashAggregationExecutor,
+    BatchFastHashAggregationExecutor, BatchSlowHashAggregationExecutor, interface::*,
 };
 use tikv::storage::Statistics;
 use tipb::{Aggregation, Expr};
 
-use crate::util::{bencher::Bencher, FixtureBuilder};
+use crate::util::{FixtureBuilder, bencher::Bencher};
 
 pub trait HashAggrBencher<M>
 where

@@ -7,9 +7,9 @@ use regex::Regex;
 
 use crate::{
     codec::{
-        data_type::{BytesRef, Decimal, Real},
-        mysql::{duration::*, RoundMode, DEFAULT_FSP, MAX_FSP, MIN_FSP},
         Error, Result,
+        data_type::{BytesRef, Decimal, Real},
+        mysql::{DEFAULT_FSP, MAX_FSP, MIN_FSP, RoundMode, duration::*},
     },
     expr::EvalContext,
 };
@@ -457,7 +457,7 @@ impl Interval {
 
         // Populate fields in reverse order
         for (i, &matched) in matches.iter().rev().enumerate() {
-            fields[index as usize - i] = &matched;
+            fields[index as usize - i] = matched;
         }
 
         // Helper to parse integer fields and handle errors
@@ -622,7 +622,7 @@ pub trait ConvertToIntervalStr {
     ) -> Result<String>;
 }
 
-impl<'a> ConvertToIntervalStr for BytesRef<'a> {
+impl ConvertToIntervalStr for BytesRef<'_> {
     #[inline]
     fn to_interval_string(
         &self,

@@ -8,10 +8,10 @@ mod tests {
         time::Duration,
     };
 
-    use collections::HashMap;
-    use resource_metering::{init_recorder, Collector, RawRecord, RawRecords, ResourceTagFactory};
-    use tikv_util::sys::thread;
     use Operation::*;
+    use collections::HashMap;
+    use resource_metering::{Collector, RawRecord, RawRecords, ResourceTagFactory, init_recorder};
+    use tikv_util::sys::thread;
 
     enum Operation {
         SetContext(&'static str),

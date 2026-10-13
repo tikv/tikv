@@ -28,7 +28,7 @@ pub use crate::{
     encryption::*,
     kv_generator::*,
     logging::*,
-    runner::{clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook},
+    runner::{TestHook, clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests},
     security::*,
 };
 

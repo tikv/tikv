@@ -93,10 +93,10 @@ impl From<FmSketch> for tipb::FmSketch {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::repeat, slice::from_ref};
+    use std::{iter::repeat_n, slice::from_ref};
 
     use tidb_query_datatype::{
-        codec::{datum, datum::Datum, Result},
+        codec::{Result, datum, datum::Datum},
         expr::EvalContext,
     };
 
@@ -111,7 +111,7 @@ mod tests {
     fn generate_samples(count: usize) -> Vec<Datum> {
         let start = 1000;
         let mut samples: Vec<usize> = (0..1)
-            .chain(repeat(2).take(start - 1))
+            .chain(repeat_n(2, start - 1))
             .chain(1000..count)
             .collect();
         let mut id = start;

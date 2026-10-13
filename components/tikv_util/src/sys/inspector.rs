@@ -40,7 +40,7 @@ pub trait ThreadInspector {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::{
-        fs::{read_to_string, File},
+        fs::{File, read_to_string},
         os::unix::io::AsRawFd,
         path::Path,
     };
@@ -126,7 +126,7 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use self::linux::{self_thread_inspector, Impl as ThreadInspectorImpl};
+pub use self::linux::{Impl as ThreadInspectorImpl, self_thread_inspector};
 
 #[cfg(not(target_os = "linux"))]
 mod notlinux {
@@ -142,7 +142,7 @@ mod notlinux {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub use self::notlinux::{self_thread_inspector, Impl as ThreadInspectorImpl};
+pub use self::notlinux::{Impl as ThreadInspectorImpl, self_thread_inspector};
 
 #[cfg(target_os = "linux")]
 #[cfg(test)]

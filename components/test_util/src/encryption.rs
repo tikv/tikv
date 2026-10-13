@@ -3,8 +3,8 @@
 use std::{fs::File, io::Write, path::Path, time::Duration};
 
 use encryption_export::{
-    create_backend, DataKeyManager, DataKeyManagerArgs, EncryptionConfig, FileConfig,
-    MasterKeyConfig, Result,
+    DataKeyManager, DataKeyManagerArgs, EncryptionConfig, FileConfig, MasterKeyConfig, Result,
+    create_backend,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::config::ReadableDuration;

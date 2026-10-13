@@ -2,7 +2,7 @@
 
 use super::{super::Result, JsonRef, JsonType};
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     /// Returns maximum depth of JSON document
     pub fn depth(&self) -> Result<i64> {
         depth_json(self)

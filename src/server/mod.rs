@@ -30,17 +30,17 @@ pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
 pub use self::{
-    config::{Config, ServerConfigManager, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR},
+    config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR, ServerConfigManager},
     errors::{Error, Result},
     metrics::{
-        CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEMORY_LIMIT_GAUGE, MEM_TRACE_SUM_GAUGE,
+        CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE, MEMORY_LIMIT_GAUGE,
     },
-    proxy::{build_forward_option, get_target_address, Proxy},
+    proxy::{Proxy, build_forward_option, get_target_address},
     raft_client::{ConnectionBuilder, MetadataSourceStoreId, RaftClient},
     raft_server::MultiRaftServer,
     raftkv::RaftKv,
     raftkv2::{Extension, NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
-    server::{Server, GRPC_THREAD_PREFIX},
+    server::{GRPC_THREAD_PREFIX, Server},
     transport::ServerTransport,
 };

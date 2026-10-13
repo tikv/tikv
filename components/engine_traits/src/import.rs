@@ -2,7 +2,7 @@
 
 use tikv_util::range_latch::RangeLatchGuard;
 
-use crate::{errors::Result, Range};
+use crate::{Range, errors::Result};
 
 pub trait ImportExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;

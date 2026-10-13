@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
+use std::{cmp, io::Write, sync::Arc, u8};
 
 use api_version::KvFormat;
 use codec::prelude::*;
@@ -10,12 +10,11 @@ use tikv_util::codec::BytesSlice;
 use tipb::ColumnInfo;
 
 use super::{
-    datum,
+    Datum, Error, Result, datum,
     datum::DatumDecoder,
     mysql::{Duration, Time},
-    Datum, Error, Result,
 };
-use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
+use crate::{FieldTypeTp, expr::EvalContext, prelude::*};
 
 // handle or index id
 pub const ID_LEN: usize = 8;

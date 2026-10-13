@@ -3,15 +3,14 @@
 use std::{
     iter::repeat,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
-    u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use kvproto::{
     kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo},
@@ -23,7 +22,7 @@ use test_storage::*;
 use tikv::{
     coprocessor::checksum_crc64_xor,
     server::gc_worker::DEFAULT_GC_BATCH_KEYS,
-    storage::{mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE, Engine},
+    storage::{Engine, mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE},
 };
 use txn_types::{Key, Mutation, TimeStamp};
 

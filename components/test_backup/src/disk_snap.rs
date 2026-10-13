@@ -24,12 +24,12 @@ use kvproto::{
     metapb::Region,
     raft_cmdpb::RaftCmdResponse,
 };
-use raftstore::store::{snapshot_backup::PrepareDiskSnapObserver, Callback, WriteResponse};
+use raftstore::store::{Callback, WriteResponse, snapshot_backup::PrepareDiskSnapObserver};
 use test_raftstore::*;
 use tikv_util::{
+    HandyRwLock,
     future::{block_on_timeout, paired_future_callback},
     worker::dummy_scheduler,
-    HandyRwLock,
 };
 
 pub struct Node {

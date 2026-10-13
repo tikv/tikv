@@ -513,7 +513,7 @@ mod tests {
     use pd_client::BucketMeta;
     use tikv_kv::RocksEngine;
 
-    use super::{PerfLevel, ReqContext, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use super::{PerfLevel, ReqContext, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::storage::Statistics;
 
     #[test]

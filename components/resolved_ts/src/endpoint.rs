@@ -11,7 +11,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use futures::channel::oneshot::{channel, Receiver, Sender};
+use futures::channel::oneshot::{Receiver, Sender, channel};
 use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -37,12 +37,12 @@ use tokio::sync::{Notify, Semaphore};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
+    Error, ON_DROP_WARN_HEAP_SIZE, Result, TsSource, TxnLocks,
+    advance::{AdvanceTsWorker, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION, LeadershipResolver},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntries, ScanTask, ScannerPool},
-    Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
 /// grace period for identifying slow resolved-ts and safe-ts.
@@ -144,9 +144,8 @@ impl ResolverStatus {
         let locks = std::mem::take(locks);
         (
             *tracked_index,
-            locks.into_iter().map(|lock| {
+            locks.into_iter().inspect(|lock| {
                 memory_quota.free(lock.approximate_heap_size());
-                lock
             }),
         )
     }
@@ -479,7 +478,7 @@ where
                     }
                     stats.unresolved_count += 1;
                 }
-                ResolverStatus::Ready { .. } => {
+                ResolverStatus::Ready => {
                     stats.heap_size += observed_region.resolver.approximate_heap_bytes() as i64;
                     stats.resolved_count += 1;
                 }
@@ -728,7 +727,7 @@ where
 
     fn register_region(&mut self, region: Region, backoff: Option<Duration>) {
         let region_id = region.get_id();
-        assert!(self.regions.get(&region_id).is_none());
+        assert!(!self.regions.contains_key(&region_id));
         let Some(read_progress) = self.region_read_progress.get(&region_id) else {
             warn!("try register nonexistent region"; "region" => ?region);
             return;

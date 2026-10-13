@@ -5,14 +5,14 @@ use std::{
     fmt,
     num::NonZeroU64,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use engine_traits::{
-    util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    MetricsExt, Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    CF_RAFT, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, Peekable,
+    RaftEngine, ReadOptions, Result as EngineResult, Snapshot, util::check_key_in_range,
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
@@ -24,9 +24,9 @@ use tikv_util::{
 };
 
 use crate::{
-    coprocessor::ObservedSnapshot,
-    store::{util, PeerStorage, TxnExt},
     Error, Result,
+    coprocessor::ObservedSnapshot,
+    store::{PeerStorage, TxnExt, util},
 };
 
 /// Snapshot of a region.
@@ -452,7 +452,7 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use engine_test::{kv::KvTestSnapshot, new_temp_engine};
-    use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -460,8 +460,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        store::{local_metrics::RaftMetrics, PeerStorage},
         Result,
+        store::{PeerStorage, local_metrics::RaftMetrics},
     };
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;

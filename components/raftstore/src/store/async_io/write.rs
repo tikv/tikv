@@ -21,7 +21,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use health_controller::types::LatencyInspector;
 use kvproto::{
     metapb::RegionEpoch,
@@ -31,8 +31,8 @@ use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use resource_control::{
-    channel::{bounded, Receiver},
     ResourceConsumeType, ResourceController, ResourceMetered,
+    channel::{Receiver, bounded},
 };
 use tikv_util::{
     box_err,
@@ -40,22 +40,23 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    time::{duration_to_sec, setup_for_spin_interval, spin_at_least, Duration, Instant},
+    time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
     warn,
 };
 use tracker::TrackerTokenArray;
 
 use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
+    Result,
     store::{
+        PeerMsg,
         config::Config,
         fsm::RaftRouter,
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
-        util, PeerMsg,
+        util,
     },
-    Result,
 };
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -237,7 +238,7 @@ where
         !(self.raft_state.is_none()
             && self.entries.is_empty()
             && self.extra_write.is_empty()
-            && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
+            && self.raft_wb.as_ref().is_none_or(|wb| wb.is_empty()))
     }
 
     /// Append continous entries.
