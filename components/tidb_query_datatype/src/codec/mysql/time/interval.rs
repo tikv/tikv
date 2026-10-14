@@ -203,7 +203,19 @@ impl Interval {
 
         // Parse integer part before decimal point
         let iv = match i64::from_str(integer_part) {
-            Ok(val) => val * sign,
+            Ok(val) => match val.checked_mul(sign) {
+                Some(v) => v,
+                None => {
+                    // Overflow: val * sign exceeds i64 range. Return None for
+                    // duration parsing error, or record overflow warning for
+                    // non-duration (intervals in expressions return NULL on overflow).
+                    if for_duration {
+                        return Err(Error::incorrect_datetime_value(input));
+                    }
+                    ctx.handle_invalid_time_error(Error::datetime_function_overflow())?;
+                    return Ok(None);
+                }
+            },
             Err(_) => {
                 if for_duration {
                     return Err(Error::incorrect_datetime_value(input));
