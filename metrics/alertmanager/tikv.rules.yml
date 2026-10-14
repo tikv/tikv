@@ -14,12 +14,12 @@ groups:
       summary: TiKV encounters critical error
 
   - alert: TiKV_memory_used_too_fast
-    expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
+    expr: process_resident_memory_bytes{job="tikv"} - (process_resident_memory_bytes{job="tikv"} offset 5m) > 5*1024*1024*1024
     for: 5m
     labels:
       env: ENV_LABELS_ENV
       level: emergency
-      expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
+      expr: process_resident_memory_bytes{job="tikv"} - (process_resident_memory_bytes{job="tikv"} offset 5m) > 5*1024*1024*1024
     annotations:
       description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
@@ -81,7 +81,7 @@ groups:
       level: critical
       expr:  max(tikv_scheduler_l0_avg) by (instance) > 80
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV the average number of L0 files exceeds 80
 
@@ -182,14 +182,14 @@ groups:
       summary: TiKV scheduler latch wait duration seconds more than 1s
 
   - alert: TiKV_thread_apply_worker_cpu_seconds
-    expr: max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
+    expr: max(rate(tikv_thread_cpu_seconds_total{name=~"apply_.*"}[1m])) by (instance) > 0.9
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: critical
-      expr:  max(rate(tikv_thread_cpu_seconds_total{name="apply_.*"}[1m])) by (instance) > 0.9
+      expr:  max(rate(tikv_thread_cpu_seconds_total{name=~"apply_.*"}[1m])) by (instance) > 0.9
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV thread apply worker cpu seconds is high
 
@@ -201,7 +201,7 @@ groups:
       level: critical
       expr: sum(increase(tidb_tikvclient_gc_action_result{type="fail"}[1m])) > 10
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiDB_tikvclient_gc_action_fail
 
@@ -285,7 +285,7 @@ groups:
       level: warning
       expr:  sum(rate(tikv_thread_cpu_seconds_total{name=~"cop_.*"}[1m])) by (instance) / (count(tikv_thread_cpu_seconds_total{name=~"cop_.*"}) by (instance) * 0.9) >= 1
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV coprocessor CPU utilization exceeds 90%
 
@@ -297,7 +297,7 @@ groups:
       level: warning
       expr:  sum(tikv_worker_pending_task_total) BY (instance,name)  > 1000
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV pending task too much
 
@@ -309,7 +309,7 @@ groups:
       level: warning
       expr:  sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV available disk space too low
 
@@ -321,7 +321,7 @@ groups:
       level: warning
       expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
     annotations:
-      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
       summary: TiKV approximate region size is more than 1GB
 
