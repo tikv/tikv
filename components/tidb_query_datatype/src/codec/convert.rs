@@ -526,7 +526,7 @@ impl ToInt for JsonRef<'_> {
         let val = match self.get_type() {
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as i64)),
             JsonType::I64 => Ok(self.get_i64()),
-            JsonType::U64 => Ok(self.get_u64() as i64),
+            JsonType::U64 => self.get_u64().to_int(ctx, tp),
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
             _ => Ok(ctx
@@ -1552,6 +1552,23 @@ mod tests {
             let json: Json = jstr.parse().unwrap();
             let get = json.to_int(&mut ctx, FieldTypeTp::LongLong).unwrap();
             assert_eq!(get, exp, "json.as_i64 get: {}, exp: {}", get, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_u64_to_int_overflow() {
+        for value in ["9223372036854775808", "18446744073709551615"] {
+            let json: Json = value.parse().unwrap();
+
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+            let err = json.to_int(&mut ctx, FieldTypeTp::LongLong).unwrap_err();
+            assert_eq!(err.code(), ERR_DATA_OUT_OF_RANGE);
+
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+            let val = json.to_int(&mut ctx, FieldTypeTp::LongLong).unwrap();
+            assert_eq!(val, i64::MAX);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
         }
     }
 
