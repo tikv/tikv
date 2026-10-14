@@ -614,6 +614,34 @@ mod tests {
     #[test]
     fn test_json_modify() {
         let cases: Vec<(_, Vec<ScalarValue>, _)> = vec![
+            // Issue #20144: SQL NULL base doc should return SQL NULL regardless of other args
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                ScalarFuncSig::JsonInsertSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                ScalarFuncSig::JsonReplaceSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
