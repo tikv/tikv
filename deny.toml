@@ -150,3 +150,6 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+# Temporary: yatp is pinned to a fork branch carrying tikv/yatp#100 until it
+# merges (see #20137). Remove together with the fork pin.
+allow-git = ["https://github.com/mittalrishabh/yatp.git"]
