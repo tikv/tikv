@@ -2095,14 +2095,14 @@ mod tests {
 
     /// Regression tests for the DATE_ADD interval overflow fix (#20167 / PR #20186).
     ///
-    /// These cover the three code paths that now distinguish overflow from other
-    /// parse errors: `i64::from_str` overflow on the integer part,
-    /// `val.checked_mul(sign)` overflow (triggered by inputs such as
-    /// `"--9223372036854775808"` that leave a `-` inside the parsed
-    /// `integer_part`), and the rounding-increment overflow protected by
-    /// `riv.checked_add(sign)`.  For each path we verify that expression-mode
-    /// intervals return `Ok(None)` with a `datetime_function_overflow` warning,
-    /// while duration parsing still surfaces a hard error.
+    /// Covers integer parsing overflow and sign-multiplication overflow.
+    /// In the default expression context, these return `Ok(None)` with a
+    /// `datetime_function_overflow` warning. Integer parsing overflow also
+    /// returns an error during duration parsing.
+    ///
+    /// Separately exercises the checked rounding increment at the i64 boundary.
+    /// The Second cases return `Some(interval)` and preserve the integer and
+    /// fractional fields.
     #[test]
     fn test_interval_parse_overflow_regressions() {
         use IntervalUnit::*;
