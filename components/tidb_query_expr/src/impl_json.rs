@@ -43,6 +43,10 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[inline]
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
+    // Return SQL NULL when base document is SQL NULL (matches TiDB behavior)
+    if args[0].is_none() {
+        return Ok(None);
+    }
     // base Json argument
     let base: Option<JsonRef> = args[0].as_json();
     let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
@@ -71,7 +75,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
     // Returns None if Base is None
-    if args[0].to_owned().is_none() {
+    if args[0].is_none() {
         return Ok(None);
     }
     // base Json argument
@@ -304,7 +308,7 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
 fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert_eq!(args.len(), 1);
     let received_et = args[0].eval_type();
-    let r = match args[0].to_owned().is_none() {
+    let r = match args[0].is_none() {
         true => None,
         _ => match received_et {
             EvalType::Json => args[0].as_json().and(Some(1)),
