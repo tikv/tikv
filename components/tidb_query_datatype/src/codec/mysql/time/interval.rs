@@ -190,9 +190,11 @@ impl Interval {
     /// * When `for_duration` is `true`, integer or multiplication overflow returns
     ///   [`Error::incorrect_datetime_value`].
     /// * When `for_duration` is `false` (expression mode, e.g. `DATE_ADD`), overflow
-    ///   records a [`Error::datetime_function_overflow`] warning via
-    ///   [`EvalContext::handle_invalid_time_error`] and returns `Ok(None)` so that
-    ///   callers produce `NULL` instead of applying a zero-valued interval.
+    ///   calls [`EvalContext::handle_invalid_time_error`] with
+    ///   [`Error::datetime_function_overflow`].  **Only when the handler succeeds
+    ///   does the function return `Ok(None)`** (so callers produce `NULL` instead
+    ///   of applying a zero-valued interval); in strict SQL modes (INSERT / UPDATE
+    ///   / DELETE) the handler itself may return `Err`, which is propagated.
     ///
     /// Rounding increments that would overflow `i64` after saturation are
     /// protected with [`i64::checked_add`] and retain the saturated value.
@@ -220,9 +222,12 @@ impl Interval {
             Ok(val) => match val.checked_mul(sign) {
                 Some(v) => v,
                 None => {
-                    // Overflow: val * sign exceeds i64 range. Return None for
-                    // duration parsing error, or record overflow warning for
-                    // non-duration (intervals in expressions return NULL on overflow).
+                    // Overflow: `val * sign` exceeds the i64 range.  This branch
+                    // is reachable through pathological inputs that leave a
+                    // leading `-` inside the parsed `integer_part` (e.g.
+                    // `"--9223372036854775808"` → integer_part =
+                    // `"-9223372036854775808"` parses as `i64::MIN`, then
+                    // `i64::MIN.checked_mul(-1)` returns `None`).
                     if for_duration {
                         return Err(Error::incorrect_datetime_value(input));
                     }
@@ -2092,8 +2097,9 @@ mod tests {
     ///
     /// These cover the three code paths that now distinguish overflow from other
     /// parse errors: `i64::from_str` overflow on the integer part,
-    /// `val.checked_mul(sign)` overflow (defensive, currently unreachable from
-    /// `from_str`), and the rounding-increment overflow protected by
+    /// `val.checked_mul(sign)` overflow (triggered by inputs such as
+    /// `"--9223372036854775808"` that leave a `-` inside the parsed
+    /// `integer_part`), and the rounding-increment overflow protected by
     /// `riv.checked_add(sign)`.  For each path we verify that expression-mode
     /// intervals return `Ok(None)` with a `datetime_function_overflow` warning,
     /// while duration parsing still surfaces a hard error.
@@ -2109,14 +2115,14 @@ mod tests {
             result.unwrap().is_none(),
             "positive i64::from_str overflow should return None"
         );
+        assert_eq!(ctx.warnings.warnings.len(), 1);
         assert_eq!(
-            ctx.warnings.warnings.len(),
-            1,
-            "should record one overflow warning for i64::from_str PosOverflow"
+            ctx.warnings.warnings[0].get_code(),
+            Error::datetime_function_overflow().code()
         );
 
         // Same overflow with a negative sign: integer_part is still the
-        // unsigned "9223372036854775808", which overflows from_str.
+        // unsigned "9223372036854775808", which overflows from_str (PosOverflow).
         let mut ctx = EvalContext::default();
         let result = Interval::parse_from_str(&mut ctx, &Second, "-9223372036854775808");
         assert!(
@@ -2124,13 +2130,39 @@ mod tests {
             "negative input with PosOverflow integer_part should return None"
         );
         assert_eq!(ctx.warnings.warnings.len(), 1);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            Error::datetime_function_overflow().code()
+        );
 
-        // A value far beyond i64::MAX should also take the overflow branch.
+        // A value far beyond i64::MAX should also take the from_str overflow branch.
         let mut ctx = EvalContext::default();
         let result = Interval::parse_from_str(&mut ctx, &Second, "99999999999999999999");
         assert!(
             result.unwrap().is_none(),
             "far-beyond-i64::MAX should return None"
+        );
+        assert_eq!(ctx.warnings.warnings.len(), 1);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            Error::datetime_function_overflow().code()
+        );
+
+        // 1b. checked_mul(sign) overflow — pathological input that leaves a leading
+        //     `-` inside the parsed `integer_part`.  "--9223372036854775808" →
+        //     integer_part = "-9223372036854775808" (no leading sign stripped because
+        //     we already consumed the first `-`), which parses as `i64::MIN`, then
+        //     `i64::MIN.checked_mul(-1)` returns `None`.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "--9223372036854775808");
+        assert!(
+            result.unwrap().is_none(),
+            "checked_mul overflow from double negative should return None"
+        );
+        assert_eq!(ctx.warnings.warnings.len(), 1);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            Error::datetime_function_overflow().code()
         );
 
         // 2. Duration parsing (for_duration=true) must still fail hard on
@@ -2164,15 +2196,16 @@ mod tests {
         );
 
         // Sign-flipped boundary: the integer part is i64::MAX with a leading
-        // minus, so after `val * sign` we sit one above i64::MIN.  Rounding down
-        // (dv=0.6, sign=-1) asks for riv += -1, which does NOT overflow here —
-        // included to exercise the negative rounding path without hitting a
-        // second `from_str` overflow.
+        // minus, so after `val * sign` iv = -i64::MAX = -9223372036854775807,
+        // and nano = dv * sign * NANOS_PER_MICRO = -600_000_000.  Second
+        // branch stores raw `iv` (not the rounded `riv`) for `sec`, so `sec`
+        // is also -9223372036854775807.
         let mut ctx = EvalContext::default();
         let result = Interval::parse_from_str(&mut ctx, &Second, "-9223372036854775807.6");
-        assert!(
-            result.is_ok(),
-            "near-i64::MIN rounding must not panic or return an error"
-        );
+        let interval = result
+            .unwrap()
+            .expect("near-i64::MIN rounding must not panic or return an error");
+        assert_eq!(interval.sec, -i64::MAX);
+        assert_eq!(interval.nano, -600_000_000);
     }
 }
