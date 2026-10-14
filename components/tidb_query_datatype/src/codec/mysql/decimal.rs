@@ -1894,6 +1894,14 @@ impl ConvertTo<Decimal> for JsonRef<'_> {
                     Ok(Decimal::zero())
                 })
             }
+            // Convert integer JSON values directly, matching TiDB's
+            // ConvertJSONToDecimal. Routing through f64 (the previous
+            // catch-all path below) loses precision for magnitudes beyond
+            // 2^53, since f64 cannot represent every i64/u64 value exactly
+            // -- this could silently change which rows a pushed-down
+            // predicate selects for large integer JSON IDs.
+            JsonType::I64 => Ok(Decimal::from(self.get_i64())),
+            JsonType::U64 => Ok(Decimal::from(self.get_u64())),
             _ => {
                 let r: f64 = self.convert(ctx)?;
                 Decimal::from_f64(r)
@@ -2480,6 +2488,41 @@ mod tests {
             let dec: Decimal = num.into();
             let dec_str = dec.to_string_value();
             assert_eq!(dec_str, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_i64_u64_to_decimal_exact() {
+        use super::super::json::Json;
+
+        // Values chosen at/near the i64/u64 boundary, where f64 (53-bit
+        // mantissa) can no longer represent every integer exactly. Routing
+        // these through f64 before Decimal::from_f64 silently rounds them,
+        // which could change which rows a pushed-down predicate comparing
+        // against an equal DECIMAL value selects.
+        let cases: Vec<(Json, &str)> = vec![
+            (
+                Json::from_i64(9007199254740991).unwrap(),
+                "9007199254740991",
+            ),
+            (
+                Json::from_i64(9007199254740993).unwrap(),
+                "9007199254740993",
+            ),
+            (
+                Json::from_i64(9223372036854775807).unwrap(),
+                "9223372036854775807",
+            ),
+            (
+                Json::from_u64(18446744073709551615).unwrap(),
+                "18446744073709551615",
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (json, expected) in cases {
+            let dec: Decimal = json.as_ref().convert(&mut ctx).unwrap();
+            assert_eq!(dec.to_string(), expected);
         }
     }
 

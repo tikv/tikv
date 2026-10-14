@@ -5950,29 +5950,33 @@ mod tests {
                 Decimal::from_f64(10f64).unwrap(),
             ),
             (
+                // Json::from_i64/from_u64 now convert exactly via
+                // Decimal::from(i64)/Decimal::from(u64) rather than via a
+                // lossy f64 intermediate, so the expected value here must
+                // be computed the same exact way, not via Decimal::from_f64.
                 Json::from_i64(i64::MAX).unwrap(),
                 false,
                 false,
-                Decimal::from_f64(i64::MAX as f64).unwrap(),
+                Decimal::from(i64::MAX),
             ),
             (
                 Json::from_i64(i64::MIN).unwrap(),
                 false,
                 false,
-                Decimal::from_f64(i64::MIN as f64).unwrap(),
+                Decimal::from(i64::MIN),
             ),
             (Json::from_u64(0).unwrap(), false, false, Decimal::zero()),
             (
                 Json::from_u64(i64::MAX as u64).unwrap(),
                 false,
                 false,
-                Decimal::from_f64(i64::MAX as f64).unwrap(),
+                Decimal::from(i64::MAX as u64),
             ),
             (
                 Json::from_u64(u64::MAX).unwrap(),
                 false,
                 false,
-                Decimal::from_f64(u64::MAX as f64).unwrap(),
+                Decimal::from(u64::MAX),
             ),
             (
                 Json::from_f64(i64::MAX as f64).unwrap(),
