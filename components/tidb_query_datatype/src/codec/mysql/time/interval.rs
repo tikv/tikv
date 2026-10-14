@@ -182,6 +182,20 @@ impl Interval {
         }
     }
 
+    /// Parses a single numeric time value string (e.g. "123" or "1.5") into an
+    /// [`Interval`] for the given `unit`.
+    ///
+    /// The `for_duration` flag controls overflow behavior:
+    ///
+    /// * When `for_duration` is `true`, integer or multiplication overflow returns
+    ///   [`Error::incorrect_datetime_value`].
+    /// * When `for_duration` is `false` (expression mode, e.g. `DATE_ADD`), overflow
+    ///   records a [`Error::datetime_function_overflow`] warning via
+    ///   [`EvalContext::handle_invalid_time_error`] and returns `Ok(None)` so that
+    ///   callers produce `NULL` instead of applying a zero-valued interval.
+    ///
+    /// Rounding increments that would overflow `i64` after saturation are
+    /// protected with [`i64::checked_add`] and retain the saturated value.
     fn parse_single_time_value(
         ctx: &mut EvalContext,
         unit: &IntervalUnit,
@@ -2072,5 +2086,93 @@ mod tests {
             let result = Interval::extract_duration(&mut ctx, &unit, input);
             result.unwrap_err();
         }
+    }
+
+    /// Regression tests for the DATE_ADD interval overflow fix (#20167 / PR #20186).
+    ///
+    /// These cover the three code paths that now distinguish overflow from other
+    /// parse errors: `i64::from_str` overflow on the integer part,
+    /// `val.checked_mul(sign)` overflow (defensive, currently unreachable from
+    /// `from_str`), and the rounding-increment overflow protected by
+    /// `riv.checked_add(sign)`.  For each path we verify that expression-mode
+    /// intervals return `Ok(None)` with a `datetime_function_overflow` warning,
+    /// while duration parsing still surfaces a hard error.
+    #[test]
+    fn test_interval_parse_overflow_regressions() {
+        use IntervalUnit::*;
+
+        // 1. i64::from_str PosOverflow — integer part exceeds i64 range.
+        //    "9223372036854775808" == i64::MAX + 1 → PosOverflow.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "9223372036854775808");
+        assert!(
+            result.unwrap().is_none(),
+            "positive i64::from_str overflow should return None"
+        );
+        assert_eq!(
+            ctx.warnings.warnings.len(),
+            1,
+            "should record one overflow warning for i64::from_str PosOverflow"
+        );
+
+        // Same overflow with a negative sign: integer_part is still the
+        // unsigned "9223372036854775808", which overflows from_str.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "-9223372036854775808");
+        assert!(
+            result.unwrap().is_none(),
+            "negative input with PosOverflow integer_part should return None"
+        );
+        assert_eq!(ctx.warnings.warnings.len(), 1);
+
+        // A value far beyond i64::MAX should also take the overflow branch.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "99999999999999999999");
+        assert!(
+            result.unwrap().is_none(),
+            "far-beyond-i64::MAX should return None"
+        );
+
+        // 2. Duration parsing (for_duration=true) must still fail hard on
+        //    overflow rather than silently returning None.
+        let mut ctx = EvalContext::default();
+        let result = Interval::extract_duration(&mut ctx, &Second, "9223372036854775808");
+        assert!(
+            result.is_err(),
+            "duration parsing overflow should return Err, not None"
+        );
+
+        let mut ctx = EvalContext::default();
+        let result = Interval::extract_duration(&mut ctx, &Second, "-9223372036854775808");
+        assert!(result.is_err());
+
+        // 3. Rounding boundary — `riv.checked_add(sign)` must not panic when the
+        //    saturated integer value is at i64::MAX and the decimal part rounds
+        //    up.  Without checked_add the test profile's overflow checks would
+        //    abort.
+        //    "9223372036854775807.6" → iv=i64::MAX, dv=600000 → round-up,
+        //    riv.checked_add(1) overflows, keep iv=i64::MAX.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "9223372036854775807.6");
+        let interval = result
+            .unwrap()
+            .expect("saturated rounding boundary should succeed, not panic");
+        assert_eq!(
+            interval.sec,
+            i64::MAX,
+            "should retain saturated i64::MAX when rounding increment overflows"
+        );
+
+        // Sign-flipped boundary: the integer part is i64::MAX with a leading
+        // minus, so after `val * sign` we sit one above i64::MIN.  Rounding down
+        // (dv=0.6, sign=-1) asks for riv += -1, which does NOT overflow here —
+        // included to exercise the negative rounding path without hitting a
+        // second `from_str` overflow.
+        let mut ctx = EvalContext::default();
+        let result = Interval::parse_from_str(&mut ctx, &Second, "-9223372036854775807.6");
+        assert!(
+            result.is_ok(),
+            "near-i64::MIN rounding must not panic or return an error"
+        );
     }
 }
