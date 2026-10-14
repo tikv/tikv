@@ -70,6 +70,35 @@ It is a read-heavy hot path and directly impacts query latency.
   and `statistics/analyze.rs`, and checksum requests use `checksum.rs`.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
+<<<<<<< HEAD
+=======
+- The DAG `flags` bitmask is a network-facing contract. Bit 12,
+  `Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION`, enables lazy `LogicalAnd`/`LogicalOr`
+  evaluation through `EvalConfig::from_request` and `RpnExpressionBuilder`.
+- Lazy evaluation is left-to-right, row-selective, and must preserve SQL
+  three-valued logic; short-circuit nesting is capped at 32. If the bit is
+  absent or unknown to the server, the expression is not eligible/profitable,
+  or the cap is exceeded, the existing eager `FnCall` path is used.
+- In short-circuit mode, skipped argument functions are not invoked, so their
+  warnings/errors are suppressed, although referenced columns may still be
+  eagerly decoded; when unavailable, the existing eager path and SQL-mode
+  warning/error behavior are preserved.
+- Full-sampling Analyze requests with `ndv_rate` below 1 select NDV rows
+  after MVCC visibility checks and before filling column vectors. Histogram
+  rows come from the selected rows: Bernoulli sampling keeps each at
+  `sample_rate / ndv_rate`, and fixed-size reservoirs see only selected rows.
+  Scan batches count skipped rows and remain bounded by visible rows.
+  Sampled Analyze charges background read bandwidth for all scanned KV bytes,
+  including rows not selected for NDV.
+- Sampled responses set `RowSampleCollector.ndv_sample_count`, including zero.
+  `count` counts all visible rows. TiKV scales NULL counts and sizes by the
+  actual visible-row / selected-row ratio when serializing the response, after
+  any batch merges. TiDB adds these population estimates as usual.
+  Each FMSketch keeps disjoint singleton and repeated hash sets under one mask
+  and size limit. TiDB estimates NDV after merging the sketches. Missing
+  `ndv_rate` or a rate of one keeps the full-input path and omits
+  `ndv_sample_count`.
+>>>>>>> 67ffce0c13 (coprocessor: sample rows for NDV analysis (#20106))
 
 ## Start Here
 

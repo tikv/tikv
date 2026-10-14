@@ -218,6 +218,18 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeBroadcastQuery => {
                     return Err(other_err!("TypeBroadcastQuery executor not implemented"));
                 }
+<<<<<<< HEAD
+=======
+                ExecType::TypeCteSink => {
+                    return Err(other_err!("TypeCteSink executor not implemented"));
+                }
+                ExecType::TypeCteSource => {
+                    return Err(other_err!("TypeCteSource executor not implemented"));
+                }
+                ExecType::TypeExplainForConnection => {
+                    return Err(other_err!("ExplainForConnection executor not implemented"));
+                }
+>>>>>>> 67ffce0c13 (coprocessor: sample rows for NDV analysis (#20106))
             }
         }
 
