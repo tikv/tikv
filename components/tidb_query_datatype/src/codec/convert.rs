@@ -653,36 +653,38 @@ pub fn produce_dec_with_specified_tp(
         if flen < decimal {
             return Err(Error::m_bigger_than_d(""));
         }
-        let (prec, frac) = dec.prec_and_frac();
-        let (prec, frac) = (prec as isize, frac as isize);
-        if !dec.is_zero() && prec - frac > flen - decimal {
+        // Keep the fractional digit count of the *original* value: the truncation
+        // warning below must be decided from it, not from the rounded value.
+        let (_, frac) = dec.prec_and_frac();
+        let frac = frac as isize;
+        let old = dec;
+        // Round first, like TiDB's `ProduceDecWithSpecifiedTp`. Rounding can carry
+        // into a new integer digit (e.g. 999.995 -> 1000.00 for DECIMAL(5,2)), so the
+        // integer-range check must look at the rounded value.
+        if frac != decimal {
+            dec = dec
+                .round(decimal as i8, RoundMode::HalfEven)
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("Decimal", format!("({},{})", flen, decimal)),
+                )?;
+        }
+        let (rounded_prec, rounded_frac) = dec.prec_and_frac();
+        if !dec.is_zero() && rounded_prec as isize - rounded_frac as isize > flen - decimal {
             // select (cast 111 as decimal(1)) causes a warning in MySQL.
             ctx.handle_overflow_err(Error::overflow(
                 "Decimal",
                 format!("({}, {})", flen, decimal),
             ))?;
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
-        } else if frac != decimal {
-            let old = dec;
-            let rounded = dec
-                .round(decimal as i8, RoundMode::HalfEven)
-                .into_result_with_overflow_err(
-                    ctx,
-                    Error::overflow("Decimal", format!("({}, {})", flen, decimal)),
-                )?;
-            if !rounded.is_zero() && frac > decimal && rounded != old {
-                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
-                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
-                {
-                    ctx.warnings.append_warning(Error::truncated());
-                } else {
-                    // although according to tidb,
-                    // we should handler overflow after handle_truncate,
-                    // however, no overflow err will return by handle_truncate
-                    ctx.handle_truncate(true)?;
-                }
+        } else if !dec.is_zero() && frac > decimal && dec != old {
+            if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+            {
+                ctx.warnings.append_warning(Error::truncated());
+            } else {
+                ctx.handle_truncate(true)?;
             }
-            dec = rounded
         }
     };
     if ft.is_unsigned() && dec.is_negative() {
@@ -2409,6 +2411,97 @@ mod tests {
                 dec, nd, want, flen, decimal
             );
         }
+    }
+
+    // Rounding may carry into a new integer digit; the integer-range check must
+    // be applied to the rounded value (tikv/tikv#20141).
+    #[test]
+    fn test_produce_dec_with_specified_tp_rounding_carry() {
+        use std::str::FromStr;
+
+        // (input, flen, decimal, expected, expect overflow warning, expect truncate
+        // warning)
+        let cases = vec![
+            // no carry: rounds down to the boundary value, only a truncation warning
+            ("999.994", 5, 2, "999.99", false, true),
+            // carry into a 4th integer digit: saturate and report overflow, no truncation
+            ("999.995", 5, 2, "999.99", true, false),
+            ("-999.995", 5, 2, "-999.99", true, false),
+            ("999.999", 5, 2, "999.99", true, false),
+            // carry fits in the target type
+            ("999.995", 6, 2, "1000.00", false, true),
+            ("-999.995", 6, 2, "-1000.00", false, true),
+            // no carry, plain rounding keeps the old behaviour
+            ("12.345", 5, 2, "12.35", false, true),
+            ("-12.344", 5, 2, "-12.34", false, true),
+            // exact fit and padding are untouched
+            ("999.99", 5, 2, "999.99", false, false),
+            ("999.9", 5, 2, "999.90", false, false),
+            // integer part already too big before rounding
+            ("1000.1", 5, 2, "999.99", true, false),
+        ];
+
+        for (in_dml, in_dml_flag) in [
+            (false, Flag::empty()),
+            (true, Flag::IN_INSERT_STMT),
+            (true, Flag::IN_UPDATE_OR_DELETE_STMT),
+        ] {
+            for (input, flen, decimal, expect, overflow, truncated) in &cases {
+                let cfg = EvalConfig::from_flag(
+                    Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING | in_dml_flag,
+                );
+                let mut ctx = EvalContext::new(Arc::new(cfg));
+                let mut ft = FieldType::default();
+                ft.set_flen(*flen);
+                ft.set_decimal(*decimal);
+
+                let dec = Decimal::from_str(input).unwrap();
+                let got = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
+                let log = format!(
+                    "input: {}, ({}, {}), in_dml: {}",
+                    input, flen, decimal, in_dml
+                );
+                assert_eq!(got.to_string(), *expect, "{}", log);
+                assert_eq!(got.frac_cnt(), got.result_frac_cnt(), "{}", log);
+
+                let codes: Vec<_> = ctx
+                    .take_warnings()
+                    .warnings
+                    .iter()
+                    .map(|w| w.get_code())
+                    .collect();
+                let mut want = vec![];
+                if *overflow {
+                    want.push(ERR_DATA_OUT_OF_RANGE);
+                } else if *truncated {
+                    want.push(WARN_DATA_TRUNCATED);
+                }
+                assert_eq!(codes, want, "{}", log);
+            }
+        }
+
+        // Strict mode: the rounding-induced overflow is an error, not a bad value.
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+        let mut ft = FieldType::default();
+        ft.set_flen(5);
+        ft.set_decimal(2);
+        let dec = Decimal::from_str("999.995").unwrap();
+        let err = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap_err();
+        assert_eq!(err.code(), ERR_DATA_OUT_OF_RANGE);
+
+        // Unsigned target: a negative value that rounds to the boundary becomes zero.
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+        ft.set_flen(5);
+        ft.set_decimal(2);
+        ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+        let dec = Decimal::from_str("-999.995").unwrap();
+        assert!(
+            produce_dec_with_specified_tp(&mut ctx, dec, &ft)
+                .unwrap()
+                .is_zero()
+        );
     }
 
     #[test]
