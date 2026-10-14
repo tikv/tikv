@@ -814,8 +814,12 @@ where
 
     let read_ctx = ReadContext::new(ctx.read_id, ctx.start_ts.map(|ts| ts.into_inner()));
     if res.is_ok() {
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: ctx.deadline,
+            disk_full_opt: kvproto::kvrpcpb::DiskFullOpt::default(),
+        };
         res = router
-            .read(read_ctx, cmd, store_cb)
+            .read(read_ctx, cmd, store_cb, extra_opts)
             .map_err(kv::Error::from);
     }
     async move {
