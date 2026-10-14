@@ -77,6 +77,22 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
                         .filter(|ts| txn_status.contains_key(ts))
                         .cloned()
                         .collect();
+                    if ts_to_process.len() > 1 {
+                        debug!("resolve lock read phase selected multiple shared lock holders";
+                            "region_id" => ctx.get_region_id(),
+                            "key" => log_wrappers::Value::key(key.as_encoded()),
+                            "holder_count" => ts_to_process.len(),
+                            "txn_status_sample" => ?ts_to_process
+                                .iter()
+                                .take(8)
+                                .filter_map(|start_ts| {
+                                    txn_status
+                                        .get(start_ts)
+                                        .map(|commit_ts| (*start_ts, *commit_ts))
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
                     for ts in ts_to_process {
                         if let Some(lock) = shared_locks.get_lock(&ts).unwrap() {
                             flatten_pairs.push((key.clone(), lock.clone()));
