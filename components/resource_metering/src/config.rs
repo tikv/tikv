@@ -15,7 +15,7 @@ const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
-const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
+const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = true;
 
 pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
     AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
@@ -141,6 +141,7 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let cfg = Config::default();
+        assert!(cfg.enable_network_io_collection);
         cfg.validate().unwrap(); // Empty address is allowed.
         let cfg = Config {
             receiver_address: "127.0.0.1:6666".to_string(),
