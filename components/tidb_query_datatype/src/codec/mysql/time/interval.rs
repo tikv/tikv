@@ -216,6 +216,18 @@ impl Interval {
                     return Ok(None);
                 }
             },
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow
+                ) =>
+            {
+                if for_duration {
+                    return Err(Error::incorrect_datetime_value(input));
+                }
+                ctx.handle_invalid_time_error(Error::datetime_function_overflow())?;
+                return Ok(None);
+            }
             Err(_) => {
                 if for_duration {
                     return Err(Error::incorrect_datetime_value(input));
