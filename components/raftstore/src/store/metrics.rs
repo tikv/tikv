@@ -409,6 +409,13 @@ lazy_static! {
             "Bucketed histogram of store write task wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+
+    pub static ref STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_write_raft_log_fsync_total",
+            "Total number of raft write batches, grouped by whether they were fsynced or skipped due to unsafe_no_raft_log_fsync.",
+            &["type"]
+        ).unwrap();
     pub static ref STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_handle_msg_duration_secs",
