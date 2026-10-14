@@ -52,6 +52,18 @@ impl SubRecorder for CpuRecorder {
         let records = &mut records.records;
         let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
+            // `pool_type` is resolved from the thread name at `thread_created`
+            // time and cached. A unified-read-pool worker spawned on demand
+            // under load can register with resource_metering (and thus be
+            // created here) *before* its name lands in THREAD_NAME_HASHMAP, so
+            // it gets cached as `Unknown`. That silently routes its CPU into the
+            // record's total but not into `unified_read`, which zeroes the
+            // per-region unified-read CPU the PD hot-region scheduler ranks on.
+            // Re-resolve while still `Unknown` so the thread self-heals once its
+            // name is registered on a later tick.
+            if thread_stat.pool_type == ThreadPoolType::Unknown {
+                thread_stat.pool_type = detect_thread_pool_type(*tid);
+            }
             let cur_tag = thread_stat.attached_tag.load_full();
             if let Some(cur_tag) = cur_tag {
                 if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
