@@ -215,6 +215,17 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // Like `write_json_str` but takes raw bytes, bypassing Rust's `str` type.
+    // TiDB (Go) treats strings as raw byte sequences with no UTF-8 requirement;
+    // the JSON binary string format (varint(len) + bytes) is identical
+    // regardless of UTF-8 validity.
+    fn write_json_str_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let bytes_len = bytes.len() as u64;
+        self.write_var_u64(bytes_len)?;
+        self.write_bytes(bytes)?;
+        Ok(())
+    }
+
     fn write_json_opaque(&mut self, typ: FieldTypeTp, bytes: &[u8]) -> Result<()> {
         self.write_u8(typ.to_u8().unwrap())?;
         let bytes_len = bytes.len() as u64;
