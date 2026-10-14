@@ -73,6 +73,7 @@ pub struct Config {
     access_key_pair: Option<AccessKeyPair>,
     force_path_style: bool,
     sse_kms_key_id: Option<StringNonEmpty>,
+    sse_kms_encryption_context: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
@@ -90,6 +91,7 @@ impl Config {
             access_key_pair: None,
             force_path_style: false,
             sse_kms_key_id: None,
+            sse_kms_encryption_context: None,
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: false,
@@ -130,6 +132,8 @@ impl Config {
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+            // BR encodes the JSON context once; writers pass the Base64 value unchanged.
+            sse_kms_encryption_context: StringNonEmpty::opt(input.sse_kms_encryption_context),
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: input.object_lock_enabled,
             role_arn: StringNonEmpty::opt(input.role_arn),
@@ -390,6 +394,7 @@ struct S3Uploader<'client> {
     acl: Option<StringNonEmpty>,
     server_side_encryption: Option<StringNonEmpty>,
     sse_kms_key_id: Option<StringNonEmpty>,
+    sse_kms_encryption_context: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
@@ -475,6 +480,7 @@ impl<'client> S3Uploader<'client> {
             acl: config.acl.as_ref().cloned(),
             server_side_encryption: config.sse.as_ref().cloned(),
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
+            sse_kms_encryption_context: config.sse_kms_encryption_context.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
             multi_part_size: config.multi_part_size,
             object_lock_enabled: config.object_lock_enabled,
@@ -560,6 +566,11 @@ impl<'client> S3Uploader<'client> {
                         .map(|s| s.as_str().into()),
                 )
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
+                .set_ssekms_encryption_context(
+                    self.sse_kms_encryption_context
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                )
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
                 .customize()
                 .mutate_request(|req| {
@@ -692,6 +703,11 @@ impl<'client> S3Uploader<'client> {
                 .key(&self.key)
                 .set_acl(self.acl.as_ref().map(|s| s.as_str().into()))
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
+                .set_ssekms_encryption_context(
+                    self.sse_kms_encryption_context
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                )
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
                 .content_length(data.len() as i64)
                 .body(data.to_vec().into())
@@ -907,6 +923,121 @@ mod tests {
         }
     }
 
+    const SSE_KMS_CONTEXT: &str = "eyJ0ZW5hbnQiOiJ0ZW5hbnQtYSJ9";
+    const SSE_KMS_CONTEXT_HEADER: &str = "x-amz-server-side-encryption-context";
+
+    #[test]
+    fn test_s3_encryption_context_config() {
+        let bucket = BucketConf::default(StringNonEmpty::required("mybucket".into()).unwrap());
+        assert!(Config::default(bucket).sse_kms_encryption_context.is_none());
+
+        for context in ["", SSE_KMS_CONTEXT] {
+            // The new field must not add constraints or defaults to existing SSE options.
+            for (sse, key_id) in [
+                ("", ""),
+                ("", "key-id"),
+                ("AES256", ""),
+                ("AES256", "key-id"),
+                ("aws:kms", ""),
+                ("aws:kms", "key-id"),
+            ] {
+                let mut input = InputConfig::default();
+                input.bucket = "mybucket".into();
+                input.sse = sse.into();
+                input.sse_kms_key_id = key_id.into();
+                input.sse_kms_encryption_context = context.into();
+                let config = Config::from_input(input).unwrap();
+                assert_eq!(config.sse, StringNonEmpty::opt(sse.into()));
+                assert_eq!(config.sse_kms_key_id, StringNonEmpty::opt(key_id.into()));
+                assert_eq!(
+                    config.sse_kms_encryption_context,
+                    StringNonEmpty::opt(context.into()),
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_s3_encryption_context_put_and_get() {
+        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        for context in ["", SSE_KMS_CONTEXT] {
+            let mut input = InputConfig::default();
+            input.bucket = "mybucket".into();
+            input.region = "us-east-1".into();
+            input.endpoint = "https://s3.us-east-1.amazonaws.com".into();
+            input.force_path_style = true;
+            input.sse = "aws:kms".into();
+            input.sse_kms_key_id = "key-id".into();
+            input.sse_kms_encryption_context = context.into();
+            let config = Config::from_input(input).unwrap();
+            let mut events = Vec::new();
+            // The retry must carry exactly the same context as the first PUT.
+            for status in [503, 200] {
+                events.push(ReplayEvent::new(
+                    http::Request::builder()
+                        .method("PUT")
+                        .uri("https://s3.us-east-1.amazonaws.com/mybucket/mykey?x-id=PutObject")
+                        .body(SdkBody::from("data"))
+                        .unwrap(),
+                    http::Response::builder()
+                        .status(status)
+                        .body(SdkBody::from(""))
+                        .unwrap(),
+                ));
+            }
+            events.push(ReplayEvent::new(
+                http::Request::builder()
+                    .method("GET")
+                    .uri("https://s3.us-east-1.amazonaws.com/mybucket/mykey?x-id=GetObject")
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from("data"))
+                    .unwrap(),
+            ));
+            let client = StaticReplayClient::new(events);
+            let creds = Credentials::from_keys("abc", "xyz", None);
+            let storage = S3Storage::new_with_creds_client(config, client.clone(), creds).unwrap();
+            storage
+                .put("mykey", PutResource(Box::new(&b"data"[..])), 4)
+                .await
+                .unwrap();
+            let mut contents = Vec::new();
+            storage
+                .get("mykey")
+                .read_to_end(&mut contents)
+                .await
+                .unwrap();
+            assert_eq!(contents, b"data");
+            client.assert_requests_match(&[]);
+            assert_eq!(client.actual_requests().count(), 3);
+            for (index, request) in client.actual_requests().enumerate() {
+                let expected_context = if index < 2 && !context.is_empty() {
+                    Some(context)
+                } else {
+                    None
+                };
+                assert_eq!(
+                    request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                    expected_context
+                );
+                if index < 2 {
+                    assert_eq!(
+                        request.headers().get("x-amz-server-side-encryption"),
+                        Some("aws:kms")
+                    );
+                    assert_eq!(
+                        request
+                            .headers()
+                            .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                        Some("key-id")
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_s3_get_content_md5() {
         // base64 encode md5sum "helloworld"
@@ -953,6 +1084,12 @@ mod tests {
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
         let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        for context in ["", SSE_KMS_CONTEXT] {
+            check_s3_storage_multi_part(context).await;
+        }
+    }
+
+    async fn check_s3_storage_multi_part(context: &str) {
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -964,6 +1101,9 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
+        config.sse = StringNonEmpty::opt("aws:kms".into());
+        config.sse_kms_key_id = StringNonEmpty::opt("key-id".into());
+        config.sse_kms_encryption_context = StringNonEmpty::opt(context.into());
 
         // Record sample count before the test to compute delta, avoiding
         // interference from other tests sharing the global metric.
@@ -1061,6 +1201,29 @@ mod tests {
         .unwrap();
 
         client.assert_requests_match(&[]);
+        for (index, request) in client.actual_requests().enumerate() {
+            // Only initiation carries context, never parts, completion, or abort.
+            assert_eq!(
+                request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                if index == 0 && !context.is_empty() {
+                    Some(context)
+                } else {
+                    None
+                },
+            );
+            if index == 0 {
+                assert_eq!(
+                    request.headers().get("x-amz-server-side-encryption"),
+                    Some("aws:kms")
+                );
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                    Some("key-id")
+                );
+            }
+        }
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
@@ -1087,6 +1250,9 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
+        config.sse = StringNonEmpty::opt("aws:kms".into());
+        config.sse_kms_key_id = StringNonEmpty::opt("key-id".into());
+        config.sse_kms_encryption_context = StringNonEmpty::opt(SSE_KMS_CONTEXT.into());
 
         // Record sample count before the test to compute delta, avoiding
         // interference from other tests sharing the global metric.
@@ -1175,6 +1341,29 @@ mod tests {
         assert_str_contains!(err.to_string(), "Not Found");
 
         client.assert_requests_match(&[]);
+        for (index, request) in client.actual_requests().enumerate() {
+            // Only initiation carries context, never parts, completion, or abort.
+            assert_eq!(
+                request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                if index == 0 {
+                    Some(SSE_KMS_CONTEXT)
+                } else {
+                    None
+                },
+            );
+            if index == 0 {
+                assert_eq!(
+                    request.headers().get("x-amz-server-side-encryption"),
+                    Some("aws:kms")
+                );
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                    Some("key-id")
+                );
+            }
+        }
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
