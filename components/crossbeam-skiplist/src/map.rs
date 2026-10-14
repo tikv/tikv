@@ -719,6 +719,35 @@ impl<K, V> Drop for Iter<'_, K, V> {
 }
 
 /// An iterator over a subset of entries of a `SkipMap`.
+///
+/// A range over non-`Sync` values cannot be moved to another thread.
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+/// use crossbeam_skiplist::SkipMap;
+///
+/// let map = SkipMap::<i32, Cell<i32>>::new();
+/// map.insert(1, Cell::new(1));
+/// std::thread::scope(|scope| {
+///     let range = map.range(..);
+///     scope.spawn(move || drop(range));
+/// });
+/// ```
+///
+/// A reference to that range cannot be shared with another thread either.
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+/// use crossbeam_skiplist::SkipMap;
+///
+/// let map = SkipMap::<i32, Cell<i32>>::new();
+/// map.insert(1, Cell::new(1));
+/// let range = map.range(..);
+/// std::thread::scope(|scope| {
+///     let range_ref = &range;
+///     scope.spawn(move || std::hint::black_box(range_ref));
+/// });
+/// ```
 pub struct Range<'a, Q, R, K, V>
 where
     K: Ord + Borrow<Q>,
