@@ -158,6 +158,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
     health_controller: HealthController,
+    txn_protocol_admission: crate::server::config::TxnProtocolAdmissionConfig,
     timer: Handle,
     builder_factory: Box<dyn GrpcBuilderFactory>,
 }
@@ -216,6 +217,9 @@ where
         };
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
+        let txn_protocol_admission = crate::server::config::TxnProtocolAdmissionConfig::new(
+            cfg.value().enable_txn_protocol_admission,
+        );
         let kv_service = KvService::new(
             cfg.value().cluster_id,
             store_id,
@@ -233,6 +237,7 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
+            txn_protocol_admission.clone(),
         );
 
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
@@ -283,6 +288,7 @@ where
             yatp_read_pool,
             debug_thread_pool,
             health_controller,
+            txn_protocol_admission,
             timer: GLOBAL_TIMER_HANDLE.clone(),
             builder_factory,
         };
@@ -308,6 +314,12 @@ where
 
     pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {
         &self.grpc_mem_quota
+    }
+
+    pub fn txn_protocol_admission_config(
+        &self,
+    ) -> crate::server::config::TxnProtocolAdmissionConfig {
+        self.txn_protocol_admission.clone()
     }
 
     /// Register a gRPC service.

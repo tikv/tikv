@@ -63,6 +63,9 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
     if store.get_version().is_empty() {
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
     }
+    // Publish the current RPC admission range on every startup, including
+    // rollback to a binary with a lower maximum supported declaration.
+    store.set_txn_protocol_version_range(crate::storage::txn_protocol::store_range());
 
     if let Ok(path) = std::env::current_exe() {
         if let Some(path) = path.parent() {
