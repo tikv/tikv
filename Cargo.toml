@@ -237,6 +237,11 @@ tempdir = { path = "patches/tempdir" }
 [patch.'https://github.com/pingcap/kvproto']
 kvproto = { git = "https://github.com/0xPoe/kvproto", rev = "84d3e0d6afddef951b3c108a6d09b59e0c229eed" }
 
+# TODO: Remove after pingcap/tipb#438 merges into release-8.5, then run
+# `cargo update -p tipb`.
+[patch.'https://github.com/pingcap/tipb']
+tipb = { git = "https://github.com/0xPoe/tipb", rev = "3af26b370e33f7e0e17e149c634e17cc8179d401" }
+
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
 # Without resolver = 2, using `cargo build --features x` to build `cmd`

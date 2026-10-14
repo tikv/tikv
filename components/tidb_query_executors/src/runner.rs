@@ -218,6 +218,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeBroadcastQuery => {
                     return Err(other_err!("TypeBroadcastQuery executor not implemented"));
                 }
+                ExecType::TypeExplainForConnection => {
+                    return Err(other_err!("ExplainForConnection executor not implemented"));
+                }
             }
         }
 
