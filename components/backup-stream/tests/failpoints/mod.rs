@@ -445,6 +445,77 @@ mod all {
         )
     }
 
+    // Regression test for #19897: a flush retry re-uploads the retained old
+    // payload but must NOT publish a checkpoint that covers writes which only
+    // arrived after the first (failed) attempt froze its generation.
+    #[test]
+    fn flush_retry_does_not_cross_uncommitted() {
+        let mut suite = SuiteBuilder::new_named("flush_retry_does_not_cross_uncommitted")
+            .cfg(|cfg| {
+                cfg.min_ts_interval = ReadableDuration::days(1);
+                cfg.initial_scan_concurrency = 1;
+            })
+            .nodes(1)
+            .build();
+        suite.must_register_task(1, "flush_retry_does_not_cross_uncommitted");
+
+        // A belongs to generation G's payload.
+        let key_a = make_record_key(1, 1);
+        let a_start = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(
+                key_a.clone(),
+                Suite::PROMISED_SHORT_VALUE.to_owned(),
+            )],
+            key_a.clone(),
+            a_start,
+        );
+        let a_commit = suite.tso();
+        suite.just_commit_a_key(key_a.clone(), a_start, a_commit);
+
+        // Attempt 1: fail the upload. Payload G is retained; nothing is
+        // published (the failure path skips the observer). The flushing flag
+        // clears on failure too, so wait_for_flush returns.
+        fail::cfg("log_backup_flush_log_upload", "1*return").unwrap();
+        suite.force_flush_files("flush_retry_does_not_cross_uncommitted");
+        suite.wait_for_flush();
+        fail::remove("log_backup_flush_log_upload");
+
+        // Now B arrives and commits AFTER generation G was frozen, and the
+        // resolved ts advances past B.
+        let key_b = make_record_key(1, 2);
+        let b_start = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(
+                key_b.clone(),
+                Suite::PROMISED_SHORT_VALUE.to_owned(),
+            )],
+            key_b.clone(),
+            b_start,
+        );
+        let b_commit = suite.tso();
+        suite.just_commit_a_key(key_b.clone(), b_start, b_commit);
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        std::thread::sleep(Duration::from_secs(2));
+
+        // Attempt 2 (retry): re-uploads the retained A-only payload and succeeds.
+        suite.force_flush_files("flush_retry_does_not_cross_uncommitted");
+        suite.wait_for_flush();
+        // Let the async FlushWith / checkpoint publish settle.
+        suite.sync();
+
+        // The published checkpoint must not cross B, because B is not in any
+        // durable payload yet.
+        assert!(
+            suite.global_checkpoint() < b_commit.into_inner(),
+            "published checkpoint {} crossed uncommitted B at {}",
+            suite.global_checkpoint(),
+            b_commit,
+        );
+    }
+
     #[test]
     fn encryption() {
         let key_folder = TempDir::new().unwrap();
