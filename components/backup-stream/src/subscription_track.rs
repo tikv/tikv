@@ -378,6 +378,22 @@ impl SubscriptionTracer {
         false
     }
 
+    /// Find a tracked region whose key range strictly encloses `region`'s,
+    /// i.e. the region `region` was (probably) split from. The tracked region
+    /// may have the same id as `region` (its metadata is stale, from before
+    /// the split).
+    pub fn find_enclosing_region(&self, region: &Region) -> Option<Region> {
+        self.0.iter().find_map(|s| {
+            let meta = match s.value() {
+                SubscribeState::Pending(r) => r,
+                SubscribeState::Running(sub) => &sub.meta,
+            };
+            let same_range = meta.get_start_key() == region.get_start_key()
+                && meta.get_end_key() == region.get_end_key();
+            (!same_range && utils::region_encloses(meta, region)).then(|| meta.clone())
+        })
+    }
+
     /// check whether the region_id should be observed by this observer.
     #[cfg(test)]
     pub fn is_observing(&self, region_id: u64) -> bool {
