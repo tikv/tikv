@@ -650,13 +650,9 @@ pub enum Cmd {
             long,
             value_name = "INDEX/TOTAL",
             help(
-                "shard the compaction work by backup-stream store id. Prefer \
-                `Metadata.store_id`; if it is absent, fall back to the backup-stream metadata \
-                filename format \
-                (`v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`), \
-                then backup-stream physical log paths, then a stable metadata-path hash. Only \
-                data from stores assigned to this shard is compacted. Format: INDEX/TOTAL, \
-                where INDEX is 1-based (e.g. 1/3)."
+                "shard the compaction work by backup-stream store id. Determine which stores to \
+                process based on the shard index and the hash of the store id. Format: \
+                INDEX/TOTAL, where INDEX is 1-based (e.g. 1/3)."
             )
         )]
         shard: Option<ShardConfig>,
