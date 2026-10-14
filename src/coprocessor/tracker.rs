@@ -389,9 +389,16 @@ impl<E: Engine> Tracker<E> {
 
         let peer = self.req_ctx.context.get_peer();
         let region_id = self.req_ctx.context.get_region_id();
-        let start_key = Key::from_raw(&self.req_ctx.lower_bound);
-        let end_key = Key::from_raw(&self.req_ctx.upper_bound);
-        let reverse_scan = self.req_ctx.is_desc_scan.unwrap_or(false);
+        // An empty bound means "unbounded" and must stay empty: the split sampler
+        // treats an empty start/end as -inf/+inf, unlike `Key::from_raw(&[])`.
+        let start_key = Key::from_raw_maybe_unbounded(&self.req_ctx.lower_bound);
+        let end_key = Key::from_raw_maybe_unbounded(&self.req_ctx.upper_bound);
+        let start_key = start_key
+            .as_ref()
+            .map_or(&[][..], |k| k.as_encoded().as_slice());
+        let end_key = end_key
+            .as_ref()
+            .map_or(&[][..], |k| k.as_encoded().as_slice());
 
         // only collect metrics for select and index, exclude transient read flow such
         // like analyze and checksum.
@@ -400,17 +407,11 @@ impl<E: Engine> Tracker<E> {
             || self.req_tag == ReqTag::select_by_in_memory_engine
             || self.req_tag == ReqTag::index_by_in_memory_engine
         {
-            tls_collect_query(
-                region_id,
-                peer,
-                start_key.as_encoded(),
-                end_key.as_encoded(),
-                reverse_scan,
-            );
+            tls_collect_query(region_id, peer, start_key, end_key);
             tls_collect_read_flow(
-                self.req_ctx.context.get_region_id(),
-                Some(start_key.as_encoded()),
-                Some(end_key.as_encoded()),
+                region_id,
+                Some(start_key),
+                Some(end_key),
                 &total_storage_stats,
                 self.buckets.as_ref(),
             );
@@ -579,10 +580,11 @@ mod tests {
     };
 
     use futures::executor::block_on;
-    use kvproto::kvrpcpb;
+    use kvproto::{coprocessor as coppb, kvrpcpb};
     use pd_client::BucketMeta;
     use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine};
     use tracker::track;
+    use txn_types::Key;
 
     use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::{
@@ -728,5 +730,119 @@ mod tests {
         };
         check(ReqTag::select, 10);
         check(ReqTag::analyze_full_sampling, 0);
+    }
+
+    #[test]
+    fn test_track_desc_scan_key_ranges() {
+        let assert_key_range =
+            |ranges: Vec<coppb::KeyRange>, expected_start: &[u8], expected_end: &[u8]| {
+                let region_id = 1;
+                let mut context = kvrpcpb::Context::default();
+                context.set_region_id(region_id);
+                let req_ctx_inner = ReqContextInner::new(
+                    context,
+                    ranges,
+                    Duration::from_secs(0),
+                    None,
+                    Some(true),
+                    TimeStamp::max(),
+                    None,
+                    PerfLevel::EnableCount,
+                    false,
+                );
+                let mut tracker: Tracker<RocksEngine> =
+                    Tracker::new(req_ctx_inner.into(), ReqTag::select, Duration::default());
+                tracker.on_scheduled();
+                tracker.on_snapshot_finished();
+                tracker.on_begin_all_items();
+                tracker.on_finish_all_items();
+                TLS_COP_METRICS.with(|m| {
+                    let m = m.borrow();
+                    let key_ranges = &m
+                        .local_read_stats()
+                        .region_infos
+                        .get(&region_id)
+                        .unwrap()
+                        .key_ranges;
+                    assert_eq!(key_ranges.len(), 1);
+                    assert_eq!(key_ranges[0].get_start_key(), expected_start);
+                    assert_eq!(key_ranges[0].get_end_key(), expected_end);
+                });
+                TLS_COP_METRICS.with(|m| m.borrow_mut().clear());
+            };
+        let encoded_10 = Key::from_raw(&[10]).as_encoded().clone();
+        let encoded_20 = Key::from_raw(&[20]).as_encoded().clone();
+
+        assert_key_range(
+            vec![coppb::KeyRange {
+                start: vec![10],
+                end: vec![20],
+                ..Default::default()
+            }],
+            &encoded_10,
+            &encoded_20,
+        );
+        assert_key_range(
+            vec![coppb::KeyRange {
+                start: vec![10],
+                end: vec![],
+                ..Default::default()
+            }],
+            &encoded_10,
+            &[],
+        );
+    }
+
+    #[test]
+    fn test_track_unbounded_read_flow_buckets() {
+        let mut context = kvrpcpb::Context::default();
+        context.set_region_id(1);
+        let mut req_ctx_inner = ReqContextInner::new(
+            context,
+            vec![],
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+            false,
+        );
+        req_ctx_inner.lower_bound = b"a".to_vec();
+
+        let mut tracker: Tracker<RocksEngine> =
+            Tracker::new(req_ctx_inner.into(), ReqTag::select, Duration::default());
+        let mut bucket = BucketMeta::default();
+        bucket.region_id = 1;
+        bucket.version = 1;
+        bucket.keys = vec![
+            Key::from_raw(b"a").into_encoded(),
+            Key::from_raw(b"b").into_encoded(),
+        ];
+        bucket.sizes = vec![10];
+        tracker.buckets = Some(Arc::new(bucket));
+
+        let mut stat = Statistics::default();
+        stat.write.flow_stats.read_keys = 10;
+        tracker.total_storage_stats = stat;
+
+        tracker.on_scheduled();
+        tracker.on_snapshot_finished();
+        tracker.on_begin_all_items();
+        tracker.on_finish_all_items();
+
+        TLS_COP_METRICS.with(|m| {
+            assert_eq!(
+                10,
+                m.borrow()
+                    .local_read_stats()
+                    .region_buckets
+                    .get(&1)
+                    .unwrap()
+                    .stats
+                    .read_keys[0]
+            );
+        });
+        TLS_COP_METRICS.with(|m| m.borrow_mut().clear());
     }
 }
