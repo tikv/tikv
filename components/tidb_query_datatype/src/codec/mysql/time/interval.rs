@@ -244,7 +244,7 @@ impl Interval {
             // Round up, and we should keep 6 digits for microsecond, so dv should in
             // [000000, 999999].
             if dv >= 500_000 {
-                riv += sign;
+                riv = riv.checked_add(sign).unwrap_or(iv);
             }
             if *unit != Second {
                 if for_duration {
