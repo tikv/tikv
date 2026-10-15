@@ -1693,7 +1693,7 @@ mod tests {
         region.mut_peers().push(Default::default());
         host.split_validator.disable(region.get_id());
         let mut runner = Runner::new(engine.clone(), tx, host, None);
-        assert!(get_region_approximate_size(&engine, &region, 0).is_err());
+        get_region_approximate_size(&engine, &region, 0).unwrap_err();
         for _ in 0..3 {
             runner.run(Task::split_check(
                 region.clone(),
