@@ -3,6 +3,8 @@
 // #[PerformanceCriticalPath]
 mod backward;
 mod forward;
+#[cfg(test)]
+mod reuse_tests;
 
 use std::ops::Bound;
 
@@ -233,6 +235,30 @@ pub enum Scanner<S: Snapshot> {
     Backward(BackwardKvScanner<S>),
 }
 
+impl<S: Snapshot> Scanner<S> {
+    /// Reuse the physical cursors for another bounded range on this snapshot.
+    ///
+    /// A false result means that reuse is unsupported. The caller must discard
+    /// this scanner on false or error, since some cursors may already be reset.
+    pub fn reset_range(
+        &mut self,
+        desc: bool,
+        key_only: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<bool> {
+        match self {
+            Scanner::Forward(scanner) => {
+                scanner.reset_range(desc, key_only, load_commit_ts, lower_bound, upper_bound)
+            }
+            Scanner::Backward(scanner) => {
+                scanner.reset_range(desc, key_only, load_commit_ts, lower_bound, upper_bound)
+            }
+        }
+    }
+}
+
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next_entry(&mut self) -> TxnResult<Option<(Key, ValueEntry)>> {
         fail_point!("scanner_next");
@@ -315,6 +341,29 @@ impl<S: Snapshot> ScannerConfig<S> {
         } else {
             ScanMode::Forward
         }
+    }
+
+    fn reset_range(
+        &mut self,
+        desc: bool,
+        key_only: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> bool {
+        if self.desc != desc || self.omit_value != key_only || self.load_commit_ts != load_commit_ts
+        {
+            return false;
+        }
+        match (&lower_bound, &upper_bound) {
+            (Some(lower), Some(upper)) if lower <= upper => {}
+            _ => return false,
+        }
+        // The default-CF cursor is lazy. Keep the new bounds available even if
+        // no default-CF cursor has been created in the preceding ranges.
+        self.lower_bound = lower_bound;
+        self.upper_bound = upper_bound;
+        true
     }
 
     /// Create the cursor.

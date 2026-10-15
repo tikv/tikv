@@ -168,6 +168,44 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         self.met_newer_ts_data
     }
 
+    pub(super) fn reset_range(
+        &mut self,
+        desc: bool,
+        key_only: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<bool> {
+        if !self
+            .cfg
+            .reset_range(desc, key_only, load_commit_ts, lower_bound, upper_bound)
+        {
+            return Ok(false);
+        }
+        let lower = self.cfg.lower_bound.as_ref();
+        let upper = self.cfg.upper_bound.as_ref();
+        if !self.cursors.write.reset_bounds_and_seek(
+            lower,
+            upper,
+            false,
+            &mut self.statistics.write,
+        )? {
+            return Ok(false);
+        }
+        if let Some(lock) = &mut self.cursors.lock {
+            if !lock.reset_bounds_and_seek(lower, upper, false, &mut self.statistics.lock)? {
+                return Ok(false);
+            }
+        }
+        if let Some(default) = &mut self.cursors.default {
+            if !default.reset_bounds_and_seek(lower, upper, false, &mut self.statistics.data)? {
+                return Ok(false);
+            }
+        }
+        self.is_started = true;
+        Ok(true)
+    }
+
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<P::Output>> {
         if !self.is_started {
