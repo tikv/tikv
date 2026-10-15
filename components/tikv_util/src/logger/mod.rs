@@ -10,8 +10,10 @@ use std::{
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
+        mpsc::channel,
     },
     thread,
+    time::Duration,
 };
 
 use log::{self, SetLoggerError};
@@ -21,7 +23,10 @@ use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::{ReadableDuration, ReadableSize};
+use crate::{
+    config::{ReadableDuration, ReadableSize},
+    sys::thread::StdThreadBuildWrapper,
+};
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -144,6 +149,26 @@ pub fn exit_process_gracefully(code: i32) -> ! {
     // force async logger to flush by dropping its guard.
     *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
     std::process::exit(code);
+}
+
+/// Best-effort flushes the async logger, but never waits forever.
+///
+/// This is intended for crash paths such as fail-fast. It gives the async
+/// logger a brief window to drain outstanding messages, then panics so the
+/// normal panic hook can emit a fatal log before the process crashes.
+pub fn panic_after_best_effort_flush(timeout: Duration, message: &str) -> ! {
+    let guard = ASYNC_LOGGER_GUARD.lock().unwrap().take();
+    if let Some(guard) = guard {
+        let (done_tx, done_rx) = channel();
+        let _ = thread::Builder::new()
+            .name("async-log-flush".to_owned())
+            .spawn_wrapper(move || {
+                drop(guard);
+                let _ = done_tx.send(());
+            });
+        let _ = done_rx.recv_timeout(timeout);
+    }
+    panic!("{}", message);
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified

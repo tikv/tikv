@@ -10174,6 +10174,21 @@ def SlowTrendStatistics() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Disk Probe Duration",
+                description="The fail-fast disk probe duration by disk and outcome.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_disk_probe_duration_seconds",
+                            by_labels=["instance", "disk", "outcome"],
+                        ),
+                        legend_format="{{instance}}-{{disk}}-{{outcome}}-0.99",
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
