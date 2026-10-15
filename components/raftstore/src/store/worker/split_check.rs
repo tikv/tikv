@@ -1384,10 +1384,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        mpsc,
-    };
+    use std::sync::mpsc;
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -1400,50 +1397,29 @@ mod tests {
     use super::*;
     use crate::{
         coprocessor::{
-            BoxSplitCheckObserver, Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker,
+            BoxSplitCheckObserver, Coprocessor, ObserverContext, SplitCheckObserver,
             dispatcher::SchedTask,
         },
-        store::peer::SplitCheckTrigger,
+        store::{SplitValidator, peer::SplitCheckTrigger},
     };
 
     #[derive(Clone)]
-    struct CountSplitChecks(Arc<AtomicUsize>);
+    struct AssertSplitCheckEnabled(SplitValidator);
 
-    impl Coprocessor for CountSplitChecks {}
+    impl Coprocessor for AssertSplitCheckEnabled {}
 
-    impl SplitCheckObserver<KvTestEngine> for CountSplitChecks {
+    impl SplitCheckObserver<KvTestEngine> for AssertSplitCheckEnabled {
         fn add_checker(
             &self,
-            _: &mut ObserverContext<'_>,
+            ctx: &mut ObserverContext<'_>,
             host: &mut SplitCheckerHost<'_, KvTestEngine>,
             _: &KvTestEngine,
             _: CheckPolicy,
         ) {
-            host.add_checker(Box::new(self.clone()));
-        }
-    }
-
-    impl SplitChecker<KvTestEngine> for CountSplitChecks {
-        fn on_kv(&mut self, _: &mut ObserverContext<'_>, _: &KeyEntry) -> bool {
-            self.0.fetch_add(1, AtomicOrdering::SeqCst);
-            false
-        }
-
-        fn split_keys(&mut self) -> Vec<Vec<u8>> {
-            vec![]
-        }
-
-        fn approximate_split_keys(
-            &mut self,
-            _: &Region,
-            _: &KvTestEngine,
-        ) -> crate::coprocessor::Result<Vec<Vec<u8>>> {
-            self.0.fetch_add(1, AtomicOrdering::SeqCst);
-            Ok(vec![])
-        }
-
-        fn policy(&self) -> CheckPolicy {
-            CheckPolicy::Scan
+            assert!(
+                host.split_reason() == SplitReason::Admin
+                    || !self.0.is_disabled(ctx.region().get_id())
+            );
         }
     }
 
@@ -1460,7 +1436,7 @@ mod tests {
     fn check_disabled_result(
         rx: &mpsc::Receiver<SchedTask>,
         trigger: &mut SplitCheckTrigger,
-        split_by_keys: bool,
+        splitable: [bool; 2],
         buckets_enabled: bool,
     ) -> (u64, u64) {
         let (mut size, mut keys, mut buckets) = (None, None, false);
@@ -1471,20 +1447,20 @@ mod tests {
             match task {
                 SchedTask::UpdateApproximateSize {
                     size: value,
-                    splitable,
+                    splitable: flag,
                     ..
                 } => {
-                    assert_eq!(splitable, Some(!split_by_keys));
-                    trigger.on_approximate_region_size(value, splitable);
+                    assert_eq!(flag, Some(splitable[0]));
+                    trigger.on_approximate_region_size(value, flag);
                     size = value;
                 }
                 SchedTask::UpdateApproximateKeys {
                     keys: value,
-                    splitable,
+                    splitable: flag,
                     ..
                 } => {
-                    assert_eq!(splitable, Some(split_by_keys));
-                    trigger.on_approximate_region_keys(value, splitable);
+                    assert_eq!(flag, Some(splitable[1]));
+                    trigger.on_approximate_region_keys(value, flag);
                     keys = value;
                 }
                 SchedTask::RefreshRegionBuckets { buckets: value, .. } => {
@@ -1498,167 +1474,108 @@ mod tests {
             }
         }
         assert_eq!(buckets, buckets_enabled);
-        assert!(!trigger.should_skip(u64::MAX));
+        trigger.post_triggered();
+        assert_eq!(trigger.should_skip(u64::MAX), !splitable.contains(&true));
         (size.unwrap(), keys.unwrap())
     }
 
     #[test]
     fn test_disabled_split_check() {
-        for split_by_keys in [false, true] {
-            for buckets_enabled in [false, true] {
-                for policy in [CheckPolicy::Scan, CheckPolicy::Approximate] {
-                    let path = TempDir::new().unwrap();
-                    let engine =
-                        engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS)
-                            .unwrap();
-                    let cfg = Config {
-                        region_max_size: Some(ReadableSize(if split_by_keys {
-                            1_000_000
-                        } else {
-                            100
-                        })),
-                        region_split_size: Some(ReadableSize(if split_by_keys {
-                            600_000
-                        } else {
-                            60
-                        })),
-                        region_max_keys: Some(if split_by_keys { 15 } else { 1_000_000 }),
-                        region_split_keys: Some(if split_by_keys { 10 } else { 600_000 }),
-                        batch_split_limit: 5,
-                        enable_region_bucket: Some(buckets_enabled),
-                        region_bucket_size: ReadableSize(40),
-                        ..Default::default()
-                    };
-                    let (tx, rx) = mpsc::sync_channel(100);
-                    let checks = Arc::new(AtomicUsize::new(0));
-                    let mut host = CoprocessorHost::new(tx.clone(), cfg);
-                    host.registry.register_split_check_observer(
-                        50,
-                        BoxSplitCheckObserver::new(CountSplitChecks(checks.clone())),
-                    );
-                    // As in production, PD updates a clone while the worker owns
-                    // another clone of the same host.
-                    let pd_host = host.clone();
-                    let mut runner = Runner::new(engine.clone(), tx, host, None);
-                    let mut region = Region::default();
-                    region.set_id(1);
-                    region.mut_peers().push(Default::default());
-                    region.set_end_key(b"0040".to_vec());
-                    put_split_check_data(&engine, 0, 40);
-                    pd_host.split_validator.disable(region.get_id());
-                    let mut trigger = SplitCheckTrigger::default();
-                    for reason in [SplitReason::Size, SplitReason::Load] {
-                        for _ in 0..3 {
-                            runner.run(Task::split_check_key_range(
-                                region.clone(),
-                                (reason == SplitReason::Load).then(Vec::new),
-                                (reason == SplitReason::Load).then(Vec::new),
-                                reason,
-                                policy,
-                                None,
-                            ));
-                            check_disabled_result(
-                                &rx,
-                                &mut trigger,
-                                split_by_keys,
-                                buckets_enabled,
-                            );
-                        }
-                    }
-                    assert_eq!(checks.load(AtomicOrdering::SeqCst), 0);
-
-                    // Disabling one Region must not change other Regions' checks.
-                    let mut other_region = region.clone();
-                    other_region.set_id(2);
-                    runner.run(Task::split_check(other_region, true, policy, None));
-                    assert!(checks.swap(0, AtomicOrdering::SeqCst) > 0);
-                    assert!(
-                        rx.try_iter()
-                            .any(|task| matches!(task, SchedTask::AskSplit { region_id: 2, .. }))
-                    );
-
-                    runner.run(Task::split_check(region.clone(), true, policy, None));
-                    let (old_size, old_keys) =
-                        check_disabled_result(&rx, &mut trigger, split_by_keys, buckets_enabled);
-                    put_split_check_data(&engine, 40, 60);
-                    // Model a merge extending the Region's range. Statistics
-                    // must include the source even without writes to the target.
-                    region.clear_end_key();
-                    runner.run(Task::split_check(region.clone(), true, policy, None));
-                    let (size, keys) =
-                        check_disabled_result(&rx, &mut trigger, split_by_keys, buckets_enabled);
-                    assert!(size > old_size);
-                    assert!(keys > old_keys);
-                    assert_eq!(checks.load(AtomicOrdering::SeqCst), 0);
-
-                    // Neither enabling nor expiry requires another write.
-                    pd_host.split_validator.enable(region.get_id());
-                    runner.run(Task::split_check(region.clone(), true, policy, None));
-                    assert!(checks.swap(0, AtomicOrdering::SeqCst) > 0);
-                    assert!(
-                        rx.try_iter()
-                            .any(|task| matches!(task, SchedTask::AskSplit { .. }))
-                    );
-
-                    pd_host.split_validator.disable(region.get_id());
-                    runner.run(Task::split_check(
-                        region.clone(),
-                        false,
-                        CheckPolicy::Scan,
-                        None,
-                    ));
-                    assert!(checks.swap(0, AtomicOrdering::SeqCst) > 0);
-                    assert!(
-                        rx.try_iter()
-                            .any(|task| matches!(task, SchedTask::AskSplit { .. }))
-                    );
-
-                    pd_host.split_validator.expire_for_test(region.get_id());
-                    runner.run(Task::split_check(region.clone(), true, policy, None));
-                    assert!(checks.load(AtomicOrdering::SeqCst) > 0);
-                    assert!(
-                        rx.try_iter()
-                            .any(|task| matches!(task, SchedTask::AskSplit { .. }))
-                    );
-
-                    // Small Regions can stop retrying, and an empty bucket
-                    // range list must not publish an empty bucket refresh.
-                    pd_host.split_validator.disable(region.get_id());
-                    runner.coprocessor.cfg.region_max_size = Some(ReadableSize(u64::MAX / 10));
-                    runner.coprocessor.cfg.region_max_keys = Some(u64::MAX / 10);
-                    runner.run(Task::split_check(
-                        region.clone(),
-                        true,
-                        policy,
-                        Some(vec![]),
-                    ));
-                    trigger.post_triggered();
-                    let mut stats = 0;
-                    for task in rx.try_iter() {
-                        match task {
-                            SchedTask::UpdateApproximateSize {
-                                size, splitable, ..
-                            } => {
-                                assert!(size.is_some());
-                                assert_eq!(splitable, Some(false));
-                                trigger.on_approximate_region_size(size, splitable);
-                            }
-                            SchedTask::UpdateApproximateKeys {
-                                keys, splitable, ..
-                            } => {
-                                assert!(keys.is_some());
-                                assert_eq!(splitable, Some(false));
-                                trigger.on_approximate_region_keys(keys, splitable);
-                            }
-                            task => panic!("unexpected disabled split check result: {task:?}"),
-                        }
-                        stats += 1;
-                    }
-                    assert_eq!(stats, 2);
-                    trigger.post_triggered();
-                    assert!(trigger.should_skip(u64::MAX));
-                }
+        for ((split_by_keys, buckets_enabled), policy) in [false, true]
+            .into_iter()
+            .cartesian_product([false, true])
+            .cartesian_product([CheckPolicy::Scan, CheckPolicy::Approximate])
+        {
+            let path = TempDir::new().unwrap();
+            let engine =
+                engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+            let (max_size, max_keys) = if split_by_keys {
+                (1_000_000, 15)
+            } else {
+                (100, 1_000_000)
+            };
+            let cfg = Config {
+                region_max_size: Some(ReadableSize(max_size)),
+                region_split_size: Some(ReadableSize(max_size * 3 / 5)),
+                region_max_keys: Some(max_keys),
+                region_split_keys: Some(max_keys * 2 / 3),
+                batch_split_limit: 5,
+                enable_region_bucket: Some(buckets_enabled),
+                region_bucket_size: ReadableSize(40),
+                ..Default::default()
+            };
+            let (tx, rx) = mpsc::sync_channel(100);
+            let mut host = CoprocessorHost::new(tx.clone(), cfg);
+            let validator = host.clone().split_validator;
+            host.registry.register_split_check_observer(
+                50,
+                BoxSplitCheckObserver::new(AssertSplitCheckEnabled(validator.clone())),
+            );
+            let mut runner = Runner::new(engine.clone(), tx, host, None);
+            let mut region = Region::default();
+            region.set_id(1);
+            region.mut_peers().push(Default::default());
+            region.set_end_key(b"0040".to_vec());
+            put_split_check_data(&engine, 0, 40);
+            validator.disable(region.get_id());
+            let mut trigger = SplitCheckTrigger::default();
+            let splitable = [!split_by_keys, split_by_keys];
+            for reason in [SplitReason::Size, SplitReason::Load] {
+                runner.run(Task::split_check_key_range(
+                    region.clone(),
+                    (reason == SplitReason::Load).then(Vec::new),
+                    (reason == SplitReason::Load).then(Vec::new),
+                    reason,
+                    policy,
+                    None,
+                ));
+                check_disabled_result(&rx, &mut trigger, splitable, buckets_enabled);
             }
+            runner.run(Task::split_check(region.clone(), true, policy, None));
+            let (old_size, old_keys) =
+                check_disabled_result(&rx, &mut trigger, splitable, buckets_enabled);
+            put_split_check_data(&engine, 40, 60);
+            // Model a merge extending the Region's range. Statistics
+            // must include the source even without writes to the target.
+            region.clear_end_key();
+            runner.run(Task::split_check(region.clone(), true, policy, None));
+            let (size, keys) = check_disabled_result(&rx, &mut trigger, splitable, buckets_enabled);
+            assert!(size > old_size);
+            assert!(keys > old_keys);
+            let mut expect_split = |region: &Region, auto_split| {
+                let policy = if auto_split {
+                    policy
+                } else {
+                    CheckPolicy::Scan
+                };
+                runner.run(Task::split_check(region.clone(), auto_split, policy, None));
+                assert!(rx.try_iter().any(|task| matches!(
+                    task, SchedTask::AskSplit { region_id, .. } if region_id == region.get_id()
+                )));
+            };
+            // Unrelated Regions and Admin splits remain allowed; enabling
+            // and expiry must resume splitting without additional writes.
+            let mut other_region = region.clone();
+            other_region.set_id(2);
+            expect_split(&other_region, true);
+            expect_split(&region, false);
+            validator.enable(region.get_id());
+            expect_split(&region, true);
+            validator.expire_for_test(region.get_id());
+            expect_split(&region, true);
+
+            // Small Regions can stop retrying, and an empty bucket
+            // range list must not publish an empty bucket refresh.
+            validator.disable(region.get_id());
+            runner.coprocessor.cfg.region_max_size = Some(ReadableSize(u64::MAX / 10));
+            runner.coprocessor.cfg.region_max_keys = Some(u64::MAX / 10);
+            runner.run(Task::split_check(
+                region.clone(),
+                true,
+                policy,
+                Some(vec![]),
+            ));
+            check_disabled_result(&rx, &mut trigger, [false; 2], false);
         }
     }
 
@@ -1682,11 +1599,10 @@ mod tests {
             region_bucket_size: ReadableSize(40),
             ..Default::default()
         };
-        let checks = Arc::new(AtomicUsize::new(0));
         let mut host = CoprocessorHost::new(tx.clone(), cfg);
         host.registry.register_split_check_observer(
             50,
-            BoxSplitCheckObserver::new(CountSplitChecks(checks.clone())),
+            BoxSplitCheckObserver::new(AssertSplitCheckEnabled(host.split_validator.clone())),
         );
         let mut region = Region::default();
         region.set_id(1);
@@ -1715,7 +1631,6 @@ mod tests {
                     .iter()
                     .any(|task| matches!(task, SchedTask::AskSplit { .. }))
             );
-            assert_eq!(checks.load(AtomicOrdering::SeqCst), 0);
         }
     }
 
