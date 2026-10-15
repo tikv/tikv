@@ -124,6 +124,14 @@ impl SplitValidator {
     pub fn enable(&self, region_id: u64) {
         self.core.enable(region_id);
     }
+
+    #[cfg(test)]
+    pub(super) fn expire_for_test(&self, region_id: u64) {
+        self.core.disabled_region_ids.insert(
+            region_id,
+            Instant::now() - GC_LIFETIME - Duration::from_secs(1),
+        );
+    }
 }
 
 impl Default for SplitValidator {
