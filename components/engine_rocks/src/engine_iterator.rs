@@ -41,6 +41,18 @@ impl MetricsExt for RocksEngineIterator {
 }
 
 impl engine_traits::Iterator for RocksEngineIterator {
+    fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: &[u8],
+        upper_bound: &[u8],
+        reverse: bool,
+    ) -> Result<bool> {
+        self.0
+            .reset_bounds_and_seek(lower_bound, upper_bound, reverse)
+            .map(|valid| valid.is_some())
+            .map_err(r2e)
+    }
+
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
         self.0.seek(rocksdb::SeekKey::Key(key)).map_err(r2e)
     }
