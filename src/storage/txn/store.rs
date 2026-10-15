@@ -81,6 +81,30 @@ pub trait Store: Send {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
+
+    /// Retrieve a scanner, reusing the preceding scanner when supported.
+    ///
+    /// `previous` must come from this same store, and the store's snapshot,
+    /// timestamp, isolation level, and lock sets must remain unchanged.
+    fn scanner_with_reuse(
+        &self,
+        _previous: Option<Self::Scanner>,
+        desc: bool,
+        key_only: bool,
+        check_has_newer_ts_data: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<Self::Scanner> {
+        self.scanner(
+            desc,
+            key_only,
+            check_has_newer_ts_data,
+            load_commit_ts,
+            lower_bound,
+            upper_bound,
+        )
+    }
 }
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
@@ -452,6 +476,42 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .build()?;
 
         Ok(scanner)
+    }
+
+    fn scanner_with_reuse(
+        &self,
+        previous: Option<Self::Scanner>,
+        desc: bool,
+        key_only: bool,
+        check_has_newer_ts_data: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<Self::Scanner> {
+        if let Some(mut scanner) = previous {
+            // Physical iterator reuse must not bypass Region range validation.
+            self.verify_range(&lower_bound, &upper_bound)?;
+            if !(check_has_newer_ts_data
+                && scanner.met_newer_ts_data() == NewerTsCheckState::Unknown)
+                && scanner.reset_range(
+                    desc,
+                    key_only,
+                    load_commit_ts,
+                    lower_bound.clone(),
+                    upper_bound.clone(),
+                )?
+            {
+                return Ok(scanner);
+            }
+        }
+        self.scanner(
+            desc,
+            key_only,
+            check_has_newer_ts_data,
+            load_commit_ts,
+            lower_bound,
+            upper_bound,
+        )
     }
 }
 
