@@ -320,6 +320,7 @@ fn test_scanner_reuse_enables_newer_timestamp_check() {
                 false,
                 Some(Key::from_raw(lower.as_bytes())),
                 Some(Key::from_raw(upper.as_bytes())),
+                &mut Statistics::default(),
             )
             .unwrap();
         while scanner.next_entry().unwrap().is_some() {}
