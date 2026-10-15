@@ -86,24 +86,35 @@ pub trait Store: Send {
     ///
     /// `previous` must come from this same store, and the store's snapshot,
     /// timestamp, isolation level, and lock sets must remain unchanged.
+    /// Callers should drain `previous` before calling this method. On error,
+    /// statistics from the consumed scanner, including attempted reuse, are
+    /// added to `statistics_on_error`. `SnapshotStore` also retains undrained
+    /// statistics on the returned scanner when falling back successfully.
     fn scanner_with_reuse(
         &self,
-        _previous: Option<Self::Scanner>,
+        previous: Option<Self::Scanner>,
         desc: bool,
         key_only: bool,
         check_has_newer_ts_data: bool,
         load_commit_ts: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        statistics_on_error: &mut Statistics,
     ) -> Result<Self::Scanner> {
-        self.scanner(
+        let result = self.scanner(
             desc,
             key_only,
             check_has_newer_ts_data,
             load_commit_ts,
             lower_bound,
             upper_bound,
-        )
+        );
+        if result.is_err() {
+            if let Some(mut scanner) = previous {
+                statistics_on_error.add(&scanner.take_statistics());
+            }
+        }
+        result
     }
 }
 
@@ -487,21 +498,34 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         load_commit_ts: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        statistics_on_error: &mut Statistics,
     ) -> Result<Self::Scanner> {
         let discarded_statistics = if let Some(mut scanner) = previous {
             // Physical iterator reuse must not bypass Region range validation.
-            self.verify_range(&lower_bound, &upper_bound)?;
-            if !(check_has_newer_ts_data
-                && scanner.met_newer_ts_data() == NewerTsCheckState::Unknown)
-                && scanner.reset_range(
+            if let Err(error) = self.verify_range(&lower_bound, &upper_bound) {
+                statistics_on_error.add(&scanner.take_statistics());
+                return Err(error);
+            }
+            let reset_result = if check_has_newer_ts_data
+                && scanner.met_newer_ts_data() == NewerTsCheckState::Unknown
+            {
+                Ok(false)
+            } else {
+                scanner.reset_range(
                     desc,
                     key_only,
                     load_commit_ts,
                     lower_bound.clone(),
                     upper_bound.clone(),
-                )?
-            {
-                return Ok(scanner);
+                )
+            };
+            match reset_result {
+                Ok(true) => return Ok(scanner),
+                Ok(false) => {}
+                Err(error) => {
+                    statistics_on_error.add(&scanner.take_statistics());
+                    return Err(error.into());
+                }
             }
             // A preceding CF cursor may already have performed a physical seek
             // before another CF rejects reuse. Keep that work, together with
@@ -510,18 +534,28 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         } else {
             None
         };
-        let mut scanner = self.scanner(
+        let result = self.scanner(
             desc,
             key_only,
             check_has_newer_ts_data,
             load_commit_ts,
             lower_bound,
             upper_bound,
-        )?;
-        if let Some(statistics) = discarded_statistics {
-            scanner.add_statistics(&statistics);
+        );
+        match result {
+            Ok(mut scanner) => {
+                if let Some(statistics) = discarded_statistics {
+                    scanner.add_statistics(&statistics);
+                }
+                Ok(scanner)
+            }
+            Err(error) => {
+                if let Some(statistics) = discarded_statistics {
+                    statistics_on_error.add(&statistics);
+                }
+                Err(error)
+            }
         }
-        Ok(scanner)
     }
 }
 
