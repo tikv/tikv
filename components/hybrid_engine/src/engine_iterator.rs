@@ -36,6 +36,20 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
+    fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: &[u8],
+        upper_bound: &[u8],
+        reverse: bool,
+    ) -> Result<bool> {
+        match &mut self.iter {
+            Either::Left(iter) => iter.reset_bounds_and_seek(lower_bound, upper_bound, reverse),
+            // Cache iterators retain region-scoped bounds. Fall back to a new
+            // iterator rather than widening their visibility.
+            Either::Right(_) => Ok(false),
+        }
+    }
+
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
         match self.iter {
             Either::Left(ref mut iter) => iter.seek(key),
