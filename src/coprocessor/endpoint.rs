@@ -24,7 +24,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metap
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{
-    ResourceGroupManager, ResourceLimiter, TaskMetadata, busy_reason, update_background_egress,
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, update_background_egress,
 };
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
@@ -38,7 +38,7 @@ use tidb_query_common::{
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     DeferContext,
-    deadline::{DEADLINE_EXCEEDED, set_deadline_exceeded_busy_error_with_reason},
+    deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
@@ -282,16 +282,6 @@ impl<E: Engine> Endpoint<E> {
         } else {
             None
         };
-        // Decided once, at admission. A deadline is mostly spent queueing, so
-        // when the queue is this group's own doing the client should back off
-        // rather than retry the same overloaded leader immediately.
-        let is_noisy_tenant = self.read_pool.is_noisy_request(
-            context
-                .get_resource_control_context()
-                .get_resource_group_name(),
-            context.get_request_source(),
-        );
-
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
@@ -332,7 +322,6 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                     false,
-                    is_noisy_tenant,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorDag;
@@ -417,7 +406,6 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                     false,
-                    is_noisy_tenant,
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
@@ -465,7 +453,6 @@ impl<E: Engine> Endpoint<E> {
                     // Checksum is allowed during the flashback period to make sure the tool such
                     // like BR can work.
                     true,
-                    is_noisy_tenant,
                 );
 
                 with_tls_tracker(|tracker| {
@@ -548,7 +535,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot_future = with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, ctx));
         let max_duration_to_get_snapshot = ctx.deadline.remaining_duration();
         if max_duration_to_get_snapshot.is_zero() {
-            return Err(Error::DeadlineExceeded(ctx.is_noisy_tenant));
+            return Err(Error::DeadlineExceeded);
         }
         match async_timeout(snapshot_future, max_duration_to_get_snapshot).await {
             Ok(snapshot) => snapshot,
@@ -558,7 +545,7 @@ impl<E: Engine> Endpoint<E> {
                     "max_duration_to_get_snapshot" => ?max_duration_to_get_snapshot,
                     "err" => ?e,
                 );
-                Err(Error::DeadlineExceeded(ctx.is_noisy_tenant))
+                Err(Error::DeadlineExceeded)
             }
         }
     }
@@ -658,13 +645,7 @@ impl<E: Engine> Endpoint<E> {
         } else {
             process_future.await
         };
-        // The limiter's timeout and the executor's deadline errors are
-        // converted without a request context; put this request's verdict on
-        // them so a blamed tenant's deadline is marked on every path.
-        let result = deadline_res
-            .map_err(Error::from)
-            .and_then(|res| res)
-            .map_err(|e| e.blame_deadline(tracker.req_ctx.is_noisy_tenant));
+        let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -753,7 +734,6 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         let deadline = req_ctx.deadline;
-        let is_noisy_tenant = req_ctx.is_noisy_tenant;
         // box the tracker so that moving it is cheap.
         let resource_group = self.bounded_group_name(&req_ctx.context);
         let tracker = Box::new(Tracker::new(
@@ -795,10 +775,9 @@ impl<E: Engine> Endpoint<E> {
             // releases its admission delay slot and memory quota.
             match async_timeout(spawn_fut_result?, deadline.remaining_duration()).await {
                 Ok(res) => res?,
-                Err(_) => return Err(Error::DeadlineExceeded(is_noisy_tenant)),
+                Err(_) => return Err(Error::DeadlineExceeded),
             }
-            rx.map_err(|_| Error::MaxPendingTasksExceeded(false))
-                .await?
+            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
         }
     }
 
@@ -908,9 +887,6 @@ impl<E: Engine> Endpoint<E> {
         // A parse failure creates no top read-pool ID. The finalizer then uses a
         // random ID below so unrelated failures do not share Yatp runtime accounting.
         let mut top_task_id = None;
-        // The batch shares the top request's group, so its verdict marks the
-        // batch's deadline responses too.
-        let mut top_is_noisy = false;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|mut r| {
@@ -918,7 +894,6 @@ impl<E: Engine> Endpoint<E> {
                     Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
                 }
                 top_task_id = Some(r.req_ctx.build_task_id());
-                top_is_noisy = r.req_ctx.is_noisy_tenant;
                 top_task_semaphore_group = r.semaphore_group;
                 self.schedule_unary_request(r, output_mode, !has_batch_tasks)
             });
@@ -952,13 +927,8 @@ impl<E: Engine> Endpoint<E> {
                 // twice over in its layout.
                 Some(batch_outputs) => {
                     let collect = if let Some(deadline) = serial_deadline {
-                        collect_batch_task_outputs_sequentially(
-                            top_output,
-                            batch_outputs,
-                            deadline,
-                            top_is_noisy,
-                        )
-                        .boxed()
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
+                            .boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -1030,9 +1000,6 @@ impl<E: Engine> Endpoint<E> {
         // read pool task; with it, results stay unserialized for
         // `merge_batch_task_responses`.
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
-        // Every task carries the request's context, so one verdict serves the
-        // serial stream's deadline responses for the tasks that never start.
-        let mut batch_is_noisy = false;
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
             .iter_mut()
@@ -1059,7 +1026,6 @@ impl<E: Engine> Endpoint<E> {
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok(mut r) => {
-                    batch_is_noisy |= r.req_ctx.is_noisy_tenant;
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     let tracker_guard = DeferContext::new(move || {
                         GLOBAL_TRACKERS.remove(cur_tracker);
@@ -1133,11 +1099,7 @@ impl<E: Engine> Endpoint<E> {
             }
         }
         match serial_deadline {
-            Some(deadline) => Either::Left(serial_batch_task_outputs(
-                batch_futs,
-                deadline,
-                batch_is_noisy,
-            )),
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
             None => Either::Right(stream::FuturesOrdered::from_iter(
                 batch_futs.into_iter().map(|(_, fut)| fut),
             )),
@@ -1201,7 +1163,6 @@ impl<E: Engine> Endpoint<E> {
 
                 match result {
                     Err(e) => {
-                        let e = e.blame_deadline(tracker.req_ctx.is_noisy_tenant);
                         let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
                         record_logical_read_bytes(
                             exec_details_v2
@@ -1289,7 +1250,6 @@ impl<E: Engine> Endpoint<E> {
 
         let task_id = req_ctx.build_task_id();
         let deadline = req_ctx.deadline;
-        let is_noisy_tenant = req_ctx.is_noisy_tenant;
         let resource_group = self.bounded_group_name(&req_ctx.context);
         let tracker = Box::new(Tracker::new(
             req_ctx,
@@ -1327,7 +1287,7 @@ impl<E: Engine> Endpoint<E> {
         let stream = futures::stream::once(Box::pin(async move {
             match async_timeout(spawn_fut, deadline.remaining_duration()).await {
                 Ok(res) => res.err().map(Err),
-                Err(_) => Some(Err(Error::DeadlineExceeded(is_noisy_tenant))),
+                Err(_) => Some(Err(Error::DeadlineExceeded)),
             }
         }))
         .filter_map(futures::future::ready)
@@ -1416,14 +1376,8 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
-/// Only the two load-shedding paths carry `noisy`; the rest are nobody's fault.
-pub(super) fn read_pool_spawn_error(err: ReadPoolError) -> Error {
-    match err {
-        ReadPoolError::UnifiedReadPoolFull { noisy } | ReadPoolError::Rejected { noisy } => {
-            Error::MaxPendingTasksExceeded(noisy)
-        }
-        _ => Error::MaxPendingTasksExceeded(false),
-    }
+pub(super) fn read_pool_spawn_error(_: ReadPoolError) -> Error {
+    Error::MaxPendingTasksExceeded
 }
 
 fn check_memory_locks_for_ranges(
@@ -1475,20 +1429,17 @@ macro_rules! make_error_response_common {
                 $tag = "meet_lock";
                 $resp.set_locked(info);
             }
-            Error::DeadlineExceeded(noisy) => {
+            Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
                 let mut err = errorpb::Error::default();
-                set_deadline_exceeded_busy_error_with_reason(
-                    &mut err,
-                    busy_reason(DEADLINE_EXCEEDED, noisy),
-                );
+                set_deadline_exceeded_busy_error(&mut err);
                 err.set_message($e.to_string());
                 $resp.set_region_error(err);
             }
-            Error::MaxPendingTasksExceeded(noisy) => {
+            Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-                server_is_busy_err.set_reason(busy_reason(&$e.to_string(), noisy));
+                server_is_busy_err.set_reason($e.to_string());
                 let mut errorpb = errorpb::Error::default();
                 errorpb.set_message($e.to_string());
                 errorpb.set_server_is_busy(server_is_busy_err);
@@ -2030,7 +1981,6 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            false,
             false,
         );
         block_on(copr.handle_unary_request(ParseCopRequestResult {
@@ -2933,7 +2883,7 @@ mod tests {
                 Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
             });
             let res = block_on(copr.handle_unary_request(background_request(handler_builder)));
-            assert!(matches!(res, Err(Error::DeadlineExceeded(_))), "{res:?}");
+            assert!(matches!(res, Err(Error::DeadlineExceeded)), "{res:?}");
             assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
         }
 
@@ -2948,7 +2898,7 @@ mod tests {
         .collect::<Vec<_>>();
         assert_eq!(items.len(), 1);
         assert!(
-            matches!(items[0], Err(Error::DeadlineExceeded(_))),
+            matches!(items[0], Err(Error::DeadlineExceeded)),
             "{items:?}"
         );
         assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
@@ -3602,106 +3552,6 @@ mod tests {
         }
     }
 
-    // The queue-entry check and the executor's own deadline error are converted
-    // without a request context. A blamed tenant must still see the marker on
-    // both, or the client fast-retries straight back to the overloaded leader.
-    #[test]
-    fn test_a_noisy_tenants_deadline_is_marked_on_every_path() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            engine,
-        ));
-        let cm = ConcurrencyManager::new_for_test(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
-            read_pool.handle(),
-            cm,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            None,
-        );
-        let blamed_reason = format!(
-            "deadline is exceeded{}",
-            resource_control::NOISY_TENANT_REASON_SUFFIX
-        );
-        let expired =
-            || Deadline::new(tikv_util::time::Instant::now_coarse() - Duration::from_millis(100));
-
-        // Queue entry: the deadline has passed before the task is scheduled.
-        {
-            let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
-            });
-            let mut inner = ReqContextInner::default_for_test();
-            inner.is_noisy_tenant = true;
-            inner.deadline = expired();
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: inner.into(),
-                semaphore_group: SemaphoreGroup::Shared,
-                handler_builder,
-            }))
-            // The server turns a handler error into an error response before
-            // it reaches the client; do the same here.
-            .unwrap_or_else(|e| make_error_response(e).into());
-            assert_eq!(
-                resp.get_region_error().get_server_is_busy().reason,
-                blamed_reason
-            );
-        }
-
-        // Execution: the handler outlives the deadline, which the concurrency
-        // limiter reports as a plain `DeadlineError`.
-        {
-            let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new_with_duration_yieldable(
-                    Ok(coppb::Response::default()),
-                    Duration::from_millis(1500),
-                )
-                .into_boxed())
-            });
-            let mut inner = ReqContextInner::default_for_test();
-            inner.is_noisy_tenant = true;
-            inner.deadline = Deadline::from_now(Duration::from_millis(300));
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: inner.into(),
-                semaphore_group: SemaphoreGroup::Shared,
-                handler_builder,
-            }))
-            // The server turns a handler error into an error response before
-            // it reaches the client; do the same here.
-            .unwrap_or_else(|e| make_error_response(e).into());
-            assert_eq!(
-                resp.get_region_error().get_server_is_busy().reason,
-                blamed_reason
-            );
-        }
-
-        // Not noisy: no marker.
-        {
-            let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
-            });
-            let mut inner = ReqContextInner::default_for_test();
-            inner.deadline = expired();
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: inner.into(),
-                semaphore_group: SemaphoreGroup::Shared,
-                handler_builder,
-            }))
-            // The server turns a handler error into an error response before
-            // it reaches the client; do the same here.
-            .unwrap_or_else(|e| make_error_response(e).into());
-            assert_eq!(
-                resp.get_region_error().get_server_is_busy().reason,
-                "deadline is exceeded"
-            );
-        }
-    }
-
     #[test]
     fn test_check_memory_locks() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -3753,7 +3603,7 @@ mod tests {
 
     #[test]
     fn test_make_error_response() {
-        let resp = make_error_response(Error::DeadlineExceeded(false));
+        let resp = make_error_response(Error::DeadlineExceeded);
         let region_err = resp.get_region_error();
         assert_eq!(
             region_err.get_server_is_busy().reason,
@@ -3762,27 +3612,6 @@ mod tests {
         assert_eq!(
             region_err.get_message(),
             "Coprocessor task terminated due to exceeding the deadline"
-        );
-    }
-
-    #[test]
-    fn test_a_blamed_tenants_deadline_is_marked_for_backoff() {
-        // Without the marker the client fast-retries a deadline with no
-        // backoff at all, straight back to the same overloaded leader; the
-        // suffix is the only thing that routes it to the backoff path.
-        let plain = make_error_response(Error::DeadlineExceeded(false));
-        assert_eq!(
-            plain.get_region_error().get_server_is_busy().reason,
-            "deadline is exceeded"
-        );
-
-        let blamed = make_error_response(Error::DeadlineExceeded(true));
-        assert_eq!(
-            blamed.get_region_error().get_server_is_busy().reason,
-            format!(
-                "deadline is exceeded{}",
-                resource_control::NOISY_TENANT_REASON_SUFFIX
-            ),
         );
     }
 
@@ -3807,7 +3636,7 @@ mod tests {
             let result =
                 block_on(unsafe { Endpoint::<RocksEngine>::get_snapshot_with_timeout(&req_ctx) });
             assert!(result.is_err());
-            assert!(matches!(result, Err(Error::DeadlineExceeded(_))));
+            assert!(matches!(result, Err(Error::DeadlineExceeded)));
         }
 
         // Test case 2: Snapshot retrieval delayed by failpoint, causing timeout
@@ -3850,7 +3679,7 @@ mod tests {
                     // In production yatp FuturePool environment, this would
                     // timeout correctly
                 } else {
-                    assert!(matches!(result, Err(Error::DeadlineExceeded(_))));
+                    assert!(matches!(result, Err(Error::DeadlineExceeded)));
                     // Verify that timeout happened before the full sleep duration
                     // The timeout should trigger around 100ms, not wait for the full 5000ms sleep
                     assert!(

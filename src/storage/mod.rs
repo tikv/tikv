@@ -3575,14 +3575,10 @@ pub struct DynamicConfigs {
 }
 
 /// Converts a failure to run a read in the read pool into a storage error.
-/// Only the two load-shedding paths carry `noisy`; a read whose deadline
-/// passes while it waits for admission reports `DeadlineExceeded`, and the
-/// rest stay plain.
+/// A read whose deadline passes while it waits for admission reports
+/// `DeadlineExceeded`; every other spawn failure is the scheduler being busy.
 fn read_pool_spawn_error(err: ReadPoolError) -> Error {
     match err {
-        ReadPoolError::UnifiedReadPoolFull { noisy } | ReadPoolError::Rejected { noisy } => {
-            Error::from(ErrorInner::QueueTooBusy { noisy })
-        }
         ReadPoolError::DeadlineExceeded => Error::from(ErrorInner::DeadlineExceeded),
         _ => Error::from(ErrorInner::SchedTooBusy),
     }
@@ -4078,8 +4074,7 @@ pub mod test_util {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
-                    Error(box ErrorInner::SchedTooBusy)
-                    | Error(box ErrorInner::QueueTooBusy { .. }) => {}
+                    Error(box ErrorInner::SchedTooBusy) => {}
                     e => panic!("unexpected error chain: {:?}, expect too busy", e),
                 },
                 x,
@@ -4575,38 +4570,21 @@ mod tests {
         },
     };
 
-    /// Both shedding paths must carry the verdict; nothing else may.
     #[test]
-    fn test_read_pool_spawn_error_carries_the_noisy_verdict() {
-        let noisy_of = |err: ReadPoolError| match read_pool_spawn_error(err) {
-            Error(box ErrorInner::QueueTooBusy { noisy }) => Some(noisy),
-            _ => None,
-        };
-        assert_eq!(
-            noisy_of(ReadPoolError::UnifiedReadPoolFull { noisy: true }),
-            Some(true)
-        );
-        assert_eq!(
-            noisy_of(ReadPoolError::UnifiedReadPoolFull { noisy: false }),
-            Some(false)
-        );
-        assert_eq!(
-            noisy_of(ReadPoolError::Rejected { noisy: true }),
-            Some(true)
-        );
-        assert_eq!(
-            noisy_of(ReadPoolError::Rejected { noisy: false }),
-            Some(false)
-        );
-
-        // A cancelled task is not load shedding, so it stays plain.
-        assert!(matches!(
-            read_pool_spawn_error(ReadPoolError::Canceled(futures::channel::oneshot::Canceled)),
-            Error(box ErrorInner::SchedTooBusy)
-        ));
+    fn test_read_pool_spawn_error_reports_only_the_deadline_distinctly() {
+        for err in [
+            ReadPoolError::UnifiedReadPoolFull,
+            ReadPoolError::Rejected,
+            ReadPoolError::Canceled(futures::channel::oneshot::Canceled),
+        ] {
+            assert!(matches!(
+                read_pool_spawn_error(err),
+                Error(box ErrorInner::SchedTooBusy)
+            ));
+        }
 
         // A read that misses its deadline while waiting for admission is not
-        // load shedding either; it reports the deadline.
+        // load shedding; it reports the deadline.
         assert!(matches!(
             read_pool_spawn_error(ReadPoolError::DeadlineExceeded),
             Error(box ErrorInner::DeadlineExceeded)

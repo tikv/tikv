@@ -240,12 +240,6 @@ pub struct ReqContextInner {
 
     /// Whether the request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
-
-    /// Whether resource control blames this request's own group for the
-    /// current overload, decided once at admission. Read when the request
-    /// fails on a path the client retries, so a blamed tenant is told to back
-    /// off rather than come straight back to the same leader.
-    pub is_noisy_tenant: bool,
 }
 
 /// The execution time the client granted the request, or the store's default
@@ -271,7 +265,6 @@ impl ReqContextInner {
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
         allowed_in_flashback: bool,
-        is_noisy_tenant: bool,
     ) -> Self {
         let deadline = Deadline::from_now(max_execution_duration(&context, max_handle_duration));
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -298,16 +291,11 @@ impl ReqContextInner {
             upper_bound,
             perf_level,
             allowed_in_flashback,
-            is_noisy_tenant,
         }
     }
 
-    /// Checks the deadline, blaming this request's group when it is the noisy
-    /// one so the client backs off instead of retrying the same leader at once.
     pub fn check_deadline(&self) -> Result<()> {
-        self.deadline
-            .check()
-            .map_err(|_| Error::DeadlineExceeded(self.is_noisy_tenant))
+        self.deadline.check().map_err(Error::from)
     }
 
     #[cfg(test)]
@@ -321,7 +309,6 @@ impl ReqContextInner {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            false,
             false,
         )
     }
@@ -369,7 +356,6 @@ impl ReqContext {
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
         allowed_in_flashback: bool,
-        is_noisy_tenant: bool,
     ) -> Self {
         ReqContextInner::new(
             context,
@@ -381,7 +367,6 @@ impl ReqContext {
             cache_match_version,
             perf_level,
             allowed_in_flashback,
-            is_noisy_tenant,
         )
         .into()
     }
@@ -436,7 +421,6 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            false,
             false,
         )
     }
@@ -507,7 +491,6 @@ mod tests {
             cache_match_version,
             perf_level,
             allow_in_flashback,
-            false,
         );
 
         let ctx = ReqContext::new(
@@ -520,7 +503,6 @@ mod tests {
             cache_match_version,
             perf_level,
             allow_in_flashback,
-            false,
         );
 
         // deadlines are not exactly equal, just compare the delta

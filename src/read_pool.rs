@@ -145,18 +145,12 @@ async fn admission_and_enqueue(
     running_tasks: Vec<IntGauge>,
     resource_ctl: Option<Arc<ResourceController>>,
     estimated_priority: u64,
-    is_background: bool,
 ) -> Result<(), ReadPoolError> {
     // Admission control runs before any eviction so that a rejected or
     // timed-out delayed task never causes an already-queued task to be dropped.
     let delay = match (resource_manager.as_deref(), resource_limiter.as_deref()) {
         (Some(rm), Some(limiter)) => match rm.admission_decision(true, limiter) {
-            // Ask anyway, so both rejection paths answer the same way.
-            AdmissionDecision::Reject => {
-                return Err(ReadPoolError::Rejected {
-                    noisy: rm.is_noisy_request(limiter.name(), is_background),
-                });
-            }
+            AdmissionDecision::Reject => return Err(ReadPoolError::Rejected),
             AdmissionDecision::Delay(d) => {
                 if task_priority == TaskPriority::High {
                     warn!("admission delay on high-priority read task";
@@ -195,18 +189,14 @@ async fn admission_and_enqueue(
                 let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
                 // Bound the client-supplied name before it becomes a label.
                 let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
-                let (label, noisy) = match resource_manager.as_deref() {
-                    Some(rm) => (
-                        rm.bounded_group_name(name),
-                        rm.is_noisy_request(name, is_background),
-                    ),
-                    None => (Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME), false),
+                let label = match resource_manager.as_deref() {
+                    Some(rm) => rm.bounded_group_name(name),
+                    None => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
                 };
                 UNIFIED_READ_POOL_FULL_REJECTED
                     .with_label_values(&[label.as_ref()])
                     .inc();
-                // Hard rejection, but the requester still learns whose fault it was.
-                return Err(ReadPoolError::UnifiedReadPoolFull { noisy });
+                return Err(ReadPoolError::UnifiedReadPoolFull);
             }
         }
     }
@@ -344,7 +334,6 @@ impl ReadPoolHandle {
                     running_tasks.to_vec(),
                     resource_ctl.clone(),
                     estimated_priority,
-                    is_background,
                 )
                 .boxed()
             }
@@ -503,22 +492,6 @@ impl ReadPoolHandle {
                 resource_manager: Some(rm),
                 ..
             } => rm.reports_noisy_groups() && rm.has_noisy_groups(),
-            _ => false,
-        }
-    }
-
-    /// Whether this request's group is itself being shed; the same predicate
-    /// the spawn path puts on `ReadPoolError`. Background is classified from
-    /// `request_source`, as the write scheduler does.
-    pub fn is_noisy_request(&self, resource_group: &str, request_source: &str) -> bool {
-        match self {
-            ReadPoolHandle::Yatp {
-                resource_manager: Some(rm),
-                ..
-            } => {
-                let is_background = rm.is_background_request(resource_group, request_source);
-                rm.is_noisy_request(resource_group, is_background)
-            }
             _ => false,
         }
     }
@@ -1188,10 +1161,10 @@ pub enum ReadPoolError {
     FuturePoolFull(#[from] yatp_pool::Full),
 
     #[error("Unified read pool is full")]
-    UnifiedReadPoolFull { noisy: bool },
+    UnifiedReadPoolFull,
 
     #[error("Request rejected by admission control")]
-    Rejected { noisy: bool },
+    Rejected,
 
     #[error("Deadline exceeded before the task was admitted")]
     DeadlineExceeded,
@@ -2645,52 +2618,6 @@ mod tests {
             .expect_err("with nobody named the advisory applies again");
 
         running_tasks[0].sub(500);
-    }
-
-    #[test]
-    fn test_is_noisy_request_classifies_background_by_request_source() {
-        let resource_manager = Arc::new(ResourceGroupManager::new(ResourceControlConfig {
-            enable_read_admission_control: true,
-            ..Default::default()
-        }));
-        let mut group = new_resource_group_ru("rc".into(), 5000, 1);
-        group
-            .mut_background_settings()
-            .set_job_types(vec!["br".to_owned()].into());
-        resource_manager.add_resource_group(group);
-        let _ctl = resource_manager.derive_controller("read".into(), true);
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool_with_name(
-            &UnifiedReadPoolConfig {
-                min_thread_count: 1,
-                max_thread_count: 1,
-                ..Default::default()
-            },
-            DummyReporter,
-            engine,
-            None,
-            Some(resource_manager.clone()),
-            CleanupMethod::InPlace,
-            "test-noisy-bg-source".to_owned(),
-            false,
-        );
-        let handle = pool.handle();
-        assert!(resource_manager.is_background_request("rc", "br"));
-
-        // Throttle the group's foreground limiter.
-        resource_manager.record_ru_consumption("rc", 10_000_000);
-        resource_manager.set_bg_cpu_at_floor(true);
-        resource_manager.online_adjust_resource_quota(90.0);
-        resource_manager.online_adjust_resource_quota(90.0);
-        assert!(handle.is_noisy_request("rc", ""), "foreground is held");
-
-        // Same group, background source: judged by the background limiter,
-        // as the spawn path and the write scheduler judge it.
-        assert_eq!(
-            handle.is_noisy_request("rc", "br"),
-            resource_manager.is_noisy_request("rc", true),
-        );
-        assert!(!handle.is_noisy_request("rc", "br"), "background is not");
     }
 
     #[test]

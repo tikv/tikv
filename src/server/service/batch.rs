@@ -37,8 +37,8 @@ pub const MAX_QUEUE_SIZE_PER_WORKER: usize = 16;
 ///
 /// A `BatchCommandsRequest` interleaves the point gets of every session on a
 /// TiDB, so one message mixes resource groups. Merged gets run as one read
-/// pool task whose group, limiter, busy check and noisy verdict come from
-/// its first request, so a merge must not cross groups. Background work
+/// pool task whose group, limiter and busy check come from its first
+/// request, so a merge must not cross groups. Background work
 /// shares one limiter whatever its group, so it is one bucket.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BatchKey {
