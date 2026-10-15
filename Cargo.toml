@@ -233,7 +233,7 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # Pin the bounded-iterator reset API until it is merged into tikv/rust-rocksdb.
 # Update to the upstream revision and remove this patch after that merge.
 [patch.'https://github.com/tikv/rust-rocksdb']
-rocksdb = { git = "https://github.com/jwc1love/rust-rocksdb", rev = "ab3a8c400f1c8b29b24f75c44459e6bbebc9a981" }
+rocksdb = { git = "https://github.com/jwc1love/rust-rocksdb", rev = "cc93046a101b90573430548f932017c5761ea582" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
