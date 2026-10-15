@@ -488,7 +488,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner> {
-        if let Some(mut scanner) = previous {
+        let discarded_statistics = if let Some(mut scanner) = previous {
             // Physical iterator reuse must not bypass Region range validation.
             self.verify_range(&lower_bound, &upper_bound)?;
             if !(check_has_newer_ts_data
@@ -503,15 +503,25 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             {
                 return Ok(scanner);
             }
-        }
-        self.scanner(
+            // A preceding CF cursor may already have performed a physical seek
+            // before another CF rejects reuse. Keep that work, together with
+            // any statistics the caller has not drained yet.
+            Some(scanner.take_statistics())
+        } else {
+            None
+        };
+        let mut scanner = self.scanner(
             desc,
             key_only,
             check_has_newer_ts_data,
             load_commit_ts,
             lower_bound,
             upper_bound,
-        )
+        )?;
+        if let Some(statistics) = discarded_statistics {
+            scanner.add_statistics(&statistics);
+        }
+        Ok(scanner)
     }
 }
 
