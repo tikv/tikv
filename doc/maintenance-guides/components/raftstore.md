@@ -150,6 +150,13 @@ High-risk contracts:
 
 ## Critical Invariants
 
+- `RegionIterator::reset_bounds_and_seek` validates both endpoints using the
+  region's inclusive seek contract before touching the underlying iterator. It
+  adds the data-key prefix and clamps physical bounds to the original region;
+  range reuse must preserve the same region and snapshot. Its boolean reports
+  support, not key validity: an empty result can still be a successful reset,
+  while unsupported resets leave the iterator unchanged.
+
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
 - Normal load-based split keys must be validated against the current Region's

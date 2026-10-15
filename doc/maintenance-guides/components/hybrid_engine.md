@@ -88,6 +88,10 @@ single snapshot or iterator chooses between disk data and cache data.
   - the cache snapshot can be created for the requested read ts and sequence
     number
 - Data-CF reads may come from cache; non-data CFs still use disk snapshots.
+- Multi-range scanner reuse can reset physical bounds only on the disk iterator
+  branch. Cache iterators return unsupported without moving or changing their
+  bounds, and the scanner must fall back to creating new iterators. Reset keeps
+  the original snapshot and must not switch between disk and cache backends.
 
 ## Observability And Operational Signals
 
