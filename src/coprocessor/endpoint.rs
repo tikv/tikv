@@ -55,7 +55,7 @@ use crate::{
         batch::*, cache::CachedRequestHandler, interceptors::*, metrics::*,
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
-    read_pool::{ReadPoolError, ReadPoolHandle},
+    read_pool::ReadPoolHandle,
     server::Config,
     storage::{
         self, Engine, Snapshot, SnapshotStore,
@@ -574,7 +574,7 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
-        tracker.req_ctx.check_deadline()?;
+        tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
@@ -601,7 +601,7 @@ impl<E: Engine> Endpoint<E> {
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
-        tracker.req_ctx.check_deadline()?;
+        tracker.req_ctx.deadline.check()?;
         tracker.buckets = latest_buckets;
         let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
@@ -1131,14 +1131,14 @@ impl<E: Engine> Endpoint<E> {
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.on_scheduled();
-            tracker.req_ctx.check_deadline()?;
+            tracker.req_ctx.deadline.check()?;
 
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
             let snapshot = unsafe { Self::get_snapshot_with_timeout(&tracker.req_ctx).await }?;
             // When snapshot is retrieved, deadline may exceed.
             tracker.on_snapshot_finished();
-            tracker.req_ctx.check_deadline()?;
+            tracker.req_ctx.deadline.check()?;
 
             let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
 
@@ -1346,7 +1346,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(self
             .read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map(|r| r.map_err(read_pool_spawn_error))
+            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
             .boxed())
     }
 
@@ -1374,10 +1374,6 @@ impl<E: Engine> Endpoint<E> {
             task_id,
         }
     }
-}
-
-pub(super) fn read_pool_spawn_error(_: ReadPoolError) -> Error {
-    Error::MaxPendingTasksExceeded
 }
 
 fn check_memory_locks_for_ranges(

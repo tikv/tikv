@@ -294,10 +294,6 @@ impl ReqContextInner {
         }
     }
 
-    pub fn check_deadline(&self) -> Result<()> {
-        self.deadline.check().map_err(Error::from)
-    }
-
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(

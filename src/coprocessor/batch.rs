@@ -24,7 +24,7 @@ use tokio::{sync::Semaphore, task::yield_now};
 use super::{
     Error, HandlerOutput, HandlerOutputState, MergeableResult, ResponseMaterializationFailure,
     TracedResponse,
-    endpoint::{make_error_batch_response, make_error_response, read_pool_spawn_error},
+    endpoint::{make_error_batch_response, make_error_response},
     metrics::record_coprocessor_response_size,
 };
 use crate::read_pool::ReadPoolHandle;
@@ -141,8 +141,8 @@ impl BatchMergeFinalizer {
         // Error returns here and below drop the completed outputs along with
         // their execution details; the endpoint refills only the top task's
         // scan and time details from the tracker. Accepted for atomic retries.
-        if let Err(e) = submission.await {
-            return make_error_response(read_pool_spawn_error(e)).into();
+        if submission.await.is_err() {
+            return make_error_response(Error::MaxPendingTasksExceeded).into();
         }
 
         match response_rx.await {
