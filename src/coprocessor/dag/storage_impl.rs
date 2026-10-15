@@ -70,6 +70,7 @@ impl<S: Store> Storage for TikvStorage<S> {
                     load_commit_ts,
                     lower,
                     upper,
+                    &mut self.cf_stats_backlog,
                 )
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,
