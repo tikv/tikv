@@ -126,6 +126,8 @@ High-risk contracts:
   because different CF cursors may already have accepted the new bounds.
   `SnapshotStore` carries the discarded scanner's statistics into a replacement
   on fallback, including physical seeks already performed by another CF.
+  On range-validation, reset, or fallback-construction errors, consumed scanner
+  statistics go to the caller's error sink before the original error propagates.
 
 ### Raw KV
 

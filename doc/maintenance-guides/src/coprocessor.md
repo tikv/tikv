@@ -156,6 +156,8 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   retains any newer-timestamp observation in its request-level backlog. Reuse
   must preserve that sticky cacheability decision, count each range's work only
   once, and keep cumulative `scanned_bytes` independent of statistics draining.
+  Failed range switches also add consumed scanner and reset-attempt statistics
+  to the backlog, so error responses retain the physical work already done.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
 - The DAG `flags` bitmask is a network-facing contract. Bit 12,
