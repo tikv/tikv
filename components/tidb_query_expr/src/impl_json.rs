@@ -43,9 +43,12 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[inline]
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
-    // base Json argument
-    let base: Option<JsonRef> = args[0].as_json();
-    let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
+    // Return SQL NULL when base document is SQL NULL (matches TiDB behavior).
+    // Use as_json() so we only match SQL NULL JSON values, not NULL of other types.
+    let base = match args[0].as_json() {
+        None => return Ok(None),
+        Some(json) => json.to_owned(),
+    };
 
     let buf_size = args.len() / 2;
 
@@ -71,12 +74,10 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
     // Returns None if Base is None
-    if args[0].to_owned().is_none() {
-        return Ok(None);
-    }
-    // base Json argument
-    let base: Option<JsonRef> = args[0].as_json();
-    let mut base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
+    let mut base = match args[0].as_json() {
+        None => return Ok(None),
+        Some(json) => json.to_owned(),
+    };
 
     for chunk in args[1..].chunks(2) {
         let path: Option<BytesRef> = chunk[0].as_bytes();
@@ -609,6 +610,34 @@ mod tests {
     #[test]
     fn test_json_modify() {
         let cases: Vec<(_, Vec<ScalarValue>, _)> = vec![
+            // Issue #20144: SQL NULL base doc should return SQL NULL regardless of other args
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                ScalarFuncSig::JsonInsertSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                ScalarFuncSig::JsonReplaceSig,
+                vec![
+                    None::<Json>.into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                None::<Json>,
+            ),
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
