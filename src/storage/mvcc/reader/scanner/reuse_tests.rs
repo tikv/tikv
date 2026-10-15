@@ -1,8 +1,11 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterOptions, MetricsExt, ReadOptions};
@@ -22,6 +25,9 @@ struct CountingSnapshot<S> {
     inner: S,
     iterators: Arc<AtomicUsize>,
     reject_reset_cf: Option<CfName>,
+    error_reset_cf: Option<CfName>,
+    fail_iter_at: Option<usize>,
+    upper_bound_override: Option<Vec<u8>>,
 }
 
 impl<S: Snapshot> CountingSnapshot<S> {
@@ -30,6 +36,9 @@ impl<S: Snapshot> CountingSnapshot<S> {
             inner,
             iterators: Arc::new(AtomicUsize::new(0)),
             reject_reset_cf: None,
+            error_reset_cf: None,
+            fail_iter_at: None,
+            upper_bound_override: None,
         }
     }
 
@@ -58,10 +67,14 @@ impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
     }
 
     fn iter(&self, cf: CfName, opts: IterOptions) -> kv::Result<Self::Iter> {
-        self.iterators.fetch_add(1, Ordering::Relaxed);
+        let count = self.iterators.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.fail_iter_at == Some(count) {
+            return Err(injected_error());
+        }
         Ok(ResetSupportIterator {
             inner: self.inner.iter(cf, opts)?,
             reject_reset: self.reject_reset_cf == Some(cf),
+            error_reset: self.error_reset_cf == Some(cf),
         })
     }
 
@@ -70,7 +83,9 @@ impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
     }
 
     fn upper_bound(&self) -> Option<&[u8]> {
-        self.inner.upper_bound()
+        self.upper_bound_override
+            .as_deref()
+            .or_else(|| self.inner.upper_bound())
     }
 
     fn ext(&self) -> Self::Ext<'_> {
@@ -81,6 +96,11 @@ impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
 struct ResetSupportIterator<I> {
     inner: I,
     reject_reset: bool,
+    error_reset: bool,
+}
+
+fn injected_error() -> kv::Error {
+    kv::ErrorInner::Timeout(Duration::from_millis(123)).into()
 }
 
 impl<I: Iterator> MetricsExt for ResetSupportIterator<I> {
@@ -101,7 +121,14 @@ impl<I: Iterator> Iterator for ResetSupportIterator<I> {
         if self.reject_reset {
             Ok(false)
         } else {
-            self.inner.reset_bounds_and_seek(lower, upper, reverse)
+            let supported = self.inner.reset_bounds_and_seek(lower, upper, reverse)?;
+            if self.error_reset {
+                // Inject after performing the physical seek, so its work must
+                // be accounted even though the original error is returned.
+                Err(injected_error())
+            } else {
+                Ok(supported)
+            }
         }
     }
 
@@ -228,6 +255,7 @@ fn test_scanner_reuse_physical_iterators_both_directions() {
                     true,
                     lower_bound,
                     upper_bound,
+                    &mut Statistics::default(),
                 )
                 .unwrap();
             assert_eq!(snapshot.iterator_count(), 3, "range {lower:?}..{upper:?}");
@@ -269,7 +297,16 @@ fn test_scanner_reuse_partial_range_and_lazy_default_cursor() {
         for key in [b"c", b"e"] {
             let (lower, upper) = bounds(key, &[key[0] + 1]);
             scanner = store
-                .scanner_with_reuse(Some(scanner), desc, false, false, false, lower, upper)
+                .scanner_with_reuse(
+                    Some(scanner),
+                    desc,
+                    false,
+                    false,
+                    false,
+                    lower,
+                    upper,
+                    &mut Statistics::default(),
+                )
                 .unwrap();
             assert_eq!(
                 collect(&mut scanner),
@@ -340,6 +377,7 @@ fn test_scanner_reuse_mvcc_visibility_locks_and_newer_ts() {
                             false,
                             lower.clone(),
                             upper.clone(),
+                            &mut Statistics::default(),
                         )
                         .unwrap();
                     let mut fresh = store
@@ -381,6 +419,7 @@ fn test_scanner_reuse_rebuilds_for_changed_scan_options() {
                 load_commit_ts,
                 lower,
                 upper,
+                &mut Statistics::default(),
             )
             .unwrap();
         expected_count += 2;
@@ -414,7 +453,16 @@ fn test_scanner_reuse_falls_back_for_unsupported_engine() {
     assert_eq!(snapshot.iterator_count(), 2);
     let (lower, upper) = bounds(b"c", b"d");
     let mut scanner = store
-        .scanner_with_reuse(Some(scanner), false, false, true, false, lower, upper)
+        .scanner_with_reuse(
+            Some(scanner),
+            false,
+            false,
+            true,
+            false,
+            lower,
+            upper,
+            &mut Statistics::default(),
+        )
         .unwrap();
     assert_eq!(snapshot.iterator_count(), 4);
     assert!(scanner.next_entry().unwrap().is_none());
@@ -468,7 +516,16 @@ fn test_scanner_reuse_fallback_retains_partial_reset_statistics() {
             // reset is followed by rejected lock/default-CF reset and fallback.
             let (lower, upper) = bounds(b"c", b"d");
             scanner = store
-                .scanner_with_reuse(Some(scanner), desc, false, true, false, lower, upper)
+                .scanner_with_reuse(
+                    Some(scanner),
+                    desc,
+                    false,
+                    true,
+                    false,
+                    lower,
+                    upper,
+                    &mut Statistics::default(),
+                )
                 .unwrap();
             assert_eq!(collect(&mut scanner).len(), 1);
             assert_eq!(snapshot.iterator_count(), 6);
@@ -505,6 +562,242 @@ fn test_scanner_reuse_fallback_retains_partial_reset_statistics() {
             );
             assert_eq!(statistics.write.processed_keys, 2);
         }
+    }
+}
+
+fn assert_original_timeout(error: &crate::storage::txn::Error) {
+    let crate::storage::txn::ErrorInner::Mvcc(error) = error.0.as_ref() else {
+        panic!("unexpected transaction error: {error:?}");
+    };
+    let crate::storage::mvcc::ErrorInner::Kv(error) = error.0.as_ref() else {
+        panic!("unexpected MVCC error: {error:?}");
+    };
+    assert!(matches!(
+        error.0.as_ref(),
+        kv::ErrorInner::Timeout(duration) if *duration == Duration::from_millis(123)
+    ));
+}
+
+#[test]
+fn test_scanner_reuse_reset_error_retains_statistics() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let value = vec![b'v'; 512];
+    for key in [b"a", b"c"] {
+        must_prewrite_put(&mut engine, key, &value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+    }
+    let processed_size = kv::kv_processed_size(Key::from_raw(b"a").len(), value.len());
+    let seek_count = |cf: &CfStatistics| cf.seek + cf.seek_for_prev;
+
+    for desc in [false, true] {
+        for error_reset_cf in [CF_LOCK, CF_DEFAULT] {
+            let mut snapshot = CountingSnapshot::new(engine.snapshot(Default::default()).unwrap());
+            snapshot.error_reset_cf = Some(error_reset_cf);
+            let store = snapshot_store(snapshot);
+            let (lower, upper) = bounds(b"a", b"b");
+            let mut scanner = store
+                .scanner(desc, false, true, false, lower, upper)
+                .unwrap();
+            assert_eq!(collect(&mut scanner).len(), 1);
+
+            // The caller has not drained the old range. Both that range and
+            // the new reset's physical seeks must reach the error sink.
+            let mut statistics = Statistics::default();
+            let (lower, upper) = bounds(b"c", b"d");
+            let error = store
+                .scanner_with_reuse(
+                    Some(scanner),
+                    desc,
+                    false,
+                    true,
+                    false,
+                    lower,
+                    upper,
+                    &mut statistics,
+                )
+                .err()
+                .expect("reset must return the injected error immediately");
+            assert_original_timeout(&error);
+            assert_eq!(seek_count(&statistics.write), 2);
+            assert_eq!(seek_count(&statistics.lock), 2);
+            assert_eq!(statistics.write.processed_keys, 1);
+            assert_eq!(statistics.processed_size, processed_size);
+
+            // A successful construction must leave the error sink unchanged.
+            let (lower, upper) = bounds(b"c", b"d");
+            let _scanner = store
+                .scanner_with_reuse(
+                    None,
+                    desc,
+                    false,
+                    true,
+                    false,
+                    lower,
+                    upper,
+                    &mut statistics,
+                )
+                .unwrap();
+            assert_eq!(seek_count(&statistics.write), 2);
+            assert_eq!(statistics.processed_size, processed_size);
+
+            // TikvStorage has already drained the old range into its backlog
+            // before reset. Error collection must include that work once.
+            let mut storage = TikvStorage::new(store, true);
+            storage
+                .begin_scan(desc, false, false, IntervalRange::from(("a", "b")))
+                .unwrap();
+            assert!(storage.scan_next_entry().unwrap().is_some());
+            assert!(storage.scan_next_entry().unwrap().is_none());
+            let error = storage
+                .begin_scan(desc, false, false, IntervalRange::from(("c", "d")))
+                .unwrap_err();
+            assert_eq!(error.to_string(), injected_error().to_string());
+            let mut statistics = Statistics::default();
+            storage.collect_statistics(&mut statistics);
+            assert_eq!(seek_count(&statistics.write), 2);
+            assert_eq!(seek_count(&statistics.lock), 2);
+            assert_eq!(statistics.write.processed_keys, 1);
+            assert_eq!(statistics.processed_size, processed_size);
+            assert_eq!(storage.scanned_bytes(), processed_size);
+            let mut drained = Statistics::default();
+            storage.collect_statistics(&mut drained);
+            assert_eq!(drained.write.total_op_count(), 0);
+            assert_eq!(drained.lock.total_op_count(), 0);
+            assert_eq!(drained.processed_size, 0);
+        }
+    }
+}
+
+#[test]
+fn test_scanner_reuse_fallback_construction_error_retains_statistics() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let value = vec![b'v'; 512];
+    must_prewrite_put(&mut engine, b"a", &value, b"a", 10);
+    must_commit(&mut engine, b"a", 10, 20);
+    let processed_size = kv::kv_processed_size(Key::from_raw(b"a").len(), value.len());
+    let seek_count = |cf: &CfStatistics| cf.seek + cf.seek_for_prev;
+    for desc in [false, true] {
+        for drain_before_reset in [false, true] {
+            let mut snapshot = CountingSnapshot::new(engine.snapshot(Default::default()).unwrap());
+            snapshot.reject_reset_cf = Some(CF_LOCK);
+            // Initial lock/write/default creation succeeds; replacement's
+            // first iterator construction fails after partial write-CF reset.
+            snapshot.fail_iter_at = Some(4);
+            let store = snapshot_store(snapshot);
+            if drain_before_reset {
+                let mut storage = TikvStorage::new(store, true);
+                storage
+                    .begin_scan(desc, false, false, IntervalRange::from(("a", "b")))
+                    .unwrap();
+                assert!(storage.scan_next_entry().unwrap().is_some());
+                assert!(storage.scan_next_entry().unwrap().is_none());
+                let error = storage
+                    .begin_scan(desc, false, false, IntervalRange::from(("c", "d")))
+                    .unwrap_err();
+                assert_eq!(error.to_string(), injected_error().to_string());
+                let mut statistics = Statistics::default();
+                storage.collect_statistics(&mut statistics);
+                assert_eq!(seek_count(&statistics.write), 2);
+                assert_eq!(seek_count(&statistics.lock), 1);
+                assert_eq!(statistics.write.processed_keys, 1);
+                assert_eq!(statistics.processed_size, processed_size);
+                let mut drained = Statistics::default();
+                storage.collect_statistics(&mut drained);
+                assert_eq!(drained.write.total_op_count(), 0);
+                assert_eq!(drained.processed_size, 0);
+            } else {
+                let (lower, upper) = bounds(b"a", b"b");
+                let mut scanner = store
+                    .scanner(desc, false, true, false, lower, upper)
+                    .unwrap();
+                assert_eq!(collect(&mut scanner).len(), 1);
+                let mut statistics = Statistics::default();
+                let (lower, upper) = bounds(b"c", b"d");
+                let error = store
+                    .scanner_with_reuse(
+                        Some(scanner),
+                        desc,
+                        false,
+                        true,
+                        false,
+                        lower,
+                        upper,
+                        &mut statistics,
+                    )
+                    .err()
+                    .expect("fallback construction must return the original error");
+                assert_original_timeout(&error);
+                assert_eq!(seek_count(&statistics.write), 2);
+                assert_eq!(seek_count(&statistics.lock), 1);
+                assert_eq!(statistics.write.processed_keys, 1);
+                assert_eq!(statistics.processed_size, processed_size);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_scanner_reuse_invalid_range_retains_statistics() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let value = vec![b'v'; 512];
+    must_prewrite_put(&mut engine, b"a", &value, b"a", 10);
+    must_commit(&mut engine, b"a", 10, 20);
+    let processed_size = kv::kv_processed_size(Key::from_raw(b"a").len(), value.len());
+    let seek_count = |cf: &CfStatistics| cf.seek + cf.seek_for_prev;
+    for desc in [false, true] {
+        let mut snapshot = CountingSnapshot::new(engine.snapshot(Default::default()).unwrap());
+        snapshot.upper_bound_override = Some(Key::from_raw(b"d").into_encoded());
+        let store = snapshot_store(snapshot);
+        let (lower, upper) = bounds(b"a", b"b");
+        let mut scanner = store
+            .scanner(desc, false, true, false, lower, upper)
+            .unwrap();
+        assert_eq!(collect(&mut scanner).len(), 1);
+        let mut statistics = Statistics::default();
+        let (lower, upper) = bounds(b"c", b"z");
+        let error = store
+            .scanner_with_reuse(
+                Some(scanner),
+                desc,
+                false,
+                true,
+                false,
+                lower,
+                upper,
+                &mut statistics,
+            )
+            .err()
+            .expect("range validation must reject an out-of-snapshot bound");
+        assert!(matches!(
+            error.0.as_ref(),
+            crate::storage::txn::ErrorInner::InvalidReqRange { .. }
+        ));
+        let error_message = error.to_string();
+        assert_eq!(seek_count(&statistics.write), 1);
+        assert_eq!(seek_count(&statistics.lock), 1);
+        assert_eq!(statistics.write.processed_keys, 1);
+        assert_eq!(statistics.processed_size, processed_size);
+
+        let mut storage = TikvStorage::new(store, true);
+        storage
+            .begin_scan(desc, false, false, IntervalRange::from(("a", "b")))
+            .unwrap();
+        assert!(storage.scan_next_entry().unwrap().is_some());
+        assert!(storage.scan_next_entry().unwrap().is_none());
+        let error = storage
+            .begin_scan(desc, false, false, IntervalRange::from(("c", "z")))
+            .unwrap_err();
+        assert_eq!(error.to_string(), error_message);
+        let mut statistics = Statistics::default();
+        storage.collect_statistics(&mut statistics);
+        assert_eq!(seek_count(&statistics.write), 1);
+        assert_eq!(seek_count(&statistics.lock), 1);
+        assert_eq!(statistics.write.processed_keys, 1);
+        assert_eq!(statistics.processed_size, processed_size);
+        let mut drained = Statistics::default();
+        storage.collect_statistics(&mut drained);
+        assert_eq!(drained.write.total_op_count(), 0);
+        assert_eq!(drained.processed_size, 0);
     }
 }
 
