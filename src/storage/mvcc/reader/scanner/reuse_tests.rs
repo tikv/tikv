@@ -404,7 +404,7 @@ fn test_scanner_reuse_rebuilds_for_changed_scan_options() {
 
 #[test]
 fn test_scanner_reuse_falls_back_for_unsupported_engine() {
-    let engine = BTreeEngine::new(&[CF_DEFAULT, CF_LOCK, CF_WRITE]);
+    let mut engine = BTreeEngine::new(&[CF_DEFAULT, CF_LOCK, CF_WRITE]);
     let snapshot = CountingSnapshot::new(engine.snapshot(Default::default()).unwrap());
     let store = snapshot_store(snapshot.clone());
     let (lower, upper) = bounds(b"a", b"b");
@@ -422,7 +422,7 @@ fn test_scanner_reuse_falls_back_for_unsupported_engine() {
 
 #[test]
 fn test_scanner_reuse_rejects_unbounded_or_inverted_range() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     for desc in [false, true] {
         for (lower, upper) in [
