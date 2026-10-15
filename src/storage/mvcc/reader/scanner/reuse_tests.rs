@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterOptions, ReadOptions};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterOptions, MetricsExt, ReadOptions};
 use tidb_query_common::storage::{IntervalRange, Storage as QueryStorage};
 
 use super::*;
@@ -21,6 +21,7 @@ use crate::{
 struct CountingSnapshot<S> {
     inner: S,
     iterators: Arc<AtomicUsize>,
+    reject_reset_cf: Option<CfName>,
 }
 
 impl<S: Snapshot> CountingSnapshot<S> {
@@ -28,6 +29,7 @@ impl<S: Snapshot> CountingSnapshot<S> {
         Self {
             inner,
             iterators: Arc::new(AtomicUsize::new(0)),
+            reject_reset_cf: None,
         }
     }
 
@@ -37,7 +39,7 @@ impl<S: Snapshot> CountingSnapshot<S> {
 }
 
 impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
-    type Iter = S::Iter;
+    type Iter = ResetSupportIterator<S::Iter>;
     type Ext<'a>
         = S::Ext<'a>
     where
@@ -57,7 +59,10 @@ impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
 
     fn iter(&self, cf: CfName, opts: IterOptions) -> kv::Result<Self::Iter> {
         self.iterators.fetch_add(1, Ordering::Relaxed);
-        self.inner.iter(cf, opts)
+        Ok(ResetSupportIterator {
+            inner: self.inner.iter(cf, opts)?,
+            reject_reset: self.reject_reset_cf == Some(cf),
+        })
     }
 
     fn lower_bound(&self) -> Option<&[u8]> {
@@ -70,6 +75,74 @@ impl<S: Snapshot> Snapshot for CountingSnapshot<S> {
 
     fn ext(&self) -> Self::Ext<'_> {
         self.inner.ext()
+    }
+}
+
+struct ResetSupportIterator<I> {
+    inner: I,
+    reject_reset: bool,
+}
+
+impl<I: Iterator> MetricsExt for ResetSupportIterator<I> {
+    type Collector = I::Collector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        self.inner.metrics_collector()
+    }
+}
+
+impl<I: Iterator> Iterator for ResetSupportIterator<I> {
+    fn reset_bounds_and_seek(
+        &mut self,
+        lower: &Key,
+        upper: &Key,
+        reverse: bool,
+    ) -> kv::Result<bool> {
+        if self.reject_reset {
+            Ok(false)
+        } else {
+            self.inner.reset_bounds_and_seek(lower, upper, reverse)
+        }
+    }
+
+    fn next(&mut self) -> kv::Result<bool> {
+        self.inner.next()
+    }
+
+    fn prev(&mut self) -> kv::Result<bool> {
+        self.inner.prev()
+    }
+
+    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
+        self.inner.seek(key)
+    }
+
+    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
+        self.inner.seek_for_prev(key)
+    }
+
+    fn seek_to_first(&mut self) -> kv::Result<bool> {
+        self.inner.seek_to_first()
+    }
+
+    fn seek_to_last(&mut self) -> kv::Result<bool> {
+        self.inner.seek_to_last()
+    }
+
+    fn valid(&self) -> kv::Result<bool> {
+        self.inner.valid()
+    }
+
+    fn validate_key(&self, key: &Key) -> kv::Result<()> {
+        self.inner.validate_key(key)
+    }
+
+    fn key(&self) -> &[u8] {
+        self.inner.key()
+    }
+
+    fn value(&self) -> &[u8] {
+        self.inner.value()
     }
 }
 
@@ -367,6 +440,70 @@ fn test_scanner_reuse_rejects_unbounded_or_inverted_range() {
                     .reset_range(desc, false, false, lower, upper)
                     .unwrap()
             );
+        }
+    }
+}
+
+#[test]
+fn test_scanner_reuse_fallback_retains_partial_reset_statistics() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let value = vec![b'v'; 512];
+    for key in [b"a", b"c"] {
+        must_prewrite_put(&mut engine, key, &value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+    }
+
+    for desc in [false, true] {
+        for reject_reset_cf in [CF_LOCK, CF_DEFAULT] {
+            let mut snapshot = CountingSnapshot::new(engine.snapshot(Default::default()).unwrap());
+            snapshot.reject_reset_cf = Some(reject_reset_cf);
+            let store = snapshot_store(snapshot.clone());
+            let (lower, upper) = bounds(b"a", b"b");
+            let mut scanner = store
+                .scanner(desc, false, true, false, lower, upper)
+                .unwrap();
+            assert_eq!(collect(&mut scanner).len(), 1);
+            assert_eq!(snapshot.iterator_count(), 3);
+            // Keep the old range's statistics undrained. Successful write-CF
+            // reset is followed by rejected lock/default-CF reset and fallback.
+            let (lower, upper) = bounds(b"c", b"d");
+            scanner = store
+                .scanner_with_reuse(Some(scanner), desc, false, true, false, lower, upper)
+                .unwrap();
+            assert_eq!(collect(&mut scanner).len(), 1);
+            assert_eq!(snapshot.iterator_count(), 6);
+            let statistics = scanner.take_statistics();
+            let seek_count = |cf: &CfStatistics| cf.seek + cf.seek_for_prev;
+            assert_eq!(seek_count(&statistics.write), 3);
+            assert_eq!(
+                seek_count(&statistics.lock),
+                if reject_reset_cf == CF_LOCK { 2 } else { 3 }
+            );
+            assert_eq!(statistics.write.processed_keys, 2);
+            assert_eq!(
+                statistics.processed_size,
+                2 * kv::kv_processed_size(Key::from_raw(b"a").len(), value.len())
+            );
+            assert_eq!(scanner.take_statistics().write.total_op_count(), 0);
+
+            // TikvStorage drains before reset; the attempted physical work
+            // still has to survive in the replacement scanner's statistics.
+            let mut storage = TikvStorage::new(store, true);
+            for range in [("a", "b"), ("c", "d")] {
+                storage
+                    .begin_scan(desc, false, false, IntervalRange::from(range))
+                    .unwrap();
+                assert!(storage.scan_next_entry().unwrap().is_some());
+                assert!(storage.scan_next_entry().unwrap().is_none());
+            }
+            let mut statistics = Statistics::default();
+            storage.collect_statistics(&mut statistics);
+            assert_eq!(seek_count(&statistics.write), 3);
+            assert_eq!(
+                seek_count(&statistics.lock),
+                if reject_reset_cf == CF_LOCK { 2 } else { 3 }
+            );
+            assert_eq!(statistics.write.processed_keys, 2);
         }
     }
 }

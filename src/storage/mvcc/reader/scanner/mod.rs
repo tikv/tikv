@@ -236,6 +236,13 @@ pub enum Scanner<S: Snapshot> {
 }
 
 impl<S: Snapshot> Scanner<S> {
+    pub(crate) fn add_statistics(&mut self, statistics: &Statistics) {
+        match self {
+            Scanner::Forward(scanner) => scanner.statistics.add(statistics),
+            Scanner::Backward(scanner) => scanner.statistics.add(statistics),
+        }
+    }
+
     /// Reuse the physical cursors for another bounded range on this snapshot.
     ///
     /// A false result means that reuse is unsupported. The caller must discard

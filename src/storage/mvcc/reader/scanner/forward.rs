@@ -124,7 +124,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     cursors: Cursors<S>,
     /// Is iteration started
     is_started: bool,
-    statistics: Statistics,
+    pub(super) statistics: Statistics,
     scan_policy: P,
     met_newer_ts_data: NewerTsCheckState,
 }

@@ -37,7 +37,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
     default_cursor: Option<Cursor<S::Iter>>,
     /// Is iteration started
     is_started: bool,
-    statistics: Statistics,
+    pub(super) statistics: Statistics,
     met_newer_ts_data: NewerTsCheckState,
 }
 
