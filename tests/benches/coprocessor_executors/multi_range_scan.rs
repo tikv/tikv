@@ -52,7 +52,11 @@ use tempfile::TempDir;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tikv::{
     coprocessor::dag::TikvStorage,
-    storage::{Result, Statistics, Store, mvcc::NewerTsCheckState, txn::SnapshotStore},
+    storage::{
+        Statistics, Store,
+        mvcc::NewerTsCheckState,
+        txn::{Result, SnapshotStore},
+    },
 };
 use txn_types::{Key, TimeStamp, ValueEntry, Write, WriteType};
 
