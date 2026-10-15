@@ -124,6 +124,8 @@ High-risk contracts:
   iterators and unsupported RocksDB modes, fall back to a fresh scanner. A
   partially reset scanner must be discarded on unsupported/error results,
   because different CF cursors may already have accepted the new bounds.
+  `SnapshotStore` carries the discarded scanner's statistics into a replacement
+  on fallback, including physical seeks already performed by another CF.
 
 ### Raw KV
 
