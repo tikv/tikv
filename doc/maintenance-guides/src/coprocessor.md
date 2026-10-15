@@ -147,6 +147,15 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - The hot request handlers differ materially:
   DAG requests use `dag/*`, analyze requests use `statistics/analyze_context.rs`
   and `statistics/analyze.rs`, and checksum requests use `checksum.rs`.
+- `dag/storage_impl.rs::TikvStorage::begin_scan` offers the preceding scanner
+  back to the same store for bounded multi-range scans. Each range still has
+  its own physical iterator bounds, including ranges separated by tombstones,
+  locks, or newer MVCC versions. Unsupported engines or changed scan modes use
+  the existing fresh-scanner path.
+- Before switching ranges, `TikvStorage` drains the old scanner statistics and
+  retains any newer-timestamp observation in its request-level backlog. Reuse
+  must preserve that sticky cacheability decision, count each range's work only
+  once, and keep cumulative `scanned_bytes` independent of statistics draining.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
 - The DAG `flags` bitmask is a network-facing contract. Bit 12,
