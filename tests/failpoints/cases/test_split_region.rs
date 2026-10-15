@@ -25,6 +25,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
     Result,
+    coprocessor::{get_region_approximate_keys, get_region_approximate_size},
     store::{
         Callback, PeerMsg, WriteResponse,
         config::Config as RaftstoreConfig,
@@ -1153,35 +1154,36 @@ fn test_disable_split_check() {
         cluster.must_put_cf(CF_WRITE, format!("k{i:04}").as_bytes(), &value);
     }
     cluster.must_flush_cf(CF_WRITE, true);
+    let engine = cluster.get_engine(peer.get_store_id());
+    let read_stats = || {
+        (
+            get_region_approximate_size(&engine, &region, 0).unwrap(),
+            get_region_approximate_keys(&engine, &region, 0).unwrap(),
+        )
+    };
+    // A check racing with a flush can count both the memtable and its SST.
+    // Wait for the stable post-flush values before comparing two write batches.
+    let (old_size, old_keys) = read_stats();
+    assert!(old_size >= 9 * 1024);
+    assert!(old_keys >= 10);
     // Multiple ticks must keep running without scanning or requiring new writes.
     for _ in 0..3 {
         check_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
     test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
-        pd_client
-            .get_region_approximate_size(region_id)
-            .unwrap_or_default()
-            >= 9 * 1024
-            && pd_client
-                .get_region_approximate_keys(region_id)
-                .unwrap_or_default()
-                >= 10
+        pd_client.get_region_approximate_size(region_id) == Some(old_size)
+            && pd_client.get_region_approximate_keys(region_id) == Some(old_keys)
     });
-    let old_size = pd_client.get_region_approximate_size(region_id).unwrap();
-    let old_keys = pd_client.get_region_approximate_keys(region_id).unwrap();
     for i in 10..20 {
         cluster.must_put_cf(CF_WRITE, format!("k{i:04}").as_bytes(), &value);
     }
     cluster.must_flush_cf(CF_WRITE, true);
+    let (size, keys) = read_stats();
+    assert!(size > old_size);
+    assert!(keys > old_keys);
     test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
-        pd_client
-            .get_region_approximate_size(region_id)
-            .unwrap_or_default()
-            > old_size
-            && pd_client
-                .get_region_approximate_keys(region_id)
-                .unwrap_or_default()
-                > old_keys
+        pd_client.get_region_approximate_size(region_id) == Some(size)
+            && pd_client.get_region_approximate_keys(region_id) == Some(keys)
     });
     assert_eq!(scans.load(Ordering::SeqCst), 0);
     assert_eq!(pd_client.get_regions_number(), 1);
