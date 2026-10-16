@@ -649,7 +649,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds_by_group",
         "Bucketed histogram of processing successful asynchronous requests per resource group.",
         &["type", "resource_group"],
-        by_group_buckets()
+        by_group_wait_buckets()
     )
     .unwrap();
 }
@@ -661,12 +661,20 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
 }
 
-/// Buckets for the per-group histograms: 100us to ~13s on the same power-of-two
-/// grid as the fleet-wide parents, so a group's percentile lines up with the
-/// fleet's. The parents' tails into microseconds and hours are dropped, since
-/// every per-group series is paid for once per group per store.
+/// Buckets for the per-group end-to-end histogram: 100us to ~13s on the same
+/// power-of-two grid as the fleet-wide parents, so a group's percentile lines
+/// up with the fleet's. The parents' tails into microseconds and hours are
+/// dropped, since every per-group series is paid for once per group per store.
 pub fn by_group_buckets() -> Vec<f64> {
     exponential_buckets(1e-4, 2.0, 18).unwrap()
+}
+
+/// Buckets for the per-group wait histograms: 100us to ~100ms on the same grid.
+/// A wait is one stage of a request, and past 100ms the request has already
+/// missed its deadline whichever stage ate it; the end-to-end histogram keeps
+/// the tail.
+pub fn by_group_wait_buckets() -> Vec<f64> {
+    exponential_buckets(1e-4, 2.0, 11).unwrap()
 }
 
 struct LocalRequestSourceMetrics {

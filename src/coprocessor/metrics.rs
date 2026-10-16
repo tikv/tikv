@@ -147,7 +147,7 @@ lazy_static! {
         "tikv_coprocessor_request_wait_seconds_by_group",
         "Bucketed histogram of coprocessor request wait duration per resource group",
         &["resource_group", "type"],
-        crate::server::metrics::by_group_buckets()
+        crate::server::metrics::by_group_wait_buckets()
     )
     .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
