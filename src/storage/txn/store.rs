@@ -81,6 +81,41 @@ pub trait Store: Send {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
+
+    /// Retrieve a scanner, reusing the preceding scanner when supported.
+    ///
+    /// `previous` must come from this same store, and the store's snapshot,
+    /// timestamp, isolation level, and lock sets must remain unchanged.
+    /// Callers should drain `previous` before calling this method. On error,
+    /// statistics from the consumed scanner, including attempted reuse, are
+    /// added to `statistics_on_error`. `SnapshotStore` also retains undrained
+    /// statistics on the returned scanner when falling back successfully.
+    fn scanner_with_reuse(
+        &self,
+        previous: Option<Self::Scanner>,
+        desc: bool,
+        key_only: bool,
+        check_has_newer_ts_data: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+        statistics_on_error: &mut Statistics,
+    ) -> Result<Self::Scanner> {
+        let result = self.scanner(
+            desc,
+            key_only,
+            check_has_newer_ts_data,
+            load_commit_ts,
+            lower_bound,
+            upper_bound,
+        );
+        if result.is_err() {
+            if let Some(mut scanner) = previous {
+                statistics_on_error.add(&scanner.take_statistics());
+            }
+        }
+        result
+    }
 }
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
@@ -452,6 +487,75 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .build()?;
 
         Ok(scanner)
+    }
+
+    fn scanner_with_reuse(
+        &self,
+        previous: Option<Self::Scanner>,
+        desc: bool,
+        key_only: bool,
+        check_has_newer_ts_data: bool,
+        load_commit_ts: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+        statistics_on_error: &mut Statistics,
+    ) -> Result<Self::Scanner> {
+        let discarded_statistics = if let Some(mut scanner) = previous {
+            // Physical iterator reuse must not bypass Region range validation.
+            if let Err(error) = self.verify_range(&lower_bound, &upper_bound) {
+                statistics_on_error.add(&scanner.take_statistics());
+                return Err(error);
+            }
+            let reset_result = if check_has_newer_ts_data
+                && scanner.met_newer_ts_data() == NewerTsCheckState::Unknown
+            {
+                Ok(false)
+            } else {
+                scanner.reset_range(
+                    desc,
+                    key_only,
+                    load_commit_ts,
+                    lower_bound.clone(),
+                    upper_bound.clone(),
+                )
+            };
+            match reset_result {
+                Ok(true) => return Ok(scanner),
+                Ok(false) => {}
+                Err(error) => {
+                    statistics_on_error.add(&scanner.take_statistics());
+                    return Err(error.into());
+                }
+            }
+            // A preceding CF cursor may already have performed a physical seek
+            // before another CF rejects reuse. Keep that work, together with
+            // any statistics the caller has not drained yet.
+            Some(scanner.take_statistics())
+        } else {
+            None
+        };
+        let result = self.scanner(
+            desc,
+            key_only,
+            check_has_newer_ts_data,
+            load_commit_ts,
+            lower_bound,
+            upper_bound,
+        );
+        match result {
+            Ok(mut scanner) => {
+                if let Some(statistics) = discarded_statistics {
+                    scanner.add_statistics(&statistics);
+                }
+                Ok(scanner)
+            }
+            Err(error) => {
+                if let Some(statistics) = discarded_statistics {
+                    statistics_on_error.add(&statistics);
+                }
+                Err(error)
+            }
+        }
     }
 }
 

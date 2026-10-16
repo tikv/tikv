@@ -587,6 +587,19 @@ pub struct DummySnapshotExt;
 impl SnapshotExt for DummySnapshotExt {}
 
 pub trait Iterator: Send + MetricsExt {
+    /// Reset the physical bounds and seek within the new half-open range.
+    /// Returns whether the operation is supported. `Ok(false)` must leave the
+    /// iterator unchanged; `Ok(true)` can still leave it invalid for an empty
+    /// range.
+    fn reset_bounds_and_seek(
+        &mut self,
+        _lower_bound: &Key,
+        _upper_bound: &Key,
+        _reverse: bool,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     fn next(&mut self) -> Result<bool>;
     fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;

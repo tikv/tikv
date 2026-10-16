@@ -194,6 +194,11 @@ mod tests {
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
             assert!(!iter.seek_to_first().unwrap());
+            assert!(
+                iter.reset_bounds_and_seek(&cache_region.start, &cache_region.end, false)
+                    .unwrap()
+            );
+            assert!(!iter.valid().unwrap());
         }
         let engine = hybrid_engine.region_cache_engine().clone();
         let observer = RegionCacheWriteBatchObserver::new(engine.clone());
@@ -221,6 +226,11 @@ mod tests {
             let actual_value = iter.value();
             assert_eq!(actual_key, b"zhello");
             assert_eq!(actual_value, b"world");
+            // Cache-backed iterators cannot change their physical bounds. The
+            // scanner must recreate one, and a rejected reset must not move it.
+            assert!(!iter.reset_bounds_and_seek(b"zi", b"zz", false).unwrap());
+            assert_eq!(iter.key(), b"zhello");
+            assert_eq!(iter.value(), b"world");
         }
     }
 }

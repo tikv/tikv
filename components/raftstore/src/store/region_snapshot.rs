@@ -384,6 +384,29 @@ where
         self.iter.seek_to_first().map_err(Error::from)
     }
 
+    /// Reset range bounds while keeping the iterator inside this region.
+    /// `Ok(false)` leaves its position and bounds unchanged.
+    pub fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: &[u8],
+        upper_bound: &[u8],
+        reverse: bool,
+    ) -> Result<bool> {
+        self.should_seekable(lower_bound)?;
+        self.should_seekable(upper_bound)?;
+        let lower_bound = keys::data_key(lower_bound);
+        let upper_bound = keys::data_key(upper_bound);
+        let region_start = keys::enc_start_key(&self.region);
+        let region_end = keys::enc_end_key(&self.region);
+        self.iter
+            .reset_bounds_and_seek(
+                lower_bound.as_slice().max(region_start.as_slice()),
+                upper_bound.as_slice().min(region_end.as_slice()),
+                reverse,
+            )
+            .map_err(Error::from)
+    }
+
     pub fn seek_to_last(&mut self) -> Result<bool> {
         self.iter.seek_to_last().map_err(Error::from)
     }
@@ -583,6 +606,48 @@ mod tests {
 
         let v4 = snap.get_value(b"key5");
         v4.unwrap_err();
+    }
+
+    #[test]
+    fn test_reset_iterator_bounds_preserves_region_and_snapshot() {
+        let path = Builder::new()
+            .prefix("test-region-reset")
+            .tempdir()
+            .unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, _) = load_default_dataset(engines.clone());
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
+        let mut opts = IterOptions::default();
+        opts.set_lower_bound(b"a2", DATA_PREFIX_KEY.len());
+        opts.set_upper_bound(b"a4", DATA_PREFIX_KEY.len());
+        let mut iter = snap.iter(CF_DEFAULT, opts).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), b"a3");
+        assert!(!iter.next().unwrap());
+
+        // Writes after snapshot creation must not become visible on reset.
+        engines.kv.put(&data_key(b"a6"), b"v6").unwrap();
+        assert!(iter.reset_bounds_and_seek(b"a4", b"a7", false).unwrap());
+        assert_eq!(iter.key(), b"a5");
+        assert!(!iter.next().unwrap());
+        assert!(iter.reset_bounds_and_seek(b"a2", b"a7", true).unwrap());
+        assert_eq!(iter.key(), b"a5");
+        assert!(iter.prev().unwrap());
+        assert_eq!(iter.key(), b"a3");
+        assert!(!iter.prev().unwrap());
+
+        assert!(iter.reset_bounds_and_seek(b"a4", b"a5", false).unwrap());
+        assert!(!iter.valid().unwrap());
+        assert!(iter.reset_bounds_and_seek(b"a2", b"a7", false).unwrap());
+        assert_eq!(iter.key(), b"a3");
+        // Reject both endpoints before changing the physical iterator.
+        assert!(iter.reset_bounds_and_seek(b"a1", b"a7", false).is_err());
+        assert_eq!(iter.key(), b"a3");
+        assert!(iter.reset_bounds_and_seek(b"a2", b"a9", false).is_err());
+        assert_eq!(iter.key(), b"a3");
+        assert!(iter.next().unwrap());
+        assert_eq!(iter.key(), b"a5");
+        assert!(!iter.next().unwrap());
     }
 
     #[allow(clippy::type_complexity)]

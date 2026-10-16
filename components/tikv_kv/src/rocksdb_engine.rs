@@ -378,6 +378,21 @@ impl Snapshot for Arc<RocksSnapshot> {
 }
 
 impl EngineIterator for RocksEngineIterator {
+    fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: &Key,
+        upper_bound: &Key,
+        reverse: bool,
+    ) -> Result<bool> {
+        Iterator::reset_bounds_and_seek(
+            self,
+            lower_bound.as_encoded(),
+            upper_bound.as_encoded(),
+            reverse,
+        )
+        .map_err(Error::from)
+    }
+
     fn next(&mut self) -> Result<bool> {
         Iterator::next(self).map_err(Error::from)
     }

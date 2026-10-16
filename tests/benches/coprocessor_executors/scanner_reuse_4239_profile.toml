@@ -1,0 +1,98 @@
+# Local verification profile, merged in the original Cargo configuration order.
+# Includes shipping profile.test defaults, both local configs, and inline CLI overrides.
+# This file does not modify the shipping workspace profiles.
+# Native RocksDB is independently built by CMake in Release mode.
+
+[profile.test]
+codegen-units = 16
+debug = 0
+debug-assertions = true
+incremental = true
+lto = false
+opt-level = 0
+overflow-checks = true
+rpath = false
+
+[profile.test.package.aws-sdk-s3]
+codegen-units = 1
+
+[profile.test.package.engine_rocks]
+codegen-units = 1
+opt-level = 3
+
+[profile.test.package.engine_traits]
+codegen-units = 1
+opt-level = 3
+
+[profile.test.package.hybrid_engine]
+codegen-units = 1
+
+[profile.test.package.kvproto]
+codegen-units = 1
+
+[profile.test.package.raft]
+codegen-units = 1
+
+[profile.test.package.raft-proto]
+codegen-units = 1
+
+[profile.test.package.raftstore]
+codegen-units = 1
+
+[profile.test.package.raftstore-v2]
+codegen-units = 1
+
+[profile.test.package.resource_metering]
+opt-level = 3
+
+[profile.test.package.rhai]
+codegen-units = 1
+
+[profile.test.package.rocksdb]
+opt-level = 3
+
+[profile.test.package.scanner-reuse-verification]
+debug = 0
+opt-level = 3
+
+[profile.test.package.server]
+codegen-units = 1
+
+[profile.test.package.test_raftstore]
+codegen-units = 1
+
+[profile.test.package.test_raftstore-v2]
+codegen-units = 1
+
+[profile.test.package.tests]
+debug = 0
+opt-level = 3
+
+[profile.test.package.tidb_query_common]
+codegen-units = 1
+opt-level = 3
+
+[profile.test.package.tidb_query_executors]
+codegen-units = 1
+
+[profile.test.package.tidb_query_expr]
+codegen-units = 1
+
+[profile.test.package.tikv]
+codegen-units = 16
+opt-level = 3
+
+[profile.test.package.tikv_kv]
+codegen-units = 1
+opt-level = 3
+
+[profile.test.package.tikv_util]
+codegen-units = 1
+opt-level = 3
+
+[profile.test.package.tipb]
+codegen-units = 1
+
+[profile.test.package.txn_types]
+codegen-units = 1
+opt-level = 3

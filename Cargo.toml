@@ -230,9 +230,10 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # [patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 #
-# After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
-# [patch.'https://github.com/tikv/rust-rocksdb']
-# rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
+# Pin the bounded-iterator reset API until it is merged into tikv/rust-rocksdb.
+# Update to the upstream revision and remove this patch after that merge.
+[patch.'https://github.com/tikv/rust-rocksdb']
+rocksdb = { git = "https://github.com/jwc1love/rust-rocksdb", rev = "778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

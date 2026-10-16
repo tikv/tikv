@@ -111,6 +111,23 @@ High-risk contracts:
 - `mvcc/mod.rs` defines MVCC errors and public surface.
 - `mvcc/reader/*` owns reads, scanners, point getters, and conflict detection.
 - `mvcc/txn.rs` owns write-side MVCC mutation handling.
+- `txn/store.rs::Store::scanner_with_reuse` can retain a preceding scanner only
+  from the same unchanged store. Snapshot, read timestamp, isolation level, and
+  bypass/access lock sets must remain identical. Reuse changes physical bounds
+  on every existing write, lock, and lazy default-CF cursor, then seeks within
+  the new half-open range; it does not scan through gaps between ranges.
+- A changed direction, key-only mode, or commit-timestamp mode rebuilds the
+  scanner. Enabling newer-timestamp checking also rebuilds a scanner whose
+  check state is `Unknown`; otherwise a previously observed newer timestamp
+  stays sticky across ranges. Region range validation still runs before reuse.
+- Engine support is optional. Unsupported iterators, including cache-engine
+  iterators and unsupported RocksDB modes, fall back to a fresh scanner. A
+  partially reset scanner must be discarded on unsupported/error results,
+  because different CF cursors may already have accepted the new bounds.
+  `SnapshotStore` carries the discarded scanner's statistics into a replacement
+  on fallback, including physical seeks already performed by another CF.
+  On range-validation, reset, or fallback-construction errors, consumed scanner
+  statistics go to the caller's error sink before the original error propagates.
 
 ### Raw KV
 
@@ -145,6 +162,9 @@ High-risk contracts:
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
+- Reused MVCC scanners must retain their snapshot and visibility configuration,
+  reset EOF/missing-range cursor caches, and keep physical bounds aligned across
+  CFs. An empty range is valid, but unbounded reuse may require a fresh scanner.
 - `CheckTxnStatus` must check whether a shared lock belongs to the queried
   transaction before rejecting it as an invalid primary. Unrelated shared
   holders must not hide that transaction's commit or rollback record.

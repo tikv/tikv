@@ -4495,7 +4495,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#797c014576c9f01a854bd681711c617c5920c9c6"
+source = "git+https://github.com/jwc1love/rust-rocksdb?rev=778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f#778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4514,7 +4514,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#797c014576c9f01a854bd681711c617c5920c9c6"
+source = "git+https://github.com/jwc1love/rust-rocksdb?rev=778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f#778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6711,7 +6711,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#797c014576c9f01a854bd681711c617c5920c9c6"
+source = "git+https://github.com/jwc1love/rust-rocksdb?rev=778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f#778cab5e4bcbfa3ebdc88fa7b38c8d97c0d0b43f"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
@@ -8162,6 +8162,7 @@ dependencies = [
  "grpcio",
  "grpcio-health",
  "health_controller",
+ "hybrid_engine",
  "hyper 0.14.28",
  "in_memory_engine",
  "keys",
