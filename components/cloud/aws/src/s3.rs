@@ -60,12 +60,12 @@ impl std::fmt::Debug for AccessKeyPair {
         f.debug_struct("AccessKeyPair")
             .field("access_key", &self.access_key)
             .field("secret_access_key", &"?")
-            .field("session_token", &self.session_token)
+            .field("session_token", &"?")
             .finish()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     bucket: BucketConf,
     sse: Option<StringNonEmpty>,
@@ -79,6 +79,25 @@ pub struct Config {
     object_lock_enabled: bool,
     role_arn: Option<StringNonEmpty>,
     external_id: Option<StringNonEmpty>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bucket", &self.bucket)
+            .field("sse", &self.sse)
+            .field("acl", &self.acl)
+            .field("access_key_pair", &self.access_key_pair)
+            .field("force_path_style", &self.force_path_style)
+            .field("sse_kms_key_id", &self.sse_kms_key_id)
+            .field("sse_kms_encryption_context", &"?")
+            .field("storage_class", &self.storage_class)
+            .field("multi_part_size", &self.multi_part_size)
+            .field("object_lock_enabled", &self.object_lock_enabled)
+            .field("role_arn", &self.role_arn)
+            .field("external_id", &self.external_id)
+            .finish()
+    }
 }
 
 impl Config {
@@ -925,6 +944,22 @@ mod tests {
 
     const SSE_KMS_CONTEXT: &str = "eyJ0ZW5hbnQiOiJ0ZW5hbnQtYSJ9";
     const SSE_KMS_CONTEXT_HEADER: &str = "x-amz-server-side-encryption-context";
+
+    #[test]
+    fn test_s3_config_debug_redacts_sensitive_values() {
+        let mut input = InputConfig::default();
+        input.bucket = "mybucket".into();
+        input.access_key = "access-key".into();
+        input.secret_access_key = "secret-key".into();
+        input.session_token = "session-token".into();
+        input.sse_kms_encryption_context = SSE_KMS_CONTEXT.into();
+        let config = Config::from_input(input).unwrap();
+        let output = format!("{config:?}");
+        assert!(output.contains("mybucket"));
+        for value in ["secret-key", "session-token", SSE_KMS_CONTEXT] {
+            assert!(!output.contains(value));
+        }
+    }
 
     #[test]
     fn test_s3_encryption_context_config() {
