@@ -912,11 +912,6 @@ mod tests {
 
     use super::*;
 
-    // Serialize multipart-related tests because they assert deltas on the global
-    // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
-    static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    static AWS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     const AWS_USE_FIPS_ENDPOINT: &str = "AWS_USE_FIPS_ENDPOINT";
 
     struct ScopedEnvVar {
@@ -994,7 +989,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_encryption_context_put_and_get() {
-        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         for context in ["", SSE_KMS_CONTEXT] {
             let mut input = InputConfig::default();
             input.bucket = "mybucket".into();
@@ -1087,6 +1082,7 @@ mod tests {
 
     #[test]
     fn test_s3_config() {
+        let _guard = crate::AWS_TEST_LOCK.blocking_lock();
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
@@ -1118,7 +1114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
-        let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         for context in ["", SSE_KMS_CONTEXT] {
             check_s3_storage_multi_part(context).await;
         }
@@ -1273,7 +1269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part_abort() {
-        let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1414,6 +1410,7 @@ mod tests {
     #[cfg(feature = "failpoints")]
     #[tokio::test]
     async fn test_s3_storage() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -1529,7 +1526,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_base_sdk_config_keeps_endpoint_out_of_shared_config() {
-        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1551,7 +1548,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_custom_endpoint_with_fips_mode() {
-        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
 
         let magic_contents = "5678";
@@ -1593,6 +1590,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_with_virtual_host() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "abcd";
         let bucket_name = StringNonEmpty::required("bucket2".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -1637,6 +1635,7 @@ mod tests {
     /// protection is enabled.
     #[tokio::test]
     async fn test_s3_storage_without_stalled_stream_protection() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
@@ -1689,6 +1688,7 @@ mod tests {
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
     async fn test_real_s3_storage() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         use tikv_util::time::Limiter;
 
         let bucket = BucketConf {
