@@ -324,7 +324,7 @@ macro_rules! handle_request {
                 GRPC_MSG_DURATION_BY_GROUP
                     .with_label_values(&[&resource_group])
                     .observe(elapsed.as_secs_f64());
-                record_request_source_metrics(source, resource_group, elapsed);
+                record_request_source_metrics(source, elapsed);
                 ServerResult::Ok(())
             }
             .map_err(|e| {
@@ -551,10 +551,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
-        let resource_group = bounded_group_name(
-            &self.resource_manager,
-            req.get_context().get_resource_control_context(),
-        );
         let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
@@ -564,7 +560,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .kv_prepare_flashback_to_version
                 .unknown
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, resource_group, elapsed);
+            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -588,10 +584,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
-        let resource_group = bounded_group_name(
-            &self.resource_manager,
-            req.get_context().get_resource_control_context(),
-        );
         let resp = future_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
@@ -601,7 +593,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .kv_flashback_to_version
                 .unknown
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, resource_group, elapsed);
+            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -635,10 +627,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
-        let resource_group = bounded_group_name(
-            &self.resource_manager,
-            req.get_context().get_resource_control_context(),
-        );
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -649,7 +637,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .coprocessor
                 .get(resource_group_priority)
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, resource_group, elapsed);
+            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -686,10 +674,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
-        let resource_group = bounded_group_name(
-            &self.resource_manager,
-            req.get_context().get_resource_control_context(),
-        );
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -700,7 +684,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .raw_coprocessor
                 .get(resource_group_priority)
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, resource_group, elapsed);
+            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -728,10 +712,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         assert!(!req.get_end_key().is_empty());
 
         let source = req.get_context().get_request_source().to_owned();
-        let resource_group = bounded_group_name(
-            &self.resource_manager,
-            req.get_context().get_resource_control_context(),
-        );
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
@@ -756,7 +736,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .unsafe_destroy_range
                 .unknown
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, resource_group, elapsed);
+            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1622,7 +1602,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             .with_label_values(&[&resource_group])
             .observe(elapsed.as_secs_f64());
         GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM.observe(wait.as_secs_f64());
-        record_request_source_metrics(source, resource_group, elapsed);
+        record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {
             Get(resp) => Some(resp.mut_exec_details_v2()),
             Prewrite(resp) => Some(resp.mut_exec_details_v2()),

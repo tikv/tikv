@@ -350,9 +350,6 @@ impl<E: Engine> Tracker<E> {
         COPR_REQ_HISTOGRAM_STATIC
             .get(self.req_tag)
             .observe(time::duration_to_sec(self.req_lifetime));
-        COPR_REQ_DURATION_BY_GROUP
-            .with_label_values(&[&self.resource_group])
-            .observe(time::duration_to_sec(self.req_lifetime));
 
         // total wait time
         COPR_REQ_WAIT_TIME_STATIC

@@ -278,7 +278,7 @@ lazy_static! {
         "tikv_grpc_msg_duration_seconds_by_group",
         "Bucketed histogram of grpc server message duration per resource group",
         &["resource_group"],
-        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+        by_group_buckets()
     )
     .unwrap();
     pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
@@ -317,13 +317,13 @@ lazy_static! {
     pub static ref GRPC_REQUEST_SOURCE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
             "tikv_grpc_request_source_counter_vec",
             "Counter of different sources of RPC requests",
-            &["source", "resource_group"]
+            &["source"]
         )
         .unwrap();
     pub static ref GRPC_REQUEST_SOURCE_DURATION_VEC: IntCounterVec = register_int_counter_vec!(
             "tikv_grpc_request_source_duration_vec",
             "Total duration of different sources of RPC requests (in microseconds)",
-            &["source", "resource_group"]
+            &["source"]
         )
         .unwrap();
 }
@@ -649,7 +649,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds_by_group",
         "Bucketed histogram of processing successful asynchronous requests per resource group.",
         &["type", "resource_group"],
-        exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
+        by_group_buckets()
     )
     .unwrap();
 }
@@ -661,31 +661,39 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
 }
 
+/// Buckets for the per-group histograms: 100us to ~13s on the same power-of-two
+/// grid as the fleet-wide parents, so a group's percentile lines up with the
+/// fleet's. The parents' tails into microseconds and hours are dropped, since
+/// every per-group series is paid for once per group per store.
+pub fn by_group_buckets() -> Vec<f64> {
+    exponential_buckets(1e-4, 2.0, 18).unwrap()
+}
+
 struct LocalRequestSourceMetrics {
     pub count: LocalIntCounter,
     pub duration_us: LocalIntCounter,
 }
 
 impl LocalRequestSourceMetrics {
-    fn new(source: &str, resource_group: &str) -> Self {
+    fn new(source: &str) -> Self {
         LocalRequestSourceMetrics {
             count: GRPC_REQUEST_SOURCE_COUNTER_VEC
-                .with_label_values(&[source, resource_group])
+                .with_label_values(&[source])
                 .local(),
             duration_us: GRPC_REQUEST_SOURCE_DURATION_VEC
-                .with_label_values(&[source, resource_group])
+                .with_label_values(&[source])
                 .local(),
         }
     }
 }
 
 thread_local! {
-    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<(String, String), LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
+    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<String, LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
 
     static LAST_LOCAL_FLUSH_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
 }
 
-pub fn record_request_source_metrics(source: String, resource_group: String, duration: Duration) {
+pub fn record_request_source_metrics(source: String, duration: Duration) {
     let need_flush = LAST_LOCAL_FLUSH_TIME.with(|last_local_flush_time| {
         let now = Instant::now_coarse();
         if now - last_local_flush_time.get() > Duration::from_secs(1) {
@@ -698,18 +706,13 @@ pub fn record_request_source_metrics(source: String, resource_group: String, dur
     REQUEST_SOURCE_METRICS_MAP.with(|map| {
         let mut map = map.borrow_mut();
         let metrics = map
-            .entry((source, resource_group))
-            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(&k.0, &k.1));
+            .entry(source)
+            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(k));
         metrics.count.inc();
         metrics.duration_us.inc_by(duration.as_micros() as u64);
-        // The clock is shared by every entry, so flush them all: a group whose
-        // requests rarely coincide with the expiry would otherwise accumulate
-        // until it did and then appear as a spike.
         if need_flush {
-            for metrics in map.values() {
-                metrics.count.flush();
-                metrics.duration_us.flush();
-            }
+            metrics.count.flush();
+            metrics.duration_us.flush();
         }
     });
 }
