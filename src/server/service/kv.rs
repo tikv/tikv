@@ -40,7 +40,7 @@ use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
-    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, group_label},
     sys::memory_usage_reaches_high_water,
     time::{Instant, nanos_to_secs},
     worker::Scheduler,
@@ -275,21 +275,6 @@ macro_rules! reject_if_cluster_id_mismatch {
     };
 }
 
-/// The group name reaches us from the client, so bound it to a configured group
-/// before it becomes a metric label -- otherwise any caller could mint a
-/// permanently retained series. See `ResourceGroupManager::bounded_group_name`.
-fn bounded_group_name(
-    resource_manager: &Option<Arc<ResourceGroupManager>>,
-    ctx: &ResourceControlContext,
-) -> String {
-    match resource_manager.as_deref() {
-        Some(rm) => rm
-            .bounded_group_name(ctx.get_resource_group_name())
-            .into_owned(),
-        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-    }
-}
-
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
@@ -310,7 +295,7 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-            let resource_group = bounded_group_name(&self.resource_manager, resource_control_ctx);
+            let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -1426,7 +1411,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                         .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
-                    let resource_group = bounded_group_name(resource_manager, resource_control_ctx);
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1452,7 +1437,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-                    let resource_group = bounded_group_name(resource_manager, resource_control_ctx);
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1478,7 +1463,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-                    let resource_group = bounded_group_name(resource_manager, resource_control_ctx);
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1527,7 +1512,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                         .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
-                    let resource_group = bounded_group_name(resource_manager, resource_control_ctx);
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)

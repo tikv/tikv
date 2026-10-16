@@ -439,11 +439,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
 
         let sim_router = SimulateTransport::new(raft_router.clone());
         let mut raft_kv_v2 = TestRaftKv2::new(
-            RaftKv2::new(
-                raft_router.clone(),
-                region_info_accessor.region_leaders(),
-                resource_manager.clone(),
-            ),
+            RaftKv2::new(raft_router.clone(), region_info_accessor.region_leaders()),
             sim_router.filters().clone(),
         );
 

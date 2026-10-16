@@ -32,9 +32,8 @@ use raftstore_v2::{
         CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter, message::SimpleWrite,
     },
 };
-use resource_control::ResourceGroupManager;
 use tikv_kv::{Modify, WriteEvent};
-use tikv_util::{resource_control::DEFAULT_RESOURCE_GROUP_NAME, time::Instant};
+use tikv_util::{resource_control::group_label, time::Instant};
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -120,7 +119,6 @@ pub struct RaftKv2<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
@@ -128,24 +126,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     pub fn new(
         router: RaftRouter<EK, ER>,
         region_leaders: Arc<RwLock<HashSet<u64>>>,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> RaftKv2<EK, ER> {
         RaftKv2 {
             router,
             region_leaders,
             txn_extra_scheduler: None,
-            resource_manager,
-        }
-    }
-
-    /// The group name reaches us from the client, so bound it to a configured
-    /// group before it becomes a metric label. See
-    /// `ResourceGroupManager::bounded_group_name`.
-    fn bounded_resource_group(&self, ctx: &kvproto::kvrpcpb::Context) -> String {
-        let name = ctx.get_resource_control_context().get_resource_group_name();
-        match self.resource_manager.as_deref() {
-            Some(rm) => rm.bounded_group_name(name).into_owned(),
-            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
         }
     }
 
@@ -219,7 +204,12 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
-        let resource_group = self.bounded_resource_group(ctx.pb_ctx);
+        let resource_group = group_label(
+            ctx.pb_ctx
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
         let res: tikv_kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
@@ -337,7 +327,8 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let resource_group = self.bounded_resource_group(ctx);
+        let resource_group =
+            group_label(ctx.get_resource_control_context().get_resource_group_name()).to_owned();
 
         let inject_region_not_found = (|| {
             // If rid is some, only the specified region reports error.

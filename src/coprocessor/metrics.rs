@@ -139,9 +139,7 @@ lazy_static! {
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
         auto_flush_from!(COPR_REQ_WAIT_TIME, ReqWaitHistogram);
     // Per-group companion to `COPR_REQ_WAIT_TIME`, which is a static metric and
-    // so cannot carry a client-supplied group name; the name is bounded to a
-    // configured group first, see `ResourceGroupManager::bounded_group_name`.
-    // The `req` breakdown is dropped to keep the cross product small; `type` is
+    // so cannot carry a client-supplied group name. The `req` breakdown is dropped to keep the cross product small; `type` is
     // kept because separating schedule from snapshot wait is the whole point.
     // There is no per-group handle-time companion: end-to-end latency per group
     // is already in `tikv_grpc_msg_duration_seconds_by_group`.

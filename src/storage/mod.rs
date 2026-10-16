@@ -106,7 +106,7 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
-    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
+    resource_control::group_label,
     time::{Instant, InstantExt, ThreadReadId, duration_to_ms, duration_to_sec},
 };
 use tracker::{
@@ -854,19 +854,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
-        // The whole batch shares a group; bound it to a configured group here so
-        // the consumer can use it directly as a metric label.
-        let resource_group = match self.resource_manager.as_deref() {
-            Some(rm) => rm
-                .bounded_group_name(
-                    requests[0]
-                        .get_context()
-                        .get_resource_control_context()
-                        .get_resource_group_name(),
-                )
-                .into_owned(),
-            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-        };
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -2203,19 +2192,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
-        // The whole batch shares a group; bound it to a configured group here so
-        // the consumer can use it directly as a metric label.
-        let resource_group = match self.resource_manager.as_deref() {
-            Some(rm) => rm
-                .bounded_group_name(
-                    gets[0]
-                        .get_context()
-                        .get_resource_control_context()
-                        .get_resource_group_name(),
-                )
-                .into_owned(),
-            None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-        };
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,

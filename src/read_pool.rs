@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow,
     convert::TryFrom,
     future::Future,
     sync::{
@@ -29,7 +28,7 @@ use thiserror::Error;
 use tikv_util::{
     deadline::Deadline,
     future::async_timeout,
-    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, priority_from_task_meta},
+    resource_control::{TaskMetadata, group_label, priority_from_task_meta},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
@@ -187,14 +186,9 @@ async fn admission_and_enqueue(
             }
             None => {
                 let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-                // Bound the client-supplied name before it becomes a label.
                 let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
-                let label = match resource_manager.as_deref() {
-                    Some(rm) => rm.bounded_group_name(name),
-                    None => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
-                };
                 UNIFIED_READ_POOL_FULL_REJECTED
-                    .with_label_values(&[label.as_ref()])
+                    .with_label_values(&[group_label(name)])
                     .inc();
                 return Err(ReadPoolError::UnifiedReadPoolFull);
             }
@@ -475,16 +469,6 @@ impl ReadPoolHandle {
     }
 
     /// Bound a wire-supplied group name for use as a metric label.
-    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> Cow<'a, str> {
-        match self {
-            ReadPoolHandle::Yatp {
-                resource_manager: Some(rm),
-                ..
-            } => rm.bounded_group_name(resource_group),
-            _ => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
-        }
-    }
-
     /// Whether resource control reports the groups causing an overload.
     fn overload_is_attributed(&self) -> bool {
         match self {
@@ -522,7 +506,7 @@ impl ReadPoolHandle {
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
         let group = std::str::from_utf8(resource_group).unwrap_or_default();
         UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
-            .with_label_values(&[self.bounded_group_label(group).as_ref()])
+            .with_label_values(&[group_label(group)])
             .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,
@@ -1237,6 +1221,7 @@ mod tests {
     use kvproto::kvrpcpb::ResourceControlContext;
     use raftstore::store::{ReadStats, WriteStats};
     use resource_control::{ResourceGroupManager, config::Config as ResourceControlConfig};
+    use tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
 
     use super::*;
     use crate::storage::TestEngineBuilder;
@@ -2488,21 +2473,13 @@ mod tests {
             "rejection must be attributed to its own group"
         );
 
-        // An unconfigured name must not become a label of its own.
+        // No name means the default group, not an empty label.
         let default_before = counter(DEFAULT_RESOURCE_GROUP_NAME);
         handle
-            .check_busy_threshold(Duration::from_millis(100), b"../../etc/passwd\n{injected}")
+            .check_busy_threshold(Duration::from_millis(100), b"")
             .expect_err("the estimate is over the threshold");
-        assert_eq!(
-            counter("../../etc/passwd\n{injected}"),
-            0,
-            "an unconfigured group name must never reach the label"
-        );
-        assert_eq!(
-            counter(DEFAULT_RESOURCE_GROUP_NAME),
-            default_before + 1,
-            "it is counted against the default group instead"
-        );
+        assert_eq!(counter(""), 0, "an unset group must not become a label");
+        assert_eq!(counter(DEFAULT_RESOURCE_GROUP_NAME), default_before + 1);
 
         running_tasks[0].sub(500);
     }

@@ -52,13 +52,12 @@ use raftstore::{
         RegionSnapshot, StoreMsg, WriteResponse, util::encode_start_ts_into_flag_data,
     },
 };
-use resource_control::ResourceGroupManager;
 use thiserror::Error;
 use tikv_kv::{ExtraRegionOverride, OnAppliedCb, WriteEvent, write_modifies};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
-    resource_control::DEFAULT_RESOURCE_GROUP_NAME,
+    resource_control::group_label,
     time::Instant,
 };
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
@@ -382,7 +381,6 @@ where
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_info_accessor: Option<RegionInfoAccessor>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -396,7 +394,6 @@ where
         engine: E,
         region_info_accessor: Option<RegionInfoAccessor>,
         region_leaders: Arc<RwLock<HashSet<u64>>>,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
@@ -404,26 +401,11 @@ where
             txn_extra_scheduler: None,
             region_info_accessor,
             region_leaders,
-            resource_manager,
         }
     }
 
     pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
-    }
-}
-
-/// The group name reaches us from the client, so bound it to a configured group
-/// before it becomes a metric label. See
-/// `ResourceGroupManager::bounded_group_name`.
-fn bounded_resource_group(
-    resource_manager: &Option<Arc<ResourceGroupManager>>,
-    ctx: &Context,
-) -> String {
-    let name = ctx.get_resource_control_context().get_resource_group_name();
-    match resource_manager.as_deref() {
-        Some(rm) => rm.bounded_group_name(name).into_owned(),
-        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
     }
 }
 
@@ -535,7 +517,8 @@ where
         })();
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let resource_group = bounded_resource_group(&self.resource_manager, ctx);
+        let resource_group =
+            group_label(ctx.get_resource_control_context().get_resource_group_name()).to_owned();
         let begin_instant = Instant::now_coarse();
 
         if res.is_ok() {
@@ -674,7 +657,12 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        let resource_group = bounded_resource_group(&self.resource_manager, ctx.pb_ctx);
+        let resource_group = group_label(
+            ctx.pb_ctx
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
         async_snapshot(&mut self.router, ctx, resource_group)
     }
 
@@ -685,7 +673,12 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let resource_group = bounded_resource_group(&self.resource_manager, ctx.pb_ctx);
+        let resource_group = group_label(
+            ctx.pb_ctx
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
         async_snapshot(&mut self.router, ctx, resource_group).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.

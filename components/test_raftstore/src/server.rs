@@ -385,7 +385,6 @@ impl ServerCluster {
             engines.kv.clone(),
             Some(region_info_accessor.clone()),
             region_info_accessor.region_leaders(),
-            resource_manager.clone(),
         );
 
         // Create storage.
