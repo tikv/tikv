@@ -1120,6 +1120,27 @@ mod tests {
         }
     }
 
+    fn assert_multipart_encryption_headers(client: &StaticReplayClient, context: &str) {
+        for (index, request) in client.actual_requests().enumerate() {
+            // Only initiation carries encryption headers, never parts, completion, or
+            // abort.
+            assert_eq!(
+                request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                (index == 0 && !context.is_empty()).then_some(context),
+            );
+            assert_eq!(
+                request.headers().get("x-amz-server-side-encryption"),
+                (index == 0).then_some("aws:kms"),
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                (index == 0).then_some("key-id"),
+            );
+        }
+    }
+
     async fn check_s3_storage_multi_part(context: &str) {
         let magic_contents = "567890";
 
@@ -1232,29 +1253,7 @@ mod tests {
         .unwrap();
 
         client.assert_requests_match(&[]);
-        for (index, request) in client.actual_requests().enumerate() {
-            // Only initiation carries context, never parts, completion, or abort.
-            assert_eq!(
-                request.headers().get(SSE_KMS_CONTEXT_HEADER),
-                if index == 0 && !context.is_empty() {
-                    Some(context)
-                } else {
-                    None
-                },
-            );
-            if index == 0 {
-                assert_eq!(
-                    request.headers().get("x-amz-server-side-encryption"),
-                    Some("aws:kms")
-                );
-                assert_eq!(
-                    request
-                        .headers()
-                        .get("x-amz-server-side-encryption-aws-kms-key-id"),
-                    Some("key-id")
-                );
-            }
-        }
+        assert_multipart_encryption_headers(&client, context);
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
@@ -1372,29 +1371,7 @@ mod tests {
         assert_str_contains!(err.to_string(), "Not Found");
 
         client.assert_requests_match(&[]);
-        for (index, request) in client.actual_requests().enumerate() {
-            // Only initiation carries context, never parts, completion, or abort.
-            assert_eq!(
-                request.headers().get(SSE_KMS_CONTEXT_HEADER),
-                if index == 0 {
-                    Some(SSE_KMS_CONTEXT)
-                } else {
-                    None
-                },
-            );
-            if index == 0 {
-                assert_eq!(
-                    request.headers().get("x-amz-server-side-encryption"),
-                    Some("aws:kms")
-                );
-                assert_eq!(
-                    request
-                        .headers()
-                        .get("x-amz-server-side-encryption-aws-kms-key-id"),
-                    Some("key-id")
-                );
-            }
-        }
+        assert_multipart_encryption_headers(&client, SSE_KMS_CONTEXT);
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
