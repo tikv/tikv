@@ -762,6 +762,9 @@ impl BackgroundRunnerCore {
             );
             assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
+        // Drop the original sender so that `recv` returns `None` once every callback
+        // has either run or been discarded (e.g. the region was already evicted).
+        drop(tx);
         for _ in 0..evict_count {
             if rx.recv().await.is_none() {
                 break;
