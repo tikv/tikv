@@ -162,6 +162,8 @@ use crate::{
     utils,
 };
 
+/// Builds and runs a TiKV server, then blocks until a service event asks it
+/// to exit and stops it.
 #[inline]
 fn run_impl<CER, F>(
     config: TikvConfig,
@@ -1674,6 +1676,9 @@ where
         }
     }
 
+    /// Runs before any component is stopped. Disables manual compactions on
+    /// the KV engine so that in-flight ones are cancelled and the workers
+    /// running them can be joined promptly.
     fn prepare_stop(&self) {
         if let Some(engines) = self.engines.as_ref() {
             // Disable manual compaction jobs before shutting down the engines. And it
