@@ -1366,7 +1366,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
         // No resource group in the metadata, so the rejection is "default".
@@ -1438,7 +1438,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
 
@@ -1450,7 +1450,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None)) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
     }
@@ -1498,7 +1498,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
 
@@ -1523,7 +1523,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match block_on(handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None)) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
     }
@@ -2367,7 +2367,7 @@ mod tests {
             TaskMetadata::from_ctx(&low_ctx),
             None,
         )) {
-            Err(ReadPoolError::UnifiedReadPoolFull { .. }) => {}
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
             other => panic!(
                 "expected UnifiedReadPoolFull for low-priority task, got {:?}",
                 other.err()
