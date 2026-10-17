@@ -198,7 +198,9 @@ fn run_impl<CER, F>(
 
     // Build a background worker for handling signals.
     {
-        let engines = tikv.engines.take().unwrap().engines;
+        // Clone rather than take the engines: `prepare_stop` still needs them
+        // to disable manual compactions before the workers are stopped.
+        let engines = tikv.engines.as_ref().unwrap().engines.clone();
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
         std::thread::spawn(move || {
@@ -1674,10 +1676,13 @@ where
 
     fn prepare_stop(&self) {
         if let Some(engines) = self.engines.as_ref() {
-            // Disable manul compaction jobs before shutting down the engines. And it
+            // Disable manual compaction jobs before shutting down the engines. And it
             // will stop the compaction thread in advance, so it won't block the
             // cleanup thread when exiting.
-            let _ = engines.engines.kv.disable_manual_compaction();
+            match engines.engines.kv.disable_manual_compaction() {
+                Ok(()) => info!("manual compaction disabled before shutdown"),
+                Err(e) => warn!("failed to disable manual compaction"; "err" => ?e),
+            }
         }
     }
 
