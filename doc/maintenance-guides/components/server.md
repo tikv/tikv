@@ -101,6 +101,10 @@ High-risk config contracts:
 - Startup ordering matters. Many subsystems assume other pieces already exist.
 - Shutdown ordering matters. Workers and services must stop after their
   dependents drain.
+- `TikvServer::engines` must stay populated until `stop()`. `prepare_stop`
+  uses it to disable manual compactions before workers are joined; without
+  that, shutdown waits for any in-flight manual compaction. Threads that need
+  the engines, such as the signal handler, get a clone.
 - Config validation must remain backward-compatible with persisted data layout
   and engine selection.
 - The effective advertised store address, and the status address when enabled,
