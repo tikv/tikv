@@ -57,6 +57,7 @@ use tikv_kv::{ExtraRegionOverride, OnAppliedCb, WriteEvent, write_modifies};
 use tikv_util::{
     callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
+    resource_control::group_label,
     time::Instant,
 };
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
@@ -516,6 +517,8 @@ where
         })();
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let resource_group =
+            group_label(ctx.get_resource_control_context().get_resource_group_name()).to_owned();
         let begin_instant = Instant::now_coarse();
 
         if res.is_ok() {
@@ -609,6 +612,9 @@ where
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .write
                                 .observe(begin_instant.saturating_elapsed_secs());
+                            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                                .with_label_values(&["write", &resource_group])
+                                .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
                         }
@@ -651,7 +657,13 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        async_snapshot(&mut self.router, ctx)
+        let resource_group = group_label(
+            ctx.pb_ctx
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        async_snapshot(&mut self.router, ctx, resource_group)
     }
 
     fn release_snapshot(&mut self) {
@@ -661,7 +673,13 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
+        let resource_group = group_label(
+            ctx.pb_ctx
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        async_snapshot(&mut self.router, ctx, resource_group).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
@@ -737,6 +755,7 @@ where
 fn async_snapshot<E, S>(
     router: &mut RaftRouterWrap<S, E>,
     mut ctx: SnapContext<'_>,
+    resource_group: String,
 ) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
 where
     E: KvEngine,
@@ -791,10 +810,21 @@ where
                         .observe(
                             tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
                         );
+                    ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                        .with_label_values(&["snapshot_read_index_propose_wait", &resource_group])
+                        .observe(
+                            tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
+                        );
                     // snapshot may be handled by lease read in raftstore
                     if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                         ASYNC_REQUESTS_DURATIONS_VEC
                             .snapshot_read_index_confirm
+                            .observe(
+                                tracker.metrics.read_index_confirm_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                        ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                            .with_label_values(&["snapshot_read_index_confirm", &resource_group])
                             .observe(
                                 tracker.metrics.read_index_confirm_wait_nanos as f64
                                     / 1_000_000_000.0,
@@ -804,9 +834,15 @@ where
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot_local_read
                         .observe(elapse);
+                    ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                        .with_label_values(&["snapshot_local_read", &resource_group])
+                        .observe(elapse);
                 }
             });
             ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+            ASYNC_REQUESTS_DURATIONS_BY_GROUP
+                .with_label_values(&["snapshot", &resource_group])
+                .observe(elapse);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
         }
         cb(res);

@@ -269,6 +269,18 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    // `GRPC_MSG_HISTOGRAM_VEC` cannot carry the group: it is a static metric, so
+    // every label value has to be a compile-time enum variant, and a group name
+    // arrives as an arbitrary string from the client. Hence a second histogram,
+    // without the 72-variant `type` breakdown -- crossing the two would cost
+    // ~1.1M series across the fleet for no diagnostic gain.
+    pub static ref GRPC_MSG_DURATION_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_grpc_msg_duration_seconds_by_group",
+        "Bucketed histogram of grpc server message duration per resource group",
+        &["resource_group"],
+        by_group_buckets()
+    )
+    .unwrap();
     pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_grpc_batch_commands_wait_duration_seconds",
         "Bucketed histogram of grpc server batch commands waiting duration",
@@ -628,6 +640,18 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
+    // Per-group companion to `ASYNC_REQUESTS_DURATIONS`, which is a static
+    // metric and so cannot carry a client-supplied group name. `type` is kept
+    // here -- unlike the gRPC companion -- because `RequestTypeKind` has only a
+    // handful of variants and splitting read-index propose wait from confirm
+    // wait is the reason to look at this metric at all.
+    pub static ref ASYNC_REQUESTS_DURATIONS_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_storage_engine_async_request_duration_seconds_by_group",
+        "Bucketed histogram of processing successful asynchronous requests per resource group.",
+        &["type", "resource_group"],
+        by_group_wait_buckets()
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -635,6 +659,22 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_COUNTER, AsyncRequestsCounterVec);
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec =
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
+}
+
+/// Buckets for the per-group end-to-end histogram: 100us to ~13s on the same
+/// power-of-two grid as the fleet-wide parents, so a group's percentile lines
+/// up with the fleet's. The parents' tails into microseconds and hours are
+/// dropped, since every per-group series is paid for once per group per store.
+pub fn by_group_buckets() -> Vec<f64> {
+    exponential_buckets(1e-4, 2.0, 18).unwrap()
+}
+
+/// Buckets for the per-group wait histograms: 100us to ~100ms on the same grid.
+/// A wait is one stage of a request, and past 100ms the request has already
+/// missed its deadline whichever stage ate it; the end-to-end histogram keeps
+/// the tail.
+pub fn by_group_wait_buckets() -> Vec<f64> {
+    exponential_buckets(1e-4, 2.0, 11).unwrap()
 }
 
 struct LocalRequestSourceMetrics {

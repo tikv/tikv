@@ -9,6 +9,18 @@ use strum::{EnumCount, EnumIter};
 /// default resource group name
 pub const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
 
+/// The client's group name as a metric label, `default` when unset. TiDB only
+/// lets a session select a group that exists, so the name is trusted here the
+/// way `tikv_grpc_resource_group_total` has always trusted it, rather than
+/// re-checked against the configured groups on every request.
+pub fn group_label(name: &str) -> &str {
+    if name.is_empty() {
+        DEFAULT_RESOURCE_GROUP_NAME
+    } else {
+        name
+    }
+}
+
 const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
 const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
 
