@@ -4671,6 +4671,57 @@ mod tests {
         assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
     }
 
+    /// A write whose admission wait would outlast its deadline is not
+    /// scheduled: it waits out the deadline, then fails as timed out and
+    /// takes no latch.
+    #[test]
+    fn test_write_admission_delay_past_deadline_is_not_scheduled() {
+        let rm = Arc::new(resource_control::ResourceGroupManager::new(
+            resource_control::config::Config {
+                enable_write_admission_control: true,
+                ..Default::default()
+            },
+        ));
+        rm.refresh_cached_config();
+        let ctl = rm.derive_controller("test".into(), false);
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build_for_resource_controller(rm.clone(), ctl)
+            .unwrap();
+        // Deep in debt: the group's next write would wait for seconds.
+        let limiter = rm.get_resource_limiter("default", "", 0).unwrap();
+        limiter.set_cpu_rate_limit_for_test(1000.0);
+        limiter.consume(
+            Duration::from_secs(10),
+            file_system::IoBytes::default(),
+            true,
+            false,
+        );
+        assert!(limiter.admission_delay(false) > Duration::from_secs(1));
+
+        let mut ctx = Context::default();
+        ctx.max_execution_duration_ms = 50;
+        let started = std::time::Instant::now();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_context(
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"v".to_vec())],
+                    b"x".to_vec(),
+                    10.into(),
+                    ctx,
+                ),
+                expect_fail_callback(tx, 0, |e| match e {
+                    Error(box ErrorInner::DeadlineExceeded) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Not failed early: the error arrives at the deadline, not before.
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        must_unlocked(&mut storage.engine, b"x");
+    }
+
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
