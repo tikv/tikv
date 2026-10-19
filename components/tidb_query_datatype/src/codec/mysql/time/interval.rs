@@ -187,14 +187,15 @@ impl Interval {
     ///
     /// The `for_duration` flag controls overflow behavior:
     ///
-    /// * When `for_duration` is `true`, integer or multiplication overflow returns
-    ///   [`Error::incorrect_datetime_value`].
-    /// * When `for_duration` is `false` (expression mode, e.g. `DATE_ADD`), overflow
-    ///   calls [`EvalContext::handle_invalid_time_error`] with
-    ///   [`Error::datetime_function_overflow`].  **Only when the handler succeeds
-    ///   does the function return `Ok(None)`** (so callers produce `NULL` instead
-    ///   of applying a zero-valued interval); in strict SQL modes (INSERT / UPDATE
-    ///   / DELETE) the handler itself may return `Err`, which is propagated.
+    /// * When `for_duration` is `true`, integer or multiplication overflow
+    ///   returns [`Error::incorrect_datetime_value`].
+    /// * When `for_duration` is `false` (expression mode, e.g. `DATE_ADD`),
+    ///   overflow calls [`EvalContext::handle_invalid_time_error`] with
+    ///   [`Error::datetime_function_overflow`].  **Only when the handler
+    ///   succeeds does the function return `Ok(None)`** (so callers produce
+    ///   `NULL` instead of applying a zero-valued interval); in strict SQL
+    ///   modes (INSERT / UPDATE / DELETE) the handler itself may return `Err`,
+    ///   which is propagated.
     ///
     /// Rounding increments that would overflow `i64` after saturation are
     /// protected with [`i64::checked_add`] and retain the saturated value.
@@ -2093,7 +2094,8 @@ mod tests {
         }
     }
 
-    /// Regression tests for the DATE_ADD interval overflow fix (#20167 / PR #20186).
+    /// Regression tests for the DATE_ADD interval overflow fix (#20167 / PR
+    /// #20186).
     ///
     /// Covers integer parsing overflow and sign-multiplication overflow.
     /// In the default expression context, these return `Ok(None)` with a
@@ -2165,8 +2167,8 @@ mod tests {
             Error::datetime_function_overflow().code()
         );
 
-        // 2. Duration parsing (for_duration=true) must still fail hard on
-        //    overflow rather than silently returning None.
+        // 2. Duration parsing (for_duration=true) must still fail hard on overflow
+        //    rather than silently returning None.
         let mut ctx = EvalContext::default();
         let result = Interval::extract_duration(&mut ctx, &Second, "9223372036854775808");
         assert!(
@@ -2179,9 +2181,8 @@ mod tests {
         assert!(result.is_err());
 
         // 3. Rounding boundary — `riv.checked_add(sign)` must not panic when the
-        //    saturated integer value is at i64::MAX and the decimal part rounds
-        //    up.  Without checked_add the test profile's overflow checks would
-        //    abort.
+        //    saturated integer value is at i64::MAX and the decimal part rounds up.
+        //    Without checked_add the test profile's overflow checks would abort.
         //    "9223372036854775807.6" → iv=i64::MAX, dv=600000 → round-up,
         //    riv.checked_add(1) overflows, keep iv=i64::MAX.
         let mut ctx = EvalContext::default();
