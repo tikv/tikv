@@ -173,8 +173,9 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     .map_err(|e| StorageError(anyhow::Error::from(e)))?;
                 return Ok(Some(kv));
             } else {
-                // No more row in the range.
+                // Empty ranges consume the scheduling budget too.
                 self.ranges_iter.notify_drained();
+                self.rescheduler.check_reschedule(force_check).await;
             }
         }
     }
@@ -317,6 +318,47 @@ mod tests {
             (b"foo_3", b"5"),
         ];
         FixtureStorage::from(data)
+    }
+
+    #[test]
+    fn test_empty_ranges_yield() {
+        use std::{future::Future, task::Context};
+
+        use futures::{pin_mut, task::noop_waker};
+
+        // Cover point lookups and interval scans in both directions. The
+        // scheduling assertion uses an expired budget rather than slow storage.
+        for ranges in [
+            vec![PointRange::from("a").into(), PointRange::from("c").into()],
+            vec![
+                IntervalRange::from(("a", "b")).into(),
+                IntervalRange::from(("c", "d")).into(),
+            ],
+        ] {
+            for scan_backward_in_range in [false, true] {
+                let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+                    storage: FixtureStorage::from(Vec::<(Vec<u8>, Vec<u8>)>::new()),
+                    ranges: ranges.clone(),
+                    scan_backward_in_range,
+                    is_key_only: false,
+                    is_scanned_range_aware: true,
+                    load_commit_ts: false,
+                });
+                scanner.rescheduler.prev_start = Instant::now() - Duration::from_millis(10);
+                {
+                    let next = scanner.next();
+                    pin_mut!(next);
+                    let waker = noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    assert!(next.as_mut().poll(&mut cx).is_pending());
+                    assert_eq!(block_on(next).unwrap(), None);
+                }
+                let mut scanned_rows = Vec::new();
+                scanner.collect_scanned_rows_per_range(&mut scanned_rows);
+                assert_eq!(scanned_rows, vec![0, 0]);
+                assert_eq!(block_on(scanner.next()).unwrap(), None);
+            }
+        }
     }
 
     #[test]
