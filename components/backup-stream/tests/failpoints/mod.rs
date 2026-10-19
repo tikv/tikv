@@ -128,6 +128,41 @@ mod all {
         let c = suite.global_checkpoint();
         assert!(c > commit_ts.into_inner(), "{} vs {}", c, commit_ts);
     }
+
+    #[test]
+    fn initial_region_scan_does_not_deadlock_when_operator_queue_fills() {
+        defer! {{
+            fail::remove("log_backup_region_operator_buffer_size");
+        }}
+        fail::cfg("log_backup_region_operator_buffer_size", "return(2)").unwrap();
+
+        let mut suite = SuiteBuilder::new_named("initial_region_scan_no_deadlock")
+            .nodes(1)
+            .build();
+        // This is the #19615 pattern scaled down: more leader regions than the
+        // subscription operator queue can hold. Without a nonblocking handoff
+        // from the region collector, registration waits forever here.
+        for i in 1..=8 {
+            suite.must_split(&make_split_key_at_record(1, i * 10));
+        }
+
+        let task = "initial_region_scan_no_deadlock";
+        let cli = suite.get_meta_cli();
+        block_on(cli.insert_task_with_range(
+            &suite.simple_task(task),
+            &[(&make_table_key(1, b""), &make_table_key(2, b""))],
+        ))
+        .unwrap();
+
+        assert!(
+            suite.wait_with_router_timeout(
+                move |r| r.get_task_handler(task).is_ok(),
+                Duration::from_secs(30),
+            ),
+            "log backup task registration did not finish; region initialization may be deadlocked"
+        );
+        suite.cluster.shutdown();
+    }
     #[test]
     fn region_failure() {
         defer! {{
