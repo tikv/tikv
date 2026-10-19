@@ -192,6 +192,12 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
         self.scanned_rows_per_range.push(0);
     }
 
+    /// Returns the total number of rows scanned since the last collection,
+    /// without clearing the internal state.
+    pub fn peek_scanned_rows_sum(&self) -> usize {
+        self.scanned_rows_per_range.iter().sum()
+    }
+
     /// Returns scanned range since last call.
     pub fn take_scanned_range(&mut self) -> IntervalRange {
         assert!(self.is_scanned_range_aware);

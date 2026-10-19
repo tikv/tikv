@@ -219,17 +219,20 @@ where
         intermediate_channel_index: usize,
         table_scan_child_index: usize,
     ) -> Self {
-        let force_no_index_lookup =
-            if config.paging_size.is_some() || table_task_iter_builder.is_none() {
-                // We did not support index lookup when paging is enabled.
-                // TODO: support paging
-                // some times we do not have table_task_iter_builder, such as
-                // - CommonHandle
-                // TODO: support CommonHandle
-                true
-            } else {
-                false
-            };
+        let force_no_index_lookup = if config.paging_size.is_some()
+            || config.max_keys_read.is_some()
+            || table_task_iter_builder.is_none()
+        {
+            // We did not support index lookup when paging or max_keys_read is
+            // enabled due to buffering challenges.
+            // TODO: support paging and max_keys_read
+            // some times we do not have table_task_iter_builder, such as
+            // - CommonHandle
+            // TODO: support CommonHandle
+            true
+        } else {
+            false
+        };
 
         let output_schema = table_scan_params
             .columns_info
@@ -547,6 +550,11 @@ where
         }
         dest.summary_per_executor[self.table_scan_child_index] += summary[0];
         // TODO: how to handle `scanned_rows_per_range`
+    }
+
+    #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.src.peek_scanned_rows_sum()
     }
 
     #[inline]
@@ -2313,6 +2321,18 @@ pub mod tests {
         // does not support paging currently
         let mut cfg = EvalConfig::default_for_test();
         cfg.paging_size = Some(128);
+        let index_lookup = new_index_lookup_executor_for_test(
+            cfg,
+            build_int_array_results(vec![vec![1]]),
+            Some(MockTableTaskIterBuilder),
+            columns.clone(),
+        );
+        assert!(index_lookup.force_no_index_lookup);
+
+        // max_keys_read disables the buffered table-lookup phase to keep
+        // the response range and rows consistent on early stop.
+        let mut cfg = EvalConfig::default_for_test();
+        cfg.max_keys_read = Some(64);
         let index_lookup = new_index_lookup_executor_for_test(
             cfg,
             build_int_array_results(vec![vec![1]]),
