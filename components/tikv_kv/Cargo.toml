@@ -18,6 +18,7 @@ test-engines-rocksdb = ["raftstore/test-engines-rocksdb"]
 test-engines-panic = ["raftstore/test-engines-panic"]
 
 [dependencies]
+keys = { workspace = true }
 collections = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
@@ -44,5 +45,4 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-keys = { workspace = true }
 panic_hook = { workspace = true }

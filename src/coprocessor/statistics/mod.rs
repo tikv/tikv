@@ -2,6 +2,7 @@
 
 pub mod analyze;
 pub mod analyze_context;
+pub mod block_sample;
 pub mod cmsketch;
 pub mod fmsketch;
 pub mod histogram;

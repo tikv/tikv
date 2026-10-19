@@ -525,6 +525,23 @@ pub trait Snapshot: Sync + Send + Clone {
 
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
 
+    /// Samples the rows in `[start, end)` that are visible at `read_ts` by
+    /// reading a fraction of the data blocks; see
+    /// [`engine_traits::Snapshot::sample_mvcc_rows`]. `start` and `end` are
+    /// encoded keys without timestamp, and `f` gets the encoded key of each
+    /// sampled row (without timestamp) and its value. Returns `None` if the
+    /// snapshot cannot sample blocks.
+    fn sample_mvcc_rows(
+        &self,
+        _start: &Key,
+        _end: &Key,
+        _read_ts: TimeStamp,
+        _opts: &engine_traits::MvccBlockSampleOptions,
+        _f: &mut dyn FnMut(&[u8], &[u8], u64),
+    ) -> Result<Option<engine_traits::MvccBlockSampleStats>> {
+        Ok(None)
+    }
+
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {

@@ -9,7 +9,7 @@ use raftstore::{
     Error as RaftServerError,
     store::{RegionIterator, RegionSnapshot, TxnExt},
 };
-use txn_types::{Key, Value};
+use txn_types::{Key, TimeStamp, Value};
 
 use crate::{
     self as kv, Error, Error as KvError, ErrorInner, Iterator as EngineIterator,
@@ -100,6 +100,35 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
             "injected error for iter_cf"
         )));
         RegionSnapshot::iter(self, cf, iter_opt).map_err(kv::Error::from)
+    }
+
+    fn sample_mvcc_rows(
+        &self,
+        start: &Key,
+        end: &Key,
+        read_ts: TimeStamp,
+        opts: &engine_traits::MvccBlockSampleOptions,
+        f: &mut dyn FnMut(&[u8], &[u8], u64),
+    ) -> kv::Result<Option<engine_traits::MvccBlockSampleStats>> {
+        let region_start = keys::enc_start_key(self.get_region());
+        let region_end = keys::enc_end_key(self.get_region());
+        let lower = std::cmp::max(keys::data_key(start.as_encoded()), region_start);
+        let upper = if end.as_encoded().is_empty() {
+            region_end
+        } else {
+            std::cmp::min(keys::data_key(end.as_encoded()), region_end)
+        };
+        if lower >= upper {
+            return Ok(Some(Default::default()));
+        }
+        let stats = box_try!(self.get_snapshot().sample_mvcc_rows(
+            &lower,
+            &upper,
+            read_ts.into_inner(),
+            opts,
+            &mut |k, v, b| f(keys::origin_key(k), v, b),
+        ));
+        Ok(stats)
     }
 
     #[inline]

@@ -64,8 +64,12 @@ impl FmSketch {
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
-        let hash = murmurhash3_x64_128(bytes, 0).0;
-        self.insert_hash_value(hash);
+        self.insert_hash_value(Self::hash(bytes));
+    }
+
+    /// The hash that `insert` puts into the sketch.
+    pub fn hash(bytes: &[u8]) -> u64 {
+        murmurhash3_x64_128(bytes, 0).0
     }
 
     pub fn insert_hash_value(&mut self, hash_val: u64) {

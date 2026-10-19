@@ -41,6 +41,12 @@ impl<S: Store> TikvStorage<S> {
     }
 }
 
+impl<S: Store> TikvStorage<S> {
+    pub(crate) fn store(&self) -> &S {
+        &self.store
+    }
+}
+
 impl<S: Store> Storage for TikvStorage<S> {
     type Statistics = Statistics;
 

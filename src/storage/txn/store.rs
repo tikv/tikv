@@ -488,6 +488,22 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
 }
 
 impl<S: Snapshot> SnapshotStore<S> {
+    /// Samples the rows of `[lower, upper)` that are visible at the start ts
+    /// of this store by reading a fraction of the data blocks; see
+    /// [`engine_traits::Snapshot::sample_mvcc_rows`]. Locks are not checked.
+    /// Returns `None` if the snapshot cannot sample blocks.
+    pub fn sample_mvcc_rows(
+        &self,
+        lower: &Key,
+        upper: &Key,
+        opts: &engine_traits::MvccBlockSampleOptions,
+        f: &mut dyn FnMut(&[u8], &[u8], u64),
+    ) -> Result<Option<engine_traits::MvccBlockSampleStats>> {
+        Ok(self
+            .snapshot
+            .sample_mvcc_rows(lower, upper, self.start_ts, opts, f)?)
+    }
+
     pub fn new(
         snapshot: S,
         start_ts: TimeStamp,
