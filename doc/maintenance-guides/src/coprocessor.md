@@ -215,6 +215,9 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Memory-lock checks must happen before serving reads that could violate lock
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
+- Range scanners must check the cooperative scheduling budget even when point
+  lookups or interval scans produce no rows, so empty multi-range requests do
+  not monopolize a read-pool worker.
 - Memory quota and concurrency limiters must remain cheap and correct.
 - Request parsing and admission must stay aligned: when the dedicated setting
   is enabled, a request class that reports quota samples to the background
