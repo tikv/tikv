@@ -635,8 +635,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     /// Refresh statistics without scanning for split keys. Keep retrying checks
-    /// for potentially large Regions so expiry or re-enabling automatic splits
-    /// can take effect even without further writes.
+    /// for potentially large Regions or table-boundary splits so expiry or
+    /// re-enabling automatic splits can take effect even without further
+    /// writes.
     fn refresh_disabled_region_stats(&self, region: &Region, engine: &EK) {
         let cfg = &self.coprocessor.cfg;
         let region_id = region.get_id();
@@ -650,7 +651,10 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 self.router.update_approximate_size(
                     region_id,
                     Some(size),
-                    Some(size >= cfg.region_max_size().0),
+                    // Size/key estimates cannot rule out a table-boundary
+                    // split. Keep idle ticks eligible until the table checker
+                    // can run after automatic splitting is re-enabled.
+                    Some(cfg.split_region_on_table || size >= cfg.region_max_size().0),
                 );
             }
             Err(e) => {
@@ -1580,6 +1584,79 @@ mod tests {
     }
 
     #[test]
+    fn test_disabled_table_split_check() {
+        use tikv_util::codec::number::NumberEncoder;
+
+        let path = TempDir::new().unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let table_keys: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|id| {
+                let mut prefix = b"t".to_vec();
+                prefix.encode_i64(id).unwrap();
+                Key::from_raw(&prefix).into_encoded()
+            })
+            .collect();
+        for key in &table_keys {
+            engine.put_cf(CF_WRITE, &keys::data_key(key), b"v").unwrap();
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+        let cfg = Config {
+            split_region_on_table: true,
+            enable_region_bucket: Some(false),
+            ..Default::default()
+        };
+        let max_size = cfg.region_max_size().0;
+        let max_keys = cfg.region_max_keys();
+        let (tx, rx) = mpsc::sync_channel(100);
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        let validator = host.split_validator.clone();
+        host.registry.register_split_check_observer(
+            50,
+            BoxSplitCheckObserver::new(AssertSplitCheckEnabled(validator.clone())),
+        );
+        let mut runner = Runner::new(engine, tx, host, None);
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Default::default());
+        region.set_start_key(table_keys[0].clone());
+
+        for expire in [false, true] {
+            validator.disable(region.get_id());
+            let mut trigger = SplitCheckTrigger::default();
+            for _ in 0..3 {
+                assert!(!trigger.should_skip(u64::MAX));
+                runner.run(Task::split_check(
+                    region.clone(),
+                    true,
+                    CheckPolicy::Scan,
+                    None,
+                ));
+                let (size, keys) = check_disabled_result(&rx, &mut trigger, [true, false], false);
+                assert!(size < max_size);
+                assert!(keys < max_keys);
+            }
+            if expire {
+                validator.expire_for_test(region.get_id());
+            } else {
+                validator.enable(region.get_id());
+            }
+            // No writes or other events reset the trigger before recovery.
+            assert!(!trigger.should_skip(u64::MAX));
+            runner.run(Task::split_check(
+                region.clone(),
+                true,
+                CheckPolicy::Scan,
+                None,
+            ));
+            assert!(rx.try_iter().any(|task| matches!(
+                task,
+                SchedTask::AskSplit { split_keys, .. } if split_keys == vec![table_keys[1].clone()]
+            )));
+        }
+    }
+
+    #[test]
     fn test_disabled_split_check_without_range_properties() {
         let path = TempDir::new().unwrap();
         let mut cf_opts = CfOptions::new();
@@ -1630,6 +1707,11 @@ mod tests {
                 !tasks
                     .iter()
                     .any(|task| matches!(task, SchedTask::AskSplit { .. }))
+            );
+            assert!(
+                !tasks
+                    .iter()
+                    .any(|task| matches!(task, SchedTask::RefreshRegionBuckets { .. }))
             );
         }
     }
