@@ -468,14 +468,17 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
-    /// Bound a wire-supplied group name for use as a metric label.
-    /// Whether resource control reports the groups causing an overload.
+    /// Whether an overload has been pinned on some group and the read pool is
+    /// protecting the others from it. Only then does the busy threshold yield:
+    /// a saturated queue is full of the noisy group's requests, so the
+    /// estimated wait would turn every victim away to a follower while
+    /// priority or admission control is already clearing its path here.
     fn overload_is_attributed(&self) -> bool {
         match self {
             ReadPoolHandle::Yatp {
                 resource_manager: Some(rm),
                 ..
-            } => rm.reports_noisy_groups() && rm.has_noisy_groups(),
+            } => rm.protects_reads() && rm.has_noisy_groups(),
             _ => false,
         }
     }
@@ -2554,9 +2557,26 @@ mod tests {
             .check_busy_threshold(threshold, b"rc")
             .expect_err("with reporting disabled the advisory still applies");
 
+        // Write admission reports noisy groups but leaves reads unprotected,
+        // so victims keep their replica fallback.
         resource_manager
             .get_config()
             .update(|c| -> Result<(), ()> {
+                c.enable_write_admission_control = true;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
+        assert!(resource_manager.reports_noisy_groups());
+        assert!(!resource_manager.protects_reads());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("write-side control alone does not lift the advisory");
+
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_write_admission_control = false;
                 c.enable_read_admission_control = true;
                 Ok(())
             })
@@ -2588,7 +2608,7 @@ mod tests {
         assert!(resource_manager.has_noisy_groups(), "still throttled");
         handle
             .check_busy_threshold(threshold, b"rc")
-            .expect_err("disabling reporting online restores the advisory");
+            .expect_err("disabling read-side control online restores the advisory");
 
         // A quiet node ramps the limit back, then release finds nothing held.
         for _ in 0..100 {

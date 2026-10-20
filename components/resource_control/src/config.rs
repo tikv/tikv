@@ -202,6 +202,14 @@ impl Config {
             || self.enable_write_admission_control
     }
 
+    /// Whether the read pool is protecting victims of a noisy group, through
+    /// priority or admission control. Only then may it stop answering the
+    /// client's busy threshold: without read-side control a victim's reads
+    /// would lose their replica fallback and gain nothing for it.
+    pub fn protects_reads(&self) -> bool {
+        self.enable_fair_scheduling || self.enable_read_admission_control
+    }
+
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         validate_cpu_pct("bg-cpu-throttle-threshold", self.bg_cpu_throttle_threshold)?;
         validate_cpu_pct("fg-cpu-throttle-threshold", self.fg_cpu_throttle_threshold)?;
@@ -580,6 +588,36 @@ mod tests {
             mgr.dispatch(change).unwrap();
             resource_ctl.refresh_cached_config();
             assert_eq!(resource_ctl.reports_noisy_groups(), on, "{name}={on}");
+        }
+    }
+
+    /// Write admission alone reports noisy groups but does not protect reads.
+    #[test]
+    fn test_write_admission_alone_does_not_protect_reads() {
+        let resource_ctl = crate::ResourceGroupManager::new(Config::default());
+        let mut mgr = ResourceContrlCfgMgr::new(resource_ctl.get_config().clone());
+
+        let mut change = ConfigChange::new();
+        change.insert(
+            "enable_write_admission_control".to_owned(),
+            ConfigValue::Bool(true),
+        );
+        mgr.dispatch(change).unwrap();
+        resource_ctl.refresh_cached_config();
+        assert!(resource_ctl.reports_noisy_groups());
+        assert!(!resource_ctl.protects_reads());
+
+        for name in ["enable_read_admission_control", "enable_fair_scheduling"] {
+            let mut change = ConfigChange::new();
+            change.insert(name.to_owned(), ConfigValue::Bool(true));
+            mgr.dispatch(change).unwrap();
+            resource_ctl.refresh_cached_config();
+            assert!(resource_ctl.protects_reads(), "{name}");
+            let mut change = ConfigChange::new();
+            change.insert(name.to_owned(), ConfigValue::Bool(false));
+            mgr.dispatch(change).unwrap();
+            resource_ctl.refresh_cached_config();
+            assert!(!resource_ctl.protects_reads(), "{name}");
         }
     }
 }

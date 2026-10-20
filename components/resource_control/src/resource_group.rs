@@ -476,6 +476,8 @@ pub struct ResourceGroupManager {
     request_base_cost_micros: AtomicU64,
     // `reports_noisy_groups`'s gate, off the config lock: asked per request.
     reports_noisy_groups: AtomicBool,
+    // `protects_reads`'s gate, likewise: asked on every busy-threshold check.
+    protects_reads: AtomicBool,
     // Bucket count for a new tracker; the window is not hot-reloadable.
     ru_num_buckets: usize,
     // The read pool's own CPU tracker; its `quiet_baseline` is the floor.
@@ -597,6 +599,7 @@ impl ResourceGroupManager {
         let num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
         let request_base_cost_micros = config.request_base_cost_micros;
         let reports_noisy_groups = config.reports_noisy_groups();
+        let protects_reads = config.protects_reads();
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -613,6 +616,7 @@ impl ResourceGroupManager {
             read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
             request_base_cost_micros: AtomicU64::new(request_base_cost_micros),
             reports_noisy_groups: AtomicBool::new(reports_noisy_groups),
+            protects_reads: AtomicBool::new(protects_reads),
             read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, num_buckets)),
             read_pool_scale_up_allowed: AtomicBool::new(false),
             noisy_groups: RwLock::new(HashSet::new()),
@@ -843,6 +847,11 @@ impl ResourceGroupManager {
         self.reports_noisy_groups.load(Ordering::Relaxed)
     }
 
+    /// Cached [`Config::protects_reads`].
+    pub fn protects_reads(&self) -> bool {
+        self.protects_reads.load(Ordering::Relaxed)
+    }
+
     /// Charges `group` the fixed arrival cost, whether it runs or not.
     fn charge_request_base_cost(&self, group: &str) {
         let micros = self.request_base_cost_micros.load(Ordering::Relaxed);
@@ -859,6 +868,8 @@ impl ResourceGroupManager {
             .store(config.request_base_cost_micros, Ordering::Relaxed);
         self.reports_noisy_groups
             .store(config.reports_noisy_groups(), Ordering::Relaxed);
+        self.protects_reads
+            .store(config.protects_reads(), Ordering::Relaxed);
     }
 
     /// Whether an overload has been detected and attributed to some group.
