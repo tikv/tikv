@@ -47,6 +47,10 @@ pub enum BatchKey {
     Foreground(String),
 }
 
+/// Metric label for a background batch: its requests may come from several
+/// groups, so none of their names would be true of the whole batch.
+pub const BACKGROUND_BATCH_LABEL: &str = "background";
+
 impl BatchKey {
     pub fn of(resource_manager: &Option<Arc<ResourceGroupManager>>, ctx: &Context) -> Self {
         let Some(rm) = resource_manager.as_deref() else {
@@ -57,6 +61,14 @@ impl BatchKey {
             BatchKey::Background
         } else {
             BatchKey::Foreground(rm.bounded_group_name(group).into_owned())
+        }
+    }
+
+    /// The batch's `resource_group` metric label.
+    pub fn into_label(self) -> String {
+        match self {
+            BatchKey::Background => BACKGROUND_BATCH_LABEL.to_owned(),
+            BatchKey::Foreground(group) => group,
         }
     }
 }
@@ -393,20 +405,11 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_resource_control_context()
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
-    // The batcher merges one `BatchKey` at a time, so the first request's group
-    // stands for the batch; bound it to a configured group.
-    let resource_group = match resource_manager.as_deref() {
-        Some(rm) => rm
-            .bounded_group_name(
-                gets.first()
-                    .unwrap()
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
-            )
-            .into_owned(),
-        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-    };
+    // The batcher merges one `BatchKey` at a time, so the first request's key
+    // is the batch's: its bounded group, or `background` for a batch whose
+    // requests may come from several groups.
+    let resource_group =
+        BatchKey::of(resource_manager, gets.first().unwrap().get_context()).into_label();
 
     let trackers_by_id: HashMap<u64, TrackerToken> = requests
         .iter()
@@ -478,20 +481,11 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_resource_control_context()
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
-    // The batcher merges one `BatchKey` at a time, so the first request's group
-    // stands for the batch; bound it to a configured group.
-    let resource_group = match resource_manager.as_deref() {
-        Some(rm) => rm
-            .bounded_group_name(
-                gets.first()
-                    .unwrap()
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
-            )
-            .into_owned(),
-        None => DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
-    };
+    // The batcher merges one `BatchKey` at a time, so the first request's key
+    // is the batch's: its bounded group, or `background` for a batch whose
+    // requests may come from several groups.
+    let resource_group =
+        BatchKey::of(resource_manager, gets.first().unwrap().get_context()).into_label();
 
     let res = storage.raw_batch_get_command(
         gets,
@@ -626,6 +620,14 @@ mod tests {
         let expected = vec![(a(), 2), (b(), 1), (BatchKey::Background, 2)];
         assert_eq!(batcher.pending_get_batches(), expected);
         assert_eq!(batcher.pending_raw_get_batches(), expected);
+    }
+
+    /// A foreground batch is labelled by its group; a background batch, which
+    /// may merge several groups, by `background`.
+    #[test]
+    fn test_batch_key_label() {
+        assert_eq!(BatchKey::Foreground("a".to_owned()).into_label(), "a");
+        assert_eq!(BatchKey::Background.into_label(), BACKGROUND_BATCH_LABEL);
     }
 
     #[test]
