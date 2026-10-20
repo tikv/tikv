@@ -1166,6 +1166,9 @@ fn test_disable_split_check() {
     let (old_size, old_keys) = read_stats();
     assert!(old_size >= 9 * 1024);
     assert!(old_keys >= 10);
+    // Discard notifications caused by the initial writes and flush. The
+    // following receives must correspond to idle split-check ticks.
+    while check_rx.try_recv().is_ok() {}
     // Multiple ticks must keep running without scanning or requiring new writes.
     for _ in 0..3 {
         check_rx.recv_timeout(Duration::from_secs(5)).unwrap();
