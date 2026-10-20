@@ -10999,68 +10999,6 @@ def ResourceGroups() -> RowPanel:
             ),
         ]
     )
-    layout.row(
-        [
-            graph_panel_histogram_quantiles(
-                title="Storage Async Snapshot Duration by Resource Group",
-                description="Total async snapshot duration per resource group. The label is the group that issued the request, not the group responsible for the latency: raft traffic is invisible to resource control, so a group can be slow here while its own RU consumption looks modest. The three panels below split this total into where the time went.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
-                label_selectors=['type="snapshot"'],
-                by_labels=["resource_group"],
-                hide_avg=True,
-                hide_count=True,
-            ),
-            graph_panel_histogram_quantiles(
-                title="Storage Async Snapshot Duration (pure local read) by Resource Group",
-                description="Snapshots served by lease read, without involving raftstore. Read against the total snapshot panel to see what share of a group's reads took the read-index path at all -- pinning leaders moves reads into this panel and out of the two read-index ones.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
-                label_selectors=['type="snapshot_local_read"'],
-                by_labels=["resource_group"],
-                hide_avg=True,
-                hide_count=True,
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel_histogram_quantiles(
-                title="ReadIndex Propose Wait by Resource Group",
-                description="Time a group's read-index request waited to be proposed, i.e. queueing on the raftstore FSM before the peer even sent it. Whether a read takes the read-index path at all is decided by region state -- leader lease validity, applied_term lag, an in-flight split or merge -- and none of those depend on who is asking, so this panel says which group paid the cost and never which group caused it. Query it per instance rather than fleet-wide: a fleet p99 of ~1ms routinely hides individual stores running 10-22ms.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
-                label_selectors=['type="snapshot_read_index_propose_wait"'],
-                by_labels=["resource_group"],
-                hide_avg=True,
-                hide_count=True,
-            ),
-            graph_panel_histogram_quantiles(
-                title="ReadIndex Confirm by Resource Group",
-                description="Time from proposing a read index to being allowed to read: quorum acknowledgement plus the `ready_to_handle_read` gate, which also blocks on applied_term lagging and on an in-flight split or merge. It is not store_meta contention, so check batch-split activity before blaming a lock. Read it together with the panel beside it: a leader lease expiry is region-wide and pushes every group reading that region onto this path at once, so all groups on one instance rising together points at lease renewal or an FSM backlog, while a single group rising alone points at its own reads.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
-                label_selectors=['type="snapshot_read_index_confirm"'],
-                by_labels=["resource_group"],
-                hide_avg=True,
-                hide_count=True,
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel_histogram_quantiles(
-                title="Storage Async Write Duration by Resource Group",
-                description="Async write duration per resource group. Useful as a control: if a victim group is hurting here as well as on the read panels the cause is below resource control, and if only the read panels move the damage is on the read path.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_engine_async_request_duration_seconds_by_group",
-                label_selectors=['type="write"'],
-                by_labels=["resource_group"],
-                hide_avg=True,
-                hide_count=True,
-            ),
-        ]
-    )
     return layout.row_panel
 
 

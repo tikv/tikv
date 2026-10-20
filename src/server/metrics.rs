@@ -640,18 +640,6 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
-    // Per-group companion to `ASYNC_REQUESTS_DURATIONS`, which is a static
-    // metric and so cannot carry a client-supplied group name. `type` is kept
-    // here -- unlike the gRPC companion -- because `RequestTypeKind` has only a
-    // handful of variants and splitting read-index propose wait from confirm
-    // wait is the reason to look at this metric at all.
-    pub static ref ASYNC_REQUESTS_DURATIONS_BY_GROUP: HistogramVec = register_histogram_vec!(
-        "tikv_storage_engine_async_request_duration_seconds_by_group",
-        "Bucketed histogram of processing successful asynchronous requests per resource group.",
-        &["type", "resource_group"],
-        by_group_wait_buckets()
-    )
-    .unwrap();
 }
 
 lazy_static! {
@@ -669,7 +657,7 @@ pub fn by_group_buckets() -> Vec<f64> {
     exponential_buckets(1e-4, 2.0, 18).unwrap()
 }
 
-/// Buckets for the per-group wait histograms: 100us to ~100ms on the same grid.
+/// Buckets for the per-group wait histogram: 100us to ~100ms on the same grid.
 /// A wait is one stage of a request, and past 100ms the request has already
 /// missed its deadline whichever stage ate it; the end-to-end histogram keeps
 /// the tail.
