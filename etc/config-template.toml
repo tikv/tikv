@@ -245,6 +245,18 @@
 ## and `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
 # bg-egress-limit = "0B"
 
+## Period of the resource-control loop while the node is quiet: noisy-group detection, quota
+## throttling and the unified read pool's thread ladder all run on it. A group is named only after
+## two ticks of sustained overshoot, so this is how long an idle node takes to notice load.
+## Range 1s to 60s. Not hot-reloadable; changing it requires a restart.
+# quiet-tick = "10s"
+
+## Period of the same loop while foreground CPU is above `fg-cpu-throttle-threshold`. Everything
+## counted in ticks, such as the throttle's recovery step and the candidacy counter, moves
+## proportionally faster under load. Range 1s to 60s, and it must not exceed `quiet-tick`. Not
+## hot-reloadable; changing it requires a restart.
+# overloaded-tick = "5s"
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
