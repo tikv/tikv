@@ -881,13 +881,6 @@ impl ResourceGroupManager {
         }
     }
 
-    /// The faster of the two periods, and so the rate the tick task has to be
-    /// woken at: [`Self::control_tick`] can defer a wakeup into the quiet
-    /// period but cannot create one.
-    pub fn overloaded_tick(&self) -> Duration {
-        self.config.value().overloaded_tick.0
-    }
-
     /// Record `ru` units consumed by `group` into the sliding-window tracker
     /// and consume tokens from the group's rate limiter.
     pub fn record_ru_consumption(&self, group: &str, ru: u64) {

@@ -127,9 +127,8 @@ pub struct Config {
     /// faster under load as a result: the throttle's recovery step and the
     /// candidacy counter included.
     ///
-    /// Must not exceed `quiet_tick`. Not hot-reloadable; the tick task is
-    /// woken at this period, and the quiet gate can defer a wakeup but cannot
-    /// create one, so changing it requires a restart.
+    /// Must not exceed `quiet_tick`. Not hot-reloadable; changing requires a
+    /// restart.
     #[online_config(skip)]
     pub overloaded_tick: ReadableDuration,
 }

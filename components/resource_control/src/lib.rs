@@ -77,14 +77,16 @@ pub fn start_periodic_tasks(
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
-    // Woken at the shorter of the two periods and gated down to the longer one
-    // while the node is quiet, because spawn_interval_task's period is fixed.
+    // Woken every second and gated to the current tick, so neither tick has
+    // to divide the other: spawn_interval_task's period is fixed, and a wakeup
+    // at the shorter tick would round the longer one up to its next multiple.
     // TICK_SLACK absorbs timer jitter, which would otherwise defer a tick that
     // arrives a moment early by a whole wakeup.
+    const TICK_WAKEUP: Duration = Duration::from_secs(1);
     const TICK_SLACK: Duration = Duration::from_millis(500);
     let tick_mgr = mgr.clone();
     let mut last_tick = Instant::now_coarse();
-    bg_worker.spawn_interval_task(mgr.overloaded_tick(), move || {
+    bg_worker.spawn_interval_task(TICK_WAKEUP, move || {
         let now = Instant::now_coarse();
         if now.saturating_duration_since(last_tick) + TICK_SLACK < tick_mgr.control_tick() {
             return;
