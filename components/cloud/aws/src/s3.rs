@@ -60,12 +60,12 @@ impl std::fmt::Debug for AccessKeyPair {
         f.debug_struct("AccessKeyPair")
             .field("access_key", &self.access_key)
             .field("secret_access_key", &"?")
-            .field("session_token", &self.session_token)
+            .field("session_token", &"?")
             .finish()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     bucket: BucketConf,
     sse: Option<StringNonEmpty>,
@@ -73,11 +73,31 @@ pub struct Config {
     access_key_pair: Option<AccessKeyPair>,
     force_path_style: bool,
     sse_kms_key_id: Option<StringNonEmpty>,
+    sse_kms_encryption_context: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
     role_arn: Option<StringNonEmpty>,
     external_id: Option<StringNonEmpty>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bucket", &self.bucket)
+            .field("sse", &self.sse)
+            .field("acl", &self.acl)
+            .field("access_key_pair", &self.access_key_pair)
+            .field("force_path_style", &self.force_path_style)
+            .field("sse_kms_key_id", &self.sse_kms_key_id)
+            .field("sse_kms_encryption_context", &"?")
+            .field("storage_class", &self.storage_class)
+            .field("multi_part_size", &self.multi_part_size)
+            .field("object_lock_enabled", &self.object_lock_enabled)
+            .field("role_arn", &self.role_arn)
+            .field("external_id", &self.external_id)
+            .finish()
+    }
 }
 
 impl Config {
@@ -90,6 +110,7 @@ impl Config {
             access_key_pair: None,
             force_path_style: false,
             sse_kms_key_id: None,
+            sse_kms_encryption_context: None,
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: false,
@@ -130,6 +151,8 @@ impl Config {
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+            // BR encodes the JSON context once; writers pass the Base64 value unchanged.
+            sse_kms_encryption_context: StringNonEmpty::opt(input.sse_kms_encryption_context),
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: input.object_lock_enabled,
             role_arn: StringNonEmpty::opt(input.role_arn),
@@ -390,6 +413,7 @@ struct S3Uploader<'client> {
     acl: Option<StringNonEmpty>,
     server_side_encryption: Option<StringNonEmpty>,
     sse_kms_key_id: Option<StringNonEmpty>,
+    sse_kms_encryption_context: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
@@ -475,6 +499,7 @@ impl<'client> S3Uploader<'client> {
             acl: config.acl.as_ref().cloned(),
             server_side_encryption: config.sse.as_ref().cloned(),
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
+            sse_kms_encryption_context: config.sse_kms_encryption_context.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
             multi_part_size: config.multi_part_size,
             object_lock_enabled: config.object_lock_enabled,
@@ -560,6 +585,11 @@ impl<'client> S3Uploader<'client> {
                         .map(|s| s.as_str().into()),
                 )
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
+                .set_ssekms_encryption_context(
+                    self.sse_kms_encryption_context
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                )
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
                 .customize()
                 .mutate_request(|req| {
@@ -692,6 +722,11 @@ impl<'client> S3Uploader<'client> {
                 .key(&self.key)
                 .set_acl(self.acl.as_ref().map(|s| s.as_str().into()))
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
+                .set_ssekms_encryption_context(
+                    self.sse_kms_encryption_context
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                )
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
                 .content_length(data.len() as i64)
                 .body(data.to_vec().into())
@@ -877,11 +912,6 @@ mod tests {
 
     use super::*;
 
-    // Serialize multipart-related tests because they assert deltas on the global
-    // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
-    static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    static AWS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     const AWS_USE_FIPS_ENDPOINT: &str = "AWS_USE_FIPS_ENDPOINT";
 
     struct ScopedEnvVar {
@@ -907,6 +937,137 @@ mod tests {
         }
     }
 
+    const SSE_KMS_CONTEXT: &str = "eyJ0ZW5hbnQiOiJ0ZW5hbnQtYSJ9";
+    const SSE_KMS_CONTEXT_HEADER: &str = "x-amz-server-side-encryption-context";
+
+    #[test]
+    fn test_s3_config_debug_redacts_sensitive_values() {
+        let mut input = InputConfig::default();
+        input.bucket = "mybucket".into();
+        input.access_key = "access-key".into();
+        input.secret_access_key = "secret-key".into();
+        input.session_token = "session-token".into();
+        input.sse_kms_encryption_context = SSE_KMS_CONTEXT.into();
+        let config = Config::from_input(input).unwrap();
+        let output = format!("{config:?}");
+        assert!(output.contains("mybucket"));
+        for value in ["secret-key", "session-token", SSE_KMS_CONTEXT] {
+            assert!(!output.contains(value));
+        }
+    }
+
+    #[test]
+    fn test_s3_encryption_context_config() {
+        let bucket = BucketConf::default(StringNonEmpty::required("mybucket".into()).unwrap());
+        assert!(Config::default(bucket).sse_kms_encryption_context.is_none());
+
+        for context in ["", SSE_KMS_CONTEXT] {
+            // The new field must not add constraints or defaults to existing SSE options.
+            for (sse, key_id) in [
+                ("", ""),
+                ("", "key-id"),
+                ("AES256", ""),
+                ("AES256", "key-id"),
+                ("aws:kms", ""),
+                ("aws:kms", "key-id"),
+            ] {
+                let mut input = InputConfig::default();
+                input.bucket = "mybucket".into();
+                input.sse = sse.into();
+                input.sse_kms_key_id = key_id.into();
+                input.sse_kms_encryption_context = context.into();
+                let config = Config::from_input(input).unwrap();
+                assert_eq!(config.sse, StringNonEmpty::opt(sse.into()));
+                assert_eq!(config.sse_kms_key_id, StringNonEmpty::opt(key_id.into()));
+                assert_eq!(
+                    config.sse_kms_encryption_context,
+                    StringNonEmpty::opt(context.into()),
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_s3_encryption_context_put_and_get() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
+        for context in ["", SSE_KMS_CONTEXT] {
+            let mut input = InputConfig::default();
+            input.bucket = "mybucket".into();
+            input.region = "us-east-1".into();
+            input.endpoint = "https://s3.us-east-1.amazonaws.com".into();
+            input.force_path_style = true;
+            input.sse = "aws:kms".into();
+            input.sse_kms_key_id = "key-id".into();
+            input.sse_kms_encryption_context = context.into();
+            let config = Config::from_input(input).unwrap();
+            let mut events = Vec::new();
+            // The retry must carry exactly the same context as the first PUT.
+            for status in [503, 200] {
+                events.push(ReplayEvent::new(
+                    http::Request::builder()
+                        .method("PUT")
+                        .uri("https://s3.us-east-1.amazonaws.com/mybucket/mykey?x-id=PutObject")
+                        .body(SdkBody::from("data"))
+                        .unwrap(),
+                    http::Response::builder()
+                        .status(status)
+                        .body(SdkBody::from(""))
+                        .unwrap(),
+                ));
+            }
+            events.push(ReplayEvent::new(
+                http::Request::builder()
+                    .method("GET")
+                    .uri("https://s3.us-east-1.amazonaws.com/mybucket/mykey?x-id=GetObject")
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from("data"))
+                    .unwrap(),
+            ));
+            let client = StaticReplayClient::new(events);
+            let creds = Credentials::from_keys("abc", "xyz", None);
+            let storage = S3Storage::new_with_creds_client(config, client.clone(), creds).unwrap();
+            storage
+                .put("mykey", PutResource(Box::new(&b"data"[..])), 4)
+                .await
+                .unwrap();
+            let mut contents = Vec::new();
+            storage
+                .get("mykey")
+                .read_to_end(&mut contents)
+                .await
+                .unwrap();
+            assert_eq!(contents, b"data");
+            client.assert_requests_match(&[]);
+            assert_eq!(client.actual_requests().count(), 3);
+            for (index, request) in client.actual_requests().enumerate() {
+                let expected_context = if index < 2 && !context.is_empty() {
+                    Some(context)
+                } else {
+                    None
+                };
+                assert_eq!(
+                    request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                    expected_context
+                );
+                if index < 2 {
+                    assert_eq!(
+                        request.headers().get("x-amz-server-side-encryption"),
+                        Some("aws:kms")
+                    );
+                    assert_eq!(
+                        request
+                            .headers()
+                            .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                        Some("key-id")
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_s3_get_content_md5() {
         // base64 encode md5sum "helloworld"
@@ -921,6 +1082,7 @@ mod tests {
 
     #[test]
     fn test_s3_config() {
+        let _guard = crate::AWS_TEST_LOCK.blocking_lock();
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
@@ -952,7 +1114,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
-        let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
+        for context in ["", SSE_KMS_CONTEXT] {
+            check_s3_storage_multi_part(context).await;
+        }
+    }
+
+    fn assert_multipart_encryption_headers(client: &StaticReplayClient, context: &str) {
+        for (index, request) in client.actual_requests().enumerate() {
+            // Only initiation carries encryption headers, never parts, completion, or
+            // abort.
+            assert_eq!(
+                request.headers().get(SSE_KMS_CONTEXT_HEADER),
+                (index == 0 && !context.is_empty()).then_some(context),
+            );
+            assert_eq!(
+                request.headers().get("x-amz-server-side-encryption"),
+                (index == 0).then_some("aws:kms"),
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("x-amz-server-side-encryption-aws-kms-key-id"),
+                (index == 0).then_some("key-id"),
+            );
+        }
+    }
+
+    async fn check_s3_storage_multi_part(context: &str) {
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -964,6 +1153,9 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
+        config.sse = StringNonEmpty::opt("aws:kms".into());
+        config.sse_kms_key_id = StringNonEmpty::opt("key-id".into());
+        config.sse_kms_encryption_context = StringNonEmpty::opt(context.into());
 
         // Record sample count before the test to compute delta, avoiding
         // interference from other tests sharing the global metric.
@@ -1061,6 +1253,7 @@ mod tests {
         .unwrap();
 
         client.assert_requests_match(&[]);
+        assert_multipart_encryption_headers(&client, context);
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
@@ -1075,7 +1268,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part_abort() {
-        let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1087,6 +1280,9 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
+        config.sse = StringNonEmpty::opt("aws:kms".into());
+        config.sse_kms_key_id = StringNonEmpty::opt("key-id".into());
+        config.sse_kms_encryption_context = StringNonEmpty::opt(SSE_KMS_CONTEXT.into());
 
         // Record sample count before the test to compute delta, avoiding
         // interference from other tests sharing the global metric.
@@ -1175,6 +1371,7 @@ mod tests {
         assert_str_contains!(err.to_string(), "Not Found");
 
         client.assert_requests_match(&[]);
+        assert_multipart_encryption_headers(&client, SSE_KMS_CONTEXT);
 
         let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
             .get_metric_with_label_values(&["s3", "upload_part"])
@@ -1190,6 +1387,7 @@ mod tests {
     #[cfg(feature = "failpoints")]
     #[tokio::test]
     async fn test_s3_storage() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -1305,7 +1503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_base_sdk_config_keeps_endpoint_out_of_shared_config() {
-        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1327,7 +1525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_custom_endpoint_with_fips_mode() {
-        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
 
         let magic_contents = "5678";
@@ -1369,6 +1567,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_with_virtual_host() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = "abcd";
         let bucket_name = StringNonEmpty::required("bucket2".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -1413,6 +1612,7 @@ mod tests {
     /// protection is enabled.
     #[tokio::test]
     async fn test_s3_storage_without_stalled_stream_protection() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
@@ -1465,6 +1665,7 @@ mod tests {
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
     async fn test_real_s3_storage() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         use tikv_util::time::Limiter;
 
         let bucket = BucketConf {

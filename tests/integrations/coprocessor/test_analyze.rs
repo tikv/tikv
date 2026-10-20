@@ -322,7 +322,7 @@ fn test_analyze_sampling_bernoulli() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, limiter) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 0, 0.5);
@@ -335,6 +335,93 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
     assert_eq!(collector.get_count(), 9);
     assert_eq!(collector.get_fm_sketch().len(), 4);
+    assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
+    assert!(!collector.has_ndv_sample_count());
+
+    // A tiny rate keeps a row with probability 2^-52, so it exercises empty
+    // samples without a random assertion or a test-only sampling path.
+    // Histogram rows come only from the rows selected for NDV: Bernoulli
+    // sampling keeps each at sample_rate / ndv_rate, and the reservoir sees
+    // only those rows.
+    // One step below 1 still uses the sampled path, but it skips a row only
+    // with probability 2^-52. Thus all rows are selected and the values are
+    // exact.
+    let all_rows_rate = 1.0 - f64::EPSILON;
+    let mut scanned_bytes = None;
+    for (ndv_rate, sample_rate, sample_size) in [
+        (all_rows_rate, all_rows_rate, 0),
+        (f64::MIN_POSITIVE, f64::MIN_POSITIVE, 0),
+        (0.5, f64::MIN_POSITIVE, 0),
+        (0.5, 0.5, 0),
+        (0.5, 0.0, 5),
+    ] {
+        let mut req = new_analyze_sampling_req(&product, 1, sample_size, sample_rate);
+        let mut analyze_req: AnalyzeReq = protobuf::parse_from_bytes(req.get_data()).unwrap();
+        analyze_req.mut_col_req().set_ndv_rate(ndv_rate);
+        analyze_req.mut_col_req().set_sketch_size(1000);
+        req.set_data(analyze_req.write_to_bytes().unwrap());
+        let before = limiter.total_read_bytes_consumed(false);
+        let resp = handle_request(&endpoint, req);
+        assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+        let consumed = limiter.total_read_bytes_consumed(false) - before;
+        assert!(consumed > 0);
+        assert_eq!(consumed, *scanned_bytes.get_or_insert(consumed));
+        let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
+        let collector = analyze_resp.get_row_collector();
+        assert_eq!(collector.get_count(), 9);
+        assert!(collector.has_ndv_sample_count());
+        let selected = collector.get_ndv_sample_count();
+        if ndv_rate == f64::MIN_POSITIVE {
+            assert_eq!(selected, 0);
+        }
+        if ndv_rate == all_rows_rate {
+            assert_eq!(selected, 9);
+            // Only a request that tracks repeated hashes fills the second
+            // set: `count` has 2, 3, and 4 one time each and 1 six times.
+            let count_sketch = &collector.get_fm_sketch()[2];
+            assert_eq!(count_sketch.get_hashset().len(), 3);
+            assert_eq!(count_sketch.get_multi_hashset().len(), 1);
+            assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
+            assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
+        }
+        // A ratio of 1 keeps every selected row, and a tiny one keeps none.
+        let histogram_count = if sample_size > 0 {
+            selected.min(sample_size)
+        } else if sample_rate >= ndv_rate {
+            selected
+        } else {
+            0
+        };
+        assert_eq!(collector.get_samples().len(), histogram_count as usize);
+        // The sketch counts selected values; size describes the full population.
+        assert_eq!(
+            collector.get_fm_sketch()[0].get_hashset().len(),
+            selected as usize
+        );
+        assert!(collector.get_fm_sketch()[0].get_multi_hashset().is_empty());
+        assert_eq!(
+            collector.get_total_size()[0],
+            if selected == 0 { 0 } else { 72 }
+        );
+        assert_eq!(collector.get_fm_sketch()[1], collector.get_fm_sketch()[3]);
+        assert_eq!(
+            collector.get_null_counts()[1],
+            collector.get_null_counts()[3]
+        );
+    }
+
+    // A rate of 1 selects every row, so it is the same as no rate.
+    let mut req = new_analyze_sampling_req(&product, 1, 0, 1.0);
+    let mut analyze_req: AnalyzeReq = protobuf::parse_from_bytes(req.get_data()).unwrap();
+    analyze_req.mut_col_req().set_ndv_rate(1.0);
+    req.set_data(analyze_req.write_to_bytes().unwrap());
+    let resp = handle_request(&endpoint, req);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    let analyze_resp: AnalyzeColumnsResp = protobuf::parse_from_bytes(resp.get_data()).unwrap();
+    let collector = analyze_resp.get_row_collector();
+    assert!(!collector.has_ndv_sample_count());
+    assert_eq!(collector.get_count(), 9);
+    assert_eq!(collector.get_samples().len(), 9);
     assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
 }
 
