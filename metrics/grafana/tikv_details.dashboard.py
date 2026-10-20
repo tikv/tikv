@@ -10942,9 +10942,9 @@ def LoadShedding() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_unified_read_pool_busy_threshold_skipped_total",
-                            by_labels=["instance"],
+                            by_labels=["resource_group"],
                         ).extra(" > 0"),
-                        legend_format="busy-threshold-skipped-{{instance}}",
+                        legend_format="busy-threshold-skipped-{{resource_group}}",
                     ),
                 ],
             ),
@@ -10990,21 +10990,11 @@ def ResourceGroups() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Coprocessor Request Duration by Resource Group",
-                description="Total coprocessor request duration per resource group, queueing included. The `req` breakdown is dropped to keep the cross product with the group name small.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_coprocessor_request_duration_seconds_by_group",
-                by_labels=["resource_group"],
-                hide_p99=True,
-                hide_avg=True,
-                hide_count=True,
-            ),
-            graph_panel_histogram_quantiles(
                 title="Coprocessor Request Wait Duration by Resource Group",
                 description="Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Throttling a noisy group shows up here first, and separating the two is the reason this metric keeps its `type` label.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_coprocessor_request_wait_seconds_by_group",
-                by_labels=["resource_group"],
+                by_labels=["resource_group", "type"],
                 hide_p99=True,
                 hide_avg=True,
                 hide_count=True,

@@ -613,7 +613,10 @@ where
                                 .write
                                 .observe(begin_instant.saturating_elapsed_secs());
                             ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                                .with_label_values(&["write", &resource_group])
+                                .with_label_values(&[
+                                    RequestTypeKind::write.get_str(),
+                                    &resource_group,
+                                ])
                                 .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
@@ -811,7 +814,10 @@ where
                             tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
                         );
                     ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                        .with_label_values(&["snapshot_read_index_propose_wait", &resource_group])
+                        .with_label_values(&[
+                            RequestTypeKind::snapshot_read_index_propose_wait.get_str(),
+                            &resource_group,
+                        ])
                         .observe(
                             tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
                         );
@@ -824,7 +830,10 @@ where
                                     / 1_000_000_000.0,
                             );
                         ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                            .with_label_values(&["snapshot_read_index_confirm", &resource_group])
+                            .with_label_values(&[
+                                RequestTypeKind::snapshot_read_index_confirm.get_str(),
+                                &resource_group,
+                            ])
                             .observe(
                                 tracker.metrics.read_index_confirm_wait_nanos as f64
                                     / 1_000_000_000.0,
@@ -835,13 +844,16 @@ where
                         .snapshot_local_read
                         .observe(elapse);
                     ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                        .with_label_values(&["snapshot_local_read", &resource_group])
+                        .with_label_values(&[
+                            RequestTypeKind::snapshot_local_read.get_str(),
+                            &resource_group,
+                        ])
                         .observe(elapse);
                 }
             });
             ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
             ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                .with_label_values(&["snapshot", &resource_group])
+                .with_label_values(&[RequestTypeKind::snapshot.get_str(), &resource_group])
                 .observe(elapse);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
         }

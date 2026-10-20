@@ -612,6 +612,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
+        let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -621,6 +622,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            GRPC_MSG_DURATION_BY_GROUP
+                .with_label_values(&[&resource_group])
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -659,6 +663,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
+        let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -668,6 +673,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
                 .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            GRPC_MSG_DURATION_BY_GROUP
+                .with_label_values(&[&resource_group])
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())

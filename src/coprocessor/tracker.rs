@@ -359,7 +359,7 @@ impl<E: Engine> Tracker<E> {
         // Only `schedule` and `snapshot` are split out per group: they are the
         // two waits a co-tenant can inflict, `all` is their sum plus suspend.
         COPR_REQ_WAIT_TIME_BY_GROUP
-            .with_label_values(&[&self.resource_group, "all"])
+            .with_label_values(&[&self.resource_group, WaitType::all.get_str()])
             .observe(time::duration_to_sec(self.wait_time));
 
         // schedule wait time
@@ -368,7 +368,7 @@ impl<E: Engine> Tracker<E> {
             .schedule
             .observe(time::duration_to_sec(self.schedule_wait_time));
         COPR_REQ_WAIT_TIME_BY_GROUP
-            .with_label_values(&[&self.resource_group, "schedule"])
+            .with_label_values(&[&self.resource_group, WaitType::schedule.get_str()])
             .observe(time::duration_to_sec(self.schedule_wait_time));
 
         // snapshot wait time
@@ -377,7 +377,7 @@ impl<E: Engine> Tracker<E> {
             .snapshot
             .observe(time::duration_to_sec(self.snapshot_wait_time));
         COPR_REQ_WAIT_TIME_BY_GROUP
-            .with_label_values(&[&self.resource_group, "snapshot"])
+            .with_label_values(&[&self.resource_group, WaitType::snapshot.get_str()])
             .observe(time::duration_to_sec(self.snapshot_wait_time));
 
         // suspend wait time

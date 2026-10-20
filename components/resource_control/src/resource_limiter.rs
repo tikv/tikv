@@ -213,9 +213,8 @@ impl ResourceLimiter {
         dur
     }
 
-    #[inline]
     /// Sets the CPU quota directly, for tests that need a limiter in debt.
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "testexport"))]
     pub fn set_cpu_rate_limit_for_test(&self, limit: f64) {
         self.get_limiter(ResourceType::Cpu).set_rate_limit(limit);
     }

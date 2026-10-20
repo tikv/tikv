@@ -491,7 +491,10 @@ impl ReadPoolHandle {
         }
         // This wait is the whole pool's, so attribution is the better answer.
         if self.overload_is_attributed() {
-            UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.inc();
+            let group = std::str::from_utf8(resource_group).unwrap_or_default();
+            UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED
+                .with_label_values(&[group_label(group)])
+                .inc();
             return Ok(());
         }
         let estimated_wait = match self.get_estimated_wait_duration() {
@@ -1187,11 +1190,13 @@ mod metrics {
                 &["resource_group"]
             )
             .unwrap();
-        pub static ref UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED: IntCounter = register_int_counter!(
-            "tikv_unified_read_pool_busy_threshold_skipped_total",
-            "Requests that skipped the estimated-wait gate because resource control manages the read queue"
-        )
-        .unwrap();
+        pub static ref UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED: IntCounterVec =
+            register_int_counter_vec!(
+                "tikv_unified_read_pool_busy_threshold_skipped_total",
+                "Requests that skipped the estimated-wait gate because resource control manages the read queue",
+                &["resource_group"]
+            )
+            .unwrap();
         pub static ref UNIFIED_READ_POOL_FULL_REJECTED: IntCounterVec =
             register_int_counter_vec!(
                 "tikv_unified_read_pool_full_rejected_total",
@@ -2558,11 +2563,12 @@ mod tests {
             .unwrap();
         resource_manager.refresh_cached_config();
 
-        let before = UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.get();
+        let skipped = UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.with_label_values(&["rc"]);
+        let before = skipped.get();
         handle
             .check_busy_threshold(threshold, b"rc")
             .expect("attribution supersedes the whole-pool advisory");
-        assert_eq!(UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.get(), before + 1);
+        assert_eq!(skipped.get(), before + 1);
 
         // Releasing the scheduler alone is not enough while the throttle holds.
         resource_manager.reset_group_priorities();

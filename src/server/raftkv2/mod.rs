@@ -39,7 +39,8 @@ use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
     metrics::{
-        ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_BY_GROUP, ASYNC_REQUESTS_DURATIONS_VEC,
+        ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_BY_GROUP,
+        ASYNC_REQUESTS_DURATIONS_VEC, RequestTypeKind,
     },
     raftkv::{
         check_raft_cmd_response, get_status_kind_from_engine_error, new_flashback_req,
@@ -239,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                                 );
                             ASYNC_REQUESTS_DURATIONS_BY_GROUP
                                 .with_label_values(&[
-                                    "snapshot_read_index_propose_wait",
+                                    RequestTypeKind::snapshot_read_index_propose_wait.get_str(),
                                     &resource_group,
                                 ])
                                 .observe(
@@ -256,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                                     );
                                 ASYNC_REQUESTS_DURATIONS_BY_GROUP
                                     .with_label_values(&[
-                                        "snapshot_read_index_confirm",
+                                        RequestTypeKind::snapshot_read_index_confirm.get_str(),
                                         &resource_group,
                                     ])
                                     .observe(
@@ -269,7 +270,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                                 .snapshot_local_read
                                 .observe(elapse);
                             ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                                .with_label_values(&["snapshot_local_read", &resource_group])
+                                .with_label_values(&[
+                                    RequestTypeKind::snapshot_local_read.get_str(),
+                                    &resource_group,
+                                ])
                                 .observe(elapse);
                         }
                     });
@@ -279,7 +283,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     // TODO: Fix the inaccuracy, see #17581.
                     ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                        .with_label_values(&["snapshot", &resource_group])
+                        .with_label_values(&[RequestTypeKind::snapshot.get_str(), &resource_group])
                         .observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(snap)
@@ -370,7 +374,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     .write
                     .observe(begin_instant.saturating_elapsed_secs());
                 ASYNC_REQUESTS_DURATIONS_BY_GROUP
-                    .with_label_values(&["write", &resource_group])
+                    .with_label_values(&[RequestTypeKind::write.get_str(), &resource_group])
                     .observe(begin_instant.saturating_elapsed_secs());
                 Ok(())
             } else {
