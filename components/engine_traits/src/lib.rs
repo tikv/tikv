@@ -286,6 +286,8 @@ mod misc;
 pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod block_sample;
+pub use crate::block_sample::*;
 mod snapshot_misc;
 pub use crate::snapshot_misc::SnapshotMiscExt;
 mod sst;

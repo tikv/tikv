@@ -6,8 +6,8 @@ use std::{
 };
 
 use engine_traits::{
-    self, CfNamesExt, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot,
-    SnapshotMiscExt,
+    self, CfNamesExt, IterOptions, Iterable, MvccBlockSampleOptions, MvccBlockSampleStats,
+    Peekable, ReadOptions, Result, Snapshot, SnapshotMiscExt,
 };
 use parking_lot::Mutex;
 use rocksdb::{DB, DBIterator, rocksdb_options::UnsafeSnap};
@@ -101,7 +101,20 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot for RocksSnapshot {}
+impl Snapshot for RocksSnapshot {
+    fn sample_mvcc_rows(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        read_ts: u64,
+        opts: &MvccBlockSampleOptions,
+        f: &mut dyn FnMut(&[u8], &[u8], u64),
+    ) -> Result<Option<MvccBlockSampleStats>> {
+        crate::block_sample::sample_mvcc_rows(
+            self, &self.db, &self.snap, start, end, read_ts, opts, f,
+        )
+    }
+}
 
 impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {

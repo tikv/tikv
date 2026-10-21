@@ -25,14 +25,28 @@ use tikv_util::{
 };
 use tipb::{self, AnalyzeColumnsReq};
 
-use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use super::{
+    block_sample::{AnalyzeStorage, sample_blocks},
+    cmsketch::CmSketch,
+    fmsketch::FmSketch,
+    histogram::Histogram,
+};
 use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
-    pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
+    pub(crate) data: BatchTableScanExecutor<AnalyzeStorage<S>, F>,
+    /// Set when the rows come from sampled data blocks: scales the count of
+    /// the rows read to all visible rows.
+    block_scale: Option<f64>,
+    /// The sampled block of each row in scan order, to count a value once
+    /// per block for NDV; `next_row` indexes it.
+    block_ids: Option<Vec<u64>>,
+    next_row: usize,
+    /// The index of the last row of each sampled block in `block_ids`.
+    block_last_row: collections::HashMap<u64, usize>,
     /// Accumulated storage statistics for this request. Filled per batch so
     /// that collect_scan_statistics can report request-scoped stats (see
     /// merge_storage_stats_into).
@@ -67,10 +81,25 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             !req.has_ndv_rate() || (req.get_ndv_rate() > 0.0 && req.get_ndv_rate() <= 1.0)
         );
         // A rate of 1 selects every row, so it is the same as no rate.
-        let ndv_rate = if req.has_ndv_rate() && req.get_ndv_rate() < 1.0 {
+        let mut ndv_rate = if req.has_ndv_rate() && req.get_ndv_rate() < 1.0 {
             Some(req.get_ndv_rate())
         } else {
             None
+        };
+        let mut block_scale = None;
+        let mut block_ids = None;
+        let storage = match ndv_rate {
+            Some(rate) => match sample_blocks(&storage, &ranges, rate)? {
+                Some(sampled) => {
+                    // Each visible row was read with probability 1 / scale.
+                    block_scale = Some(sampled.scale);
+                    ndv_rate = Some(1.0 / sampled.scale);
+                    block_ids = Some(sampled.block_ids);
+                    AnalyzeStorage::Sampled(sampled.rows)
+                }
+                None => AnalyzeStorage::Scan(storage),
+            },
+            None => AnalyzeStorage::Scan(storage),
         };
         let mut table_scanner = BatchTableScanExecutor::new(
             storage,
@@ -82,11 +111,17 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        if let Some(rate) = ndv_rate {
+        if let (Some(rate), None) = (ndv_rate, block_scale) {
             table_scanner.sample_rows(rate);
         }
         Ok(Self {
             data: table_scanner,
+            block_scale,
+            block_last_row: block_ids.as_ref().map_or_else(Default::default, |ids| {
+                ids.iter().enumerate().map(|(i, &b)| (b, i)).collect()
+            }),
+            block_ids,
+            next_row: 0,
             accumulated_storage_stats: Statistics::default(),
             max_sample_size: req.get_sample_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
@@ -127,6 +162,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // `Some` makes the response a sampled one: it sends the count of
             // selected rows also when that count is 0.
             base.ndv_sample_count = Some(0);
+        }
+        if self.block_ids.is_some() {
+            collector.mut_base().collapse = Some(CollapseState::new(target_count));
         }
         collector
     }
@@ -212,6 +250,16 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 for logical_row in &result.logical_rows {
+                    let mut last_of_block = None;
+                    if let Some(ids) = &self.block_ids {
+                        // The table scan returns the sampled rows in order.
+                        let block = ids[self.next_row];
+                        collector.mut_base().enter_block(block);
+                        if self.block_last_row.get(&block) == Some(&self.next_row) {
+                            last_of_block = Some(block);
+                        }
+                        self.next_row += 1;
+                    }
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
                         collation_key_vals[i].clear();
@@ -247,6 +295,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         &self.column_groups,
                     );
                     collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    if let Some(block) = last_of_block {
+                        collector.mut_base().leave_block(block);
+                    }
                 }
             }
 
@@ -268,6 +319,25 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .get(ThrottleType::analyze_full_sampling)
                     .inc_by(quota_delay.as_micros() as u64);
             }
+        }
+        if self.block_scale.is_none() {
+            // Block reads of a scanning ANALYZE, for comparison with the
+            // block sampling path, which logs its own reads.
+            // Drained into the accumulated stats, which merge_storage_stats_into
+            // reports later, so the request stats stay the same.
+            self.data
+                .collect_storage_stats(&mut self.accumulated_storage_stats);
+            let stats = &self.accumulated_storage_stats;
+            info!("analyze scanned";
+                "rows" => collector.mut_base().count,
+                "block_reads" => stats.write.block_read_count + stats.data.block_read_count
+                    + stats.lock.block_read_count);
+        }
+        if let Some(scale) = self.block_scale {
+            // Every row read was selected for NDV; the visible row count of
+            // the region is estimated from the block selection probability.
+            let base = collector.mut_base();
+            base.count = (base.count as f64 * scale).round() as u64;
         }
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
@@ -332,6 +402,28 @@ struct BaseRowSampleCollector {
     total_sizes: Vec<i64>,
     memory_usage: usize,
     reported_memory_usage: usize,
+    collapse: Option<CollapseState>,
+}
+
+/// The hashes seen so far in each sampled block whose rows are not all
+/// collected yet, per column and column group, to count a value once per
+/// block. Rows of blocks of different sorted runs interleave in key order, so
+/// a block keeps its hashes until its last row.
+#[derive(Clone)]
+struct CollapseState {
+    targets: usize,
+    block: Option<u64>,
+    open: collections::HashMap<u64, Vec<collections::HashSet<u64>>>,
+}
+
+impl CollapseState {
+    fn new(targets: usize) -> Self {
+        CollapseState {
+            targets,
+            block: None,
+            open: collections::HashMap::default(),
+        }
+    }
 }
 
 impl Default for BaseRowSampleCollector {
@@ -345,6 +437,7 @@ impl Default for BaseRowSampleCollector {
             total_sizes: vec![],
             memory_usage: 0,
             reported_memory_usage: 0,
+            collapse: None,
         }
     }
 }
@@ -364,7 +457,38 @@ impl BaseRowSampleCollector {
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
             reported_memory_usage: 0,
+            collapse: None,
         }
+    }
+
+    fn enter_block(&mut self, block: u64) {
+        if let Some(c) = &mut self.collapse {
+            c.block = Some(block);
+            let targets = c.targets;
+            c.open
+                .entry(block)
+                .or_insert_with(|| vec![collections::HashSet::default(); targets]);
+        }
+    }
+
+    /// Drops the hashes of a block after its last row.
+    fn leave_block(&mut self, block: u64) {
+        if let Some(c) = &mut self.collapse {
+            c.open.remove(&block);
+        }
+    }
+
+    /// Inserts a hash into the NDV sketch of target `idx`, unless the value
+    /// was already seen in the current sampled block.
+    fn insert_ndv_hash(&mut self, idx: usize, hash: u64) {
+        if let Some(c) = &mut self.collapse {
+            if let Some(seen) = c.block.and_then(|b| c.open.get_mut(&b)) {
+                if !seen[idx].insert(hash) {
+                    return;
+                }
+            }
+        }
+        self.fm_sketches[idx].insert_hash_value(hash);
     }
 
     fn merge_from(&mut self, other: &mut BaseRowSampleCollector) {
@@ -422,7 +546,7 @@ impl BaseRowSampleCollector {
                     hasher.write(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
+            self.insert_ndv_hash(col_len + i, hasher.finish());
         }
     }
 
@@ -437,11 +561,12 @@ impl BaseRowSampleCollector {
                 self.null_count[i] += 1;
                 continue;
             }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert(&collation_keys_val[i]);
+            let hash = if columns_info[i].as_accessor().is_string_like() {
+                FmSketch::hash(&collation_keys_val[i])
             } else {
-                self.fm_sketches[i].insert(&columns_val[i]);
-            }
+                FmSketch::hash(&columns_val[i])
+            };
+            self.insert_ndv_hash(i, hash);
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
     }
@@ -1372,6 +1497,23 @@ mod tests {
         samples.sort_unstable();
         assert_eq!(samples, vec![1, 3, 4]);
         assert_eq!(sorted_hashset(&collector.get_fm_sketch()[0]), vec![a, b, c]);
+    }
+
+    #[test]
+    fn test_collapse_keeps_a_block_across_interleaved_rows() {
+        let mut base = BaseRowSampleCollector::new(100, 1);
+        base.fm_sketches[0].track_duplicates();
+        base.collapse = Some(CollapseState::new(1));
+        // Rows of block 2, from another sorted run, come between the rows of
+        // block 1. Block 1 has 10 twice, so 10 counts once; 30 is in both
+        // blocks, so it is repeated.
+        for (block, hash) in [(1, 10), (2, 30), (1, 10), (1, 30)] {
+            base.enter_block(block);
+            base.insert_ndv_hash(0, hash);
+        }
+        let sketch: tipb::FmSketch = mem::take(&mut base.fm_sketches)[0].clone().into();
+        assert_eq!(sorted_hashset(&sketch), vec![10]);
+        assert_eq!(sketch.get_multi_hashset(), &[30]);
     }
 
     #[test]

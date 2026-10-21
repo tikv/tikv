@@ -6,8 +6,9 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, is_data_cf,
+    CF_DEFAULT, CfNamesExt, IterOptions, Iterable, KvEngine, MvccBlockSampleOptions,
+    MvccBlockSampleStats, Peekable, ReadOptions, RegionCacheEngine, Result, Snapshot,
+    SnapshotMiscExt, is_data_cf,
 };
 use in_memory_engine::RegionCacheMemoryEngine;
 use raftstore::coprocessor::ObservedSnapshot;
@@ -80,6 +81,18 @@ where
 {
     fn in_memory_engine_hit(&self) -> bool {
         self.region_cache_snap.is_some()
+    }
+
+    fn sample_mvcc_rows(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        read_ts: u64,
+        opts: &MvccBlockSampleOptions,
+        f: &mut dyn FnMut(&[u8], &[u8], u64),
+    ) -> Result<Option<MvccBlockSampleStats>> {
+        self.disk_snap
+            .sample_mvcc_rows(start, end, read_ts, opts, f)
     }
 }
 

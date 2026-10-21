@@ -46,6 +46,7 @@ pub use crate::misc::*;
 pub mod range_properties;
 mod snapshot;
 pub use crate::snapshot::*;
+mod block_sample;
 mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
