@@ -62,13 +62,15 @@ impl<S: Store> Storage for TikvStorage<S> {
         let upper = Some(Key::from_raw(&range.upper_exclusive));
         self.scanner = Some(
             self.store
-                .scanner(
+                .scanner_with_reuse(
+                    self.scanner.take(),
                     is_backward_scan,
                     is_key_only,
                     self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
                     load_commit_ts,
                     lower,
                     upper,
+                    &mut self.cf_stats_backlog,
                 )
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,

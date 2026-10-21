@@ -5,6 +5,7 @@
 mod hash_aggr;
 mod index_scan;
 mod integrated;
+mod multi_range_scan;
 mod selection;
 mod simple_aggr;
 mod stream_aggr;
@@ -22,6 +23,7 @@ fn execute<M: criterion::measurement::Measurement + 'static>(c: &mut criterion::
     stream_aggr::bench(c);
     top_n::bench(c);
     integrated::bench(c);
+    multi_range_scan::bench(c);
 
     c.final_summary();
 }

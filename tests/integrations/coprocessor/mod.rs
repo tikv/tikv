@@ -3,3 +3,5 @@
 mod test_analyze;
 mod test_checksum;
 mod test_select;
+
+mod test_scanner_reuse;

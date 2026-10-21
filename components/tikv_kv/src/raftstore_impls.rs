@@ -118,6 +118,21 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
 }
 
 impl<S: Snapshot> EngineIterator for RegionIterator<S> {
+    fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: &Key,
+        upper_bound: &Key,
+        reverse: bool,
+    ) -> kv::Result<bool> {
+        RegionIterator::reset_bounds_and_seek(
+            self,
+            lower_bound.as_encoded(),
+            upper_bound.as_encoded(),
+            reverse,
+        )
+        .map_err(KvError::from)
+    }
+
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }

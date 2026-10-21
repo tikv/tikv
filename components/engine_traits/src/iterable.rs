@@ -47,6 +47,20 @@ use crate::*;
 /// or after iteration has ended after calling `next` or `prev`,
 /// and they return `false`.
 pub trait Iterator: Send {
+    /// Replace the physical bounds with `[lower_bound, upper_bound)` and seek
+    /// to the first key, or the last key when `reverse` is true.
+    ///
+    /// Returns whether bounds reset is supported, independently of whether the
+    /// new range contains keys. On `Ok(false)`, the iterator is unchanged.
+    fn reset_bounds_and_seek(
+        &mut self,
+        _lower_bound: &[u8],
+        _upper_bound: &[u8],
+        _reverse: bool,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Move the iterator to a specific key.
     ///
     /// When an exact match is not found, `seek` sets the iterator to the next

@@ -180,6 +180,54 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
+    /// Reuse the underlying iterator for a new bounded range. `false` means the
+    /// caller must create a new cursor; neither its state nor statistics
+    /// change.
+    pub fn reset_bounds_and_seek(
+        &mut self,
+        lower_bound: Option<&Key>,
+        upper_bound: Option<&Key>,
+        reverse: bool,
+        statistics: &mut CfStatistics,
+    ) -> Result<bool> {
+        let (Some(lower_bound), Some(upper_bound)) = (lower_bound, upper_bound) else {
+            return Ok(false);
+        };
+        if self.prefix_seek
+            || lower_bound.as_encoded().is_empty()
+            || upper_bound.as_encoded().is_empty()
+            || lower_bound.as_encoded() > upper_bound.as_encoded()
+        {
+            return Ok(false);
+        }
+
+        // An unsupported engine must not contribute a seek when the caller
+        // falls back to constructing another cursor.
+        let mut reset_statistics = CfStatistics::default();
+        let result = {
+            let kind = if reverse {
+                StatsKind::SeekForPrev
+            } else {
+                StatsKind::Seek
+            };
+            let _guard =
+                StatsCollector::new(self.iter.metrics_collector(), kind, &mut reset_statistics);
+            self.iter
+                .reset_bounds_and_seek(lower_bound, upper_bound, reverse)
+        };
+        if !matches!(&result, Ok(false)) {
+            statistics.add(&reset_statistics);
+        }
+        let supported = result?;
+        if supported {
+            self.min_key = None;
+            self.max_key = None;
+            self.missing_range_cache = None;
+            self.mark_unread();
+        }
+        Ok(supported)
+    }
+
     /// Seek the specified key.
     ///
     /// This method assume the current position of cursor is
@@ -688,6 +736,164 @@ mod tests {
     }
 
     #[test]
+    fn test_reset_bounds_clears_eof_and_missing_range_cache() {
+        let path = Builder::new()
+            .prefix("test-cursor-reset")
+            .tempdir()
+            .unwrap();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+        let (region, _) = load_default_dataset(engine.clone());
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+        let key = Key::from_encoded_slice;
+        let mut cursor = CursorBuilder::new(&snap, CF_DEFAULT)
+            .scan_mode(ScanMode::Mixed)
+            .missing_range(true)
+            .range(Some(key(b"a2")), Some(key(b"a4")))
+            .build()
+            .unwrap();
+        let mut stats = CfStatistics::default();
+
+        assert!(!cursor.seek(&key(b"a4"), &mut stats).unwrap());
+        assert!(cursor.max_key.is_some());
+        let seeks = stats.seek;
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a4")), Some(&key(b"a7")), false, &mut stats)
+                .unwrap()
+        );
+        assert_eq!(stats.seek, seeks + 1);
+        assert!(cursor.max_key.is_none());
+        assert_eq!(cursor.key(&mut stats), b"a5");
+        let read_keys = stats.flow_stats.read_keys;
+        let read_bytes = stats.flow_stats.read_bytes;
+        assert_eq!(cursor.key(&mut stats), b"a5");
+        assert_eq!(stats.flow_stats.read_keys, read_keys);
+        assert_eq!(stats.flow_stats.read_bytes, read_bytes);
+        assert_eq!(cursor.value(&mut stats), b"v5");
+        let read_bytes = stats.flow_stats.read_bytes;
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a4")), Some(&key(b"a7")), false, &mut stats)
+                .unwrap()
+        );
+        assert_eq!(cursor.key(&mut stats), b"a5");
+        assert_eq!(cursor.value(&mut stats), b"v5");
+        assert_eq!(stats.flow_stats.read_keys, read_keys + 1);
+        assert_eq!(
+            stats.flow_stats.read_bytes,
+            read_bytes + b"a5".len() + b"v5".len()
+        );
+        let read_bytes = stats.flow_stats.read_bytes;
+        assert_eq!(cursor.key(&mut stats), b"a5");
+        assert_eq!(cursor.value(&mut stats), b"v5");
+        assert_eq!(stats.flow_stats.read_keys, read_keys + 1);
+        assert_eq!(stats.flow_stats.read_bytes, read_bytes);
+
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a2")), Some(&key(b"a7")), false, &mut stats)
+                .unwrap()
+        );
+        assert!(cursor.seek(&key(b"a4"), &mut stats).unwrap());
+        assert!(cursor.missing_range_cache.is_some());
+        let reverse_seeks = stats.seek_for_prev;
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a2")), Some(&key(b"a4")), true, &mut stats)
+                .unwrap()
+        );
+        assert_eq!(stats.seek_for_prev, reverse_seeks + 1);
+        assert!(cursor.missing_range_cache.is_none());
+        assert_eq!(cursor.key(&mut stats), b"a3");
+        assert!(!cursor.seek_for_prev(&key(b"a2"), &mut stats).unwrap());
+        assert!(cursor.min_key.is_some());
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a4")), Some(&key(b"a7")), true, &mut stats)
+                .unwrap()
+        );
+        assert!(cursor.min_key.is_none());
+        assert_eq!(cursor.key(&mut stats), b"a5");
+        // An empty result still successfully resets the physical range.
+        assert!(
+            cursor
+                .reset_bounds_and_seek(Some(&key(b"a3a")), Some(&key(b"a4")), false, &mut stats)
+                .unwrap()
+        );
+        assert!(!cursor.valid().unwrap());
+        // Equal bounds represent an empty interval, not an unsupported reset.
+        for reverse in [false, true] {
+            assert!(
+                cursor
+                    .reset_bounds_and_seek(
+                        Some(&key(b"a5")),
+                        Some(&key(b"a5")),
+                        reverse,
+                        &mut stats,
+                    )
+                    .unwrap()
+            );
+            assert!(!cursor.valid().unwrap());
+        }
+    }
+
+    #[test]
+    fn test_reset_bounds_unsupported_preserves_cursor_and_statistics() {
+        use crate::btree_engine::{BTreeEngine, BTreeEngineIterator};
+
+        let engine = BTreeEngine::default();
+        let tree = engine.get_cf(CF_DEFAULT);
+        tree.write()
+            .unwrap()
+            .insert(Key::from_raw(b"a3"), b"v3".to_vec());
+        let iter = BTreeEngineIterator::new(tree, IterOptions::default());
+        let mut cursor = Cursor::new(iter, ScanMode::Mixed, false, true);
+        let mut stats = CfStatistics::default();
+        let key = Key::from_raw;
+        assert!(cursor.seek(&key(b"a3"), &mut stats).unwrap());
+        assert_eq!(cursor.value(&mut stats), b"v3");
+        cursor.min_key = Some(b"a0".to_vec());
+        cursor.max_key = Some(b"a9".to_vec());
+        cursor.missing_range_cache = Some((b"a1".to_vec(), b"a3".to_vec()));
+        let before = stats.clone();
+        assert!(
+            !cursor
+                .reset_bounds_and_seek(Some(&key(b"a4")), Some(&key(b"a7")), false, &mut stats)
+                .unwrap()
+        );
+        assert_eq!(cursor.min_key.as_deref(), Some(b"a0".as_slice()));
+        assert_eq!(cursor.max_key.as_deref(), Some(b"a9".as_slice()));
+        assert!(cursor.missing_range_cache.is_some());
+        assert!(cursor.cur_key_has_read.get());
+        assert!(cursor.cur_value_has_read.get());
+        assert_eq!(cursor.key(&mut stats), key(b"a3").as_encoded().as_slice());
+        assert_eq!(stats.total_op_count(), before.total_op_count());
+        assert_eq!(stats.flow_stats.read_bytes, before.flow_stats.read_bytes);
+        assert_eq!(stats.flow_stats.read_keys, before.flow_stats.read_keys);
+        // Invalid or unbounded ranges must also leave the cursor untouched.
+        for (lower, upper) in [
+            (None, Some(key(b"a7"))),
+            (Some(key(b"a2")), None),
+            (Some(Key::from_encoded(vec![])), Some(key(b"a7"))),
+            (Some(key(b"a2")), Some(Key::from_encoded(vec![]))),
+            (Some(key(b"a7")), Some(key(b"a2"))),
+        ] {
+            assert!(
+                !cursor
+                    .reset_bounds_and_seek(lower.as_ref(), upper.as_ref(), false, &mut stats)
+                    .unwrap()
+            );
+            assert_eq!(stats.total_op_count(), before.total_op_count());
+            assert_eq!(cursor.key(&mut stats), key(b"a3").as_encoded().as_slice());
+        }
+    }
+
+    #[test]
     fn test_seek_and_prev_with_prefix_seek() {
         let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
         let mut cf_opts = RocksCfOptions::default();
@@ -723,6 +929,19 @@ mod tests {
             iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
+        let seek_count = statistics.total_op_count();
+        assert!(
+            !iter
+                .reset_bounds_and_seek(
+                    Some(&Key::from_encoded_slice(b"a2")),
+                    Some(&Key::from_encoded_slice(b"a7")),
+                    false,
+                    &mut statistics,
+                )
+                .unwrap()
+        );
+        assert_eq!(statistics.total_op_count(), seek_count);
+        assert_eq!(iter.key(&mut statistics), b"a3");
         iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
             .unwrap_err();
 
