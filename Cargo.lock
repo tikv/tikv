@@ -4467,7 +4467,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#de6be1bf30e58e945f141f3cf1b3b4c2ca91d238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#25e516ad59e602ae329b64d4670afe23c378d1f5"
+>>>>>>> b0ada6498b (sst_importer, engine_rocks: optionally bypass the page cache on DDL ingest (#19918))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4486,7 +4490,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#de6be1bf30e58e945f141f3cf1b3b4c2ca91d238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#25e516ad59e602ae329b64d4670afe23c378d1f5"
+>>>>>>> b0ada6498b (sst_importer, engine_rocks: optionally bypass the page cache on DDL ingest (#19918))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6708,7 +6716,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#de6be1bf30e58e945f141f3cf1b3b4c2ca91d238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#25e516ad59e602ae329b64d4670afe23c378d1f5"
+>>>>>>> b0ada6498b (sst_importer, engine_rocks: optionally bypass the page cache on DDL ingest (#19918))
 dependencies = [
  "libc 0.2.186",
  "librocksdb_sys",

@@ -301,7 +301,14 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
+<<<<<<< HEAD
     fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
+=======
+    fn new_writer<
+        W,
+        F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta, u64, bool) -> Result<W>,
+    >(
+>>>>>>> b0ada6498b (sst_importer, engine_rocks: optionally bypass the page cache on DDL ingest (#19918))
         f: F,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
@@ -314,7 +321,28 @@ mod tests {
             SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+<<<<<<< HEAD
         (f(&importer, &db, meta).unwrap(), importer_dir)
+=======
+        (f(&importer, &db, meta, 0, false).unwrap(), importer_dir)
+    }
+
+    #[test]
+    fn test_new_txn_writer_with_lightning_txn_source() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let writer = SstImporter::new_txn_writer(&importer, &db, meta, 1 << 16, false);
+        assert_eq!(writer.unwrap().txn_source, 1 << 16);
+>>>>>>> b0ada6498b (sst_importer, engine_rocks: optionally bypass the page cache on DDL ingest (#19918))
     }
 
     #[test]
