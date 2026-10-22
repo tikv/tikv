@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, sync::Mutex, time::Duration};
 
 use engine_traits::KvEngine;
 use futures::FutureExt;
@@ -24,6 +24,7 @@ use txn_types::TimeStamp;
 
 use crate::{
     annotate,
+    checkpoint_manager::LastFlushTsOfRegion,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -306,6 +307,9 @@ pub struct RegionSubscriptionManager<S, R> {
     scans: Arc<FutureWaitGroup>,
 
     advance_ts_interval: Duration,
+    // This belongs to the CheckpointManager and is read here to allow new regions to inherit the
+    // checkpoints from old regions.
+    checkpoint_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
 }
 
 /// Create a pool for doing initial scanning.
@@ -342,6 +346,7 @@ where
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
         advance_ts_interval: Duration,
+        checkpoint_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
     ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
@@ -362,6 +367,7 @@ where
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
             advance_ts_interval,
+            checkpoint_ts,
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -561,6 +567,15 @@ where
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
+            let mut tso = {
+                let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
+                checkpoint_ts
+                    .values()
+                    .filter(|cp| utils::region_encloses(&cp.region, region))
+                    .map(|cp| cp.checkpoint)
+                    .max()
+            };
+
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -568,11 +583,16 @@ where
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["region-changed"])
                         .inc();
+
                     let r = async {
+                        let tso = match tso {
+                            Some(tso) => tso,
+                            None => self.get_last_checkpoint_of(&for_task, region).await?,
+                        };
                         self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
-                            self.get_last_checkpoint_of(&for_task, region).await?,
+                            tso,
                             handle.clone(),
                         )
                         .await;
@@ -618,8 +638,24 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-                let tso = self.get_last_checkpoint_of(&for_task, region).await?;
-                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
+
+                // If a tracked region fully encloses this one (it was split from it), start
+                // from the parent's checkpoint: this region has no checkpoint of its own.
+                let mut tso = {
+                    let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
+                    checkpoint_ts
+                        .values()
+                        .filter(|cp| utils::region_encloses(&cp.region, region))
+                        .map(|cp| cp.checkpoint)
+                        .max()
+                };
+
+                if tso.is_none() {
+                    tso = Some(self
+                        .get_last_checkpoint_of(&for_task, region)
+                        .await?);
+                }
+                self.observe_over_with_initial_data_from_checkpoint(region, tso.unwrap(), handle.clone())
                     .await;
             }
         }
