@@ -58,10 +58,11 @@ pub const HIGH_PRIORITY: u32 = 16;
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 
 /// Period of both control loops while quiet; every `*_PCT` below is per tick.
-/// Default for `resource-control.quiet-tick`.
+/// Default for `resource-control.normal-control-interval`.
 pub const CONTROL_TICK: Duration = Duration::from_secs(10);
 
-/// Default for `resource-control.overloaded-tick`: the period while loaded.
+/// Default for `resource-control.overloaded-control-interval`: the period
+/// while loaded.
 pub const CONTROL_TICK_OVERLOADED: Duration = Duration::from_secs(5);
 
 /// Margin below a setpoint before a controller expands into it.
@@ -878,17 +879,18 @@ impl ResourceGroupManager {
     }
 
     /// The period both control loops should run at, from the last tick's
-    /// verdict: `overloaded_tick` while the node is loaded, so detection
-    /// reaches a verdict sooner, and `quiet_tick` otherwise.
+    /// verdict: `overloaded_control_interval` while the node is loaded, so
+    /// detection reaches a verdict sooner, and `normal_control_interval`
+    /// otherwise.
     ///
     /// Relaxed, and read a tick late by design: the worst case is one tick at
     /// the wrong period on either side of a transition.
     pub fn control_tick(&self) -> Duration {
         let config = self.config.value();
         if self.overloaded.load(Ordering::Relaxed) {
-            config.overloaded_tick.0
+            config.overloaded_control_interval.0
         } else {
-            config.quiet_tick.0
+            config.normal_control_interval.0
         }
     }
 
@@ -1277,7 +1279,7 @@ impl ResourceGroupManager {
         now: u64,
     ) -> f64 {
         let historical_cpu = self.record_read_pool_cpu_at(read_pool_cpu, interval_secs, now);
-        // The quiet-tick floor: the live average rises as load is shed.
+        // The normal-interval floor: the live average rises as load is shed.
         let quiet_cpu = self.quiet_read_pool_floor();
         let floor_cpu = quiet_cpu.unwrap_or(0.0).max(MIN_READ_POOL_TARGET_CORES);
 

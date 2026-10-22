@@ -117,20 +117,21 @@ pub struct Config {
     ///
     /// Not hot-reloadable; changing requires a restart.
     #[online_config(skip)]
-    pub quiet_tick: ReadableDuration,
+    pub normal_control_interval: ReadableDuration,
     /// Period of both control loops while the node is loaded (foreground CPU
-    /// above `fg_cpu_throttle_threshold`). This, not `quiet_tick`, sets how
-    /// long a noisy group goes unblamed, and health feedback reaches the
-    /// client every second, so the tick is what the client waits on.
+    /// above `fg_cpu_throttle_threshold`). This, not `normal_control_interval`,
+    /// sets how long a noisy group goes unblamed, and health feedback
+    /// reaches the client every second, so the tick is what the client
+    /// waits on.
     ///
     /// Everything counted in ticks rather than seconds moves proportionally
     /// faster under load as a result: the throttle's recovery step and the
     /// candidacy counter included.
     ///
-    /// Must not exceed `quiet_tick`. Not hot-reloadable; changing requires a
-    /// restart.
+    /// Must not exceed `normal_control_interval`. Not hot-reloadable; changing
+    /// requires a restart.
     #[online_config(skip)]
-    pub overloaded_tick: ReadableDuration,
+    pub overloaded_control_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -152,8 +153,8 @@ impl Default for Config {
             baseline_burst_pct: 20.0,
             admission_max_delayed_count: 10_000,
             request_base_cost_micros: 40,
-            quiet_tick: ReadableDuration(CONTROL_TICK),
-            overloaded_tick: ReadableDuration(CONTROL_TICK_OVERLOADED),
+            normal_control_interval: ReadableDuration(CONTROL_TICK),
+            overloaded_control_interval: ReadableDuration(CONTROL_TICK_OVERLOADED),
         }
     }
 }
@@ -256,14 +257,17 @@ impl Config {
             .into());
         }
 
-        validate_tick("quiet-tick", self.quiet_tick.0)?;
-        validate_tick("overloaded-tick", self.overloaded_tick.0)?;
+        validate_tick("normal-control-interval", self.normal_control_interval.0)?;
+        validate_tick(
+            "overloaded-control-interval",
+            self.overloaded_control_interval.0,
+        )?;
 
         // Loaded must tick faster, or detection slows exactly when it matters.
-        if self.overloaded_tick.0 > self.quiet_tick.0 {
+        if self.overloaded_control_interval.0 > self.normal_control_interval.0 {
             return Err(format!(
-                "resource-control.overloaded-tick ({}) must not exceed quiet-tick ({})",
-                self.overloaded_tick, self.quiet_tick
+                "resource-control.overloaded-control-interval ({}) must not exceed normal-control-interval ({})",
+                self.overloaded_control_interval, self.normal_control_interval
             )
             .into());
         }
@@ -501,14 +505,18 @@ mod tests {
     fn test_validate_rejects_bad_ticks() {
         for bad in [Duration::from_millis(500), Duration::from_secs(61)] {
             let mut cfg = Config::default();
-            cfg.quiet_tick = ReadableDuration(bad);
-            assert!(cfg.validate().is_err(), "quiet-tick {:?} accepted", bad);
-
-            let mut cfg = Config::default();
-            cfg.overloaded_tick = ReadableDuration(bad);
+            cfg.normal_control_interval = ReadableDuration(bad);
             assert!(
                 cfg.validate().is_err(),
-                "overloaded-tick {:?} accepted",
+                "normal-control-interval {:?} accepted",
+                bad
+            );
+
+            let mut cfg = Config::default();
+            cfg.overloaded_control_interval = ReadableDuration(bad);
+            assert!(
+                cfg.validate().is_err(),
+                "overloaded-control-interval {:?} accepted",
                 bad
             );
         }
@@ -517,13 +525,13 @@ mod tests {
     #[test]
     fn test_validate_rejects_inverted_ticks() {
         let mut cfg = Config::default();
-        cfg.quiet_tick = ReadableDuration::secs(5);
-        cfg.overloaded_tick = ReadableDuration::secs(10);
+        cfg.normal_control_interval = ReadableDuration::secs(5);
+        cfg.overloaded_control_interval = ReadableDuration::secs(10);
         assert!(cfg.validate().is_err());
 
         // Equal is allowed: one period either way, which is a node that has
         // simply opted out of ticking faster under load.
-        cfg.overloaded_tick = ReadableDuration::secs(5);
+        cfg.overloaded_control_interval = ReadableDuration::secs(5);
         cfg.validate().unwrap();
     }
 
