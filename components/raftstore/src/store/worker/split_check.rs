@@ -793,6 +793,14 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             .new_split_checker_host(region, tablet, reason, policy);
 
         if host.skip() {
+            if reason != SplitReason::Admin {
+                // No checker needs this Region. Clear retry hints retained
+                // while automatic splits were disabled, including table splits.
+                self.router
+                    .update_approximate_size(region_id, None, Some(false));
+                self.router
+                    .update_approximate_keys(region_id, None, Some(false));
+            }
             debug!("skip split check";
                 "region_id" => region.get_id(),
                 "is_key_range" => is_key_range,
@@ -1653,6 +1661,52 @@ mod tests {
                 task,
                 SchedTask::AskSplit { split_keys, .. } if split_keys == vec![table_keys[1].clone()]
             )));
+        }
+
+        // An in-table Region cannot split at a table boundary. Once the
+        // disable state is gone, normal checks must clear the retry hint.
+        let end_key = tidb_query_datatype::codec::table::encode_row_key(1, i64::MAX);
+        region.set_end_key(Key::from_raw(&end_key).into_encoded());
+        for expire in [false, true] {
+            validator.disable(region.get_id());
+            let mut trigger = SplitCheckTrigger::default();
+            runner.run(Task::split_check(
+                region.clone(),
+                true,
+                CheckPolicy::Scan,
+                None,
+            ));
+            check_disabled_result(&rx, &mut trigger, [true, false], false);
+            if expire {
+                validator.expire_for_test(region.get_id());
+            } else {
+                validator.enable(region.get_id());
+            }
+            assert!(!trigger.should_skip(u64::MAX));
+            runner.run(Task::split_check(
+                region.clone(),
+                true,
+                CheckPolicy::Scan,
+                None,
+            ));
+            trigger.post_triggered();
+            for task in rx.try_iter() {
+                match task {
+                    SchedTask::UpdateApproximateSize {
+                        size, splitable, ..
+                    } => {
+                        trigger.on_approximate_region_size(size, splitable);
+                    }
+                    SchedTask::UpdateApproximateKeys {
+                        keys, splitable, ..
+                    } => {
+                        trigger.on_approximate_region_keys(keys, splitable);
+                    }
+                    task => panic!("unexpected in-table split check result: {task:?}"),
+                }
+            }
+            trigger.post_triggered();
+            assert!(trigger.should_skip(u64::MAX));
         }
     }
 
