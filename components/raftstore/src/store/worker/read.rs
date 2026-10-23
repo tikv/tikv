@@ -38,10 +38,9 @@ use crate::{
     errors::RAFTSTORE_IS_BUSY,
     router::ReadContext,
     store::{
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, cmd_resp,
-        fsm::store::StoreMeta,
-        util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, RaftCmdExtraOpts,
+        ReadCallback, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+        cmd_resp, fsm::store::StoreMeta, util::{self, LeaseState, RegionReadProgress, RemoteLease},
     },
 };
 
@@ -1101,6 +1100,7 @@ where
         ctx: &ReadContext,
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
+        extra_opts: RaftCmdExtraOpts,
     ) {
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_requests.inc());
         match self.pre_propose_raft_command(&req) {
@@ -1121,7 +1121,7 @@ where
                         } else {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
-                            self.redirect(RaftCommand::new(req, cb));
+                            self.redirect(RaftCommand::new_ext(req, cb, extra_opts.clone()));
                             return;
                         }
                     }
@@ -1194,7 +1194,7 @@ where
                         }
                     }
                     RequestPolicy::ReadIndex => {
-                        self.redirect(RaftCommand::new(req, cb));
+                        self.redirect(RaftCommand::new_ext(req, cb, extra_opts.clone()));
                         return;
                     }
                     RequestPolicy::ReadIndexReplicaRead => {
@@ -1213,7 +1213,7 @@ where
                             });
                             read_resp
                         } else {
-                            self.redirect(RaftCommand::new(req, cb));
+                            self.redirect(RaftCommand::new_ext(req, cb, extra_opts.clone()));
                             return;
                         }
                     }
@@ -1241,7 +1241,7 @@ where
                 cb.set_result(response);
             }
             // Forward to raftstore.
-            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Ok(None) => self.redirect(RaftCommand::new_ext(req, cb, extra_opts)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self
@@ -1267,8 +1267,8 @@ where
     /// which left a snapshot cached in LocalReader. ThreadReadId is composed by
     /// thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(&mut self, ctx: ReadContext, req: RaftCmdRequest, cb: Callback<E::Snapshot>) {
-        self.propose_raft_command(&ctx, req, cb);
+    pub fn read(&mut self, ctx: ReadContext, req: RaftCmdRequest, cb: Callback<E::Snapshot>, extra_opts: RaftCmdExtraOpts) {
+        self.propose_raft_command(&ctx, req, cb, extra_opts);
         maybe_tls_local_read_metrics_flush();
     }
 
@@ -1437,6 +1437,15 @@ mod tests {
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
+        must_redirect_with_extra_opts(reader, rx, cmd, RaftCmdExtraOpts::default());
+    }
+
+    fn must_redirect_with_extra_opts(
+        reader: &mut LocalReader<KvTestEngine, MockRouter>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
+        cmd: RaftCmdRequest,
+        extra_opts: RaftCmdExtraOpts,
+    ) {
         let read_ctx = &ReadContext::new(None, None);
         reader.propose_raft_command(
             read_ctx,
@@ -1444,6 +1453,7 @@ mod tests {
             Callback::read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
+            extra_opts,
         );
         assert_eq!(
             rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
@@ -1467,8 +1477,18 @@ mod tests {
         task: RaftCommand<KvTestSnapshot>,
         read_id: Option<ThreadReadId>,
     ) {
+        must_not_redirect_with_read_id_and_opts(reader, rx, task, read_id, RaftCmdExtraOpts::default());
+    }
+
+    fn must_not_redirect_with_read_id_and_opts(
+        reader: &mut LocalReader<KvTestEngine, MockRouter>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
+        task: RaftCommand<KvTestSnapshot>,
+        read_id: Option<ThreadReadId>,
+        extra_opts: RaftCmdExtraOpts,
+    ) {
         let ctx = ReadContext::new(read_id, None);
-        reader.propose_raft_command(&ctx, task.request, task.callback);
+        reader.propose_raft_command(&ctx, task.request, task.callback, extra_opts);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -1609,6 +1629,7 @@ mod tests {
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
             })),
+            RaftCmdExtraOpts::default(),
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.store_id_mismatch.get()),
@@ -1636,6 +1657,7 @@ mod tests {
                 );
                 assert!(resp.snapshot.is_none());
             })),
+            RaftCmdExtraOpts::default(),
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.peer_id_mismatch.get()),
@@ -1658,6 +1680,7 @@ mod tests {
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
             })),
+            RaftCmdExtraOpts::default(),
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.term_mismatch.get()),
@@ -1687,7 +1710,7 @@ mod tests {
         );
 
         // Channel full.
-        reader.propose_raft_command(read_ctx, cmd.clone(), Callback::None);
+        reader.propose_raft_command(read_ctx, cmd.clone(), Callback::None, RaftCmdExtraOpts::default());
         reader.propose_raft_command(
             read_ctx,
             cmd.clone(),
@@ -1696,6 +1719,7 @@ mod tests {
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
             })),
+            RaftCmdExtraOpts::default(),
         );
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -1726,6 +1750,7 @@ mod tests {
             Callback::read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
+            RaftCmdExtraOpts::default(),
         );
         assert_eq!(
             rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
