@@ -389,16 +389,16 @@ where
         LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
     };
 
-    if !default_cursor.valid()?
-        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
-    {
+    if !default_cursor.valid()? || default_cursor.key() != seek_key.as_encoded().as_slice() {
         return Err(default_not_found_error(
             user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_load_data_by_write",
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor.value(&mut statistics.data).to_vec())
+    Ok(default_cursor
+        .value_with_stats(&mut statistics.data)
+        .to_vec())
 }
 
 /// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
@@ -419,16 +419,16 @@ where
         }
         LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
     };
-    if !default_cursor.valid()?
-        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
-    {
+    if !default_cursor.valid()? || default_cursor.key() != seek_key.as_encoded().as_slice() {
         return Err(default_not_found_error(
             user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_reverse_load_data_by_write",
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor.value(&mut statistics.data).to_vec())
+    Ok(default_cursor
+        .value_with_stats(&mut statistics.data)
+        .to_vec())
 }
 
 pub fn has_data_in_range<S: Snapshot>(
@@ -446,7 +446,7 @@ pub fn has_data_in_range<S: Snapshot>(
         .build()?;
     match cursor.seek(left, statistic) {
         Ok(valid) => {
-            if valid && cursor.key(statistic) < right.as_encoded().as_slice() {
+            if valid && cursor.key() < right.as_encoded().as_slice() {
                 return Ok(true);
             }
         }
@@ -484,13 +484,8 @@ where
     I: Iterator,
 {
     let mut ret = None;
-    while write_cursor.valid()?
-        && Key::is_user_key_eq(
-            write_cursor.key(&mut statistics.write),
-            user_key.as_encoded(),
-        )
-    {
-        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+    while write_cursor.valid()? && Key::is_user_key_eq(write_cursor.key(), user_key.as_encoded()) {
+        let write_ref = WriteRef::parse(write_cursor.value_with_stats(&mut statistics.write))?;
         if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
             break;
         }
@@ -501,8 +496,7 @@ where
                 // successfully. The lock TS of such a lock is smaller than the commit TS of the
                 // latest write record.
                 // See https://github.com/tikv/tikv/issues/11187
-                let latest_write_commit_ts =
-                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?;
+                let latest_write_commit_ts = Key::decode_ts_from(write_cursor.key())?;
                 if after_ts < latest_write_commit_ts {
                     warn!("found the user key of which ts > after_ts. There may exist an unexpected stale non-pessimistic lock";
                         "user_key" => %user_key,
@@ -562,7 +556,7 @@ where
     {
         if write.write_type == WriteType::Put {
             if let Some(ts_filter) = ts_filter {
-                let k = write_cursor.key(&mut statistics.write);
+                let k = write_cursor.key();
                 if Key::decode_ts_from(k).unwrap() < ts_filter {
                     return Ok(seek_after());
                 }
