@@ -135,27 +135,31 @@ impl AdvanceTsWorker {
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
+            //
+            // If max_ts can not be updated, skip advancing resolved ts in this
+            // round, but do not return early: the next round must still be
+            // scheduled below, otherwise resolved ts stops advancing forever.
             if let Err(e) = cm.update_max_ts(min_ts, "resolved-ts") {
                 error!("failed to advance resolved_ts: failed to update max_ts in concurrency manager"; "err" => ?e);
-                return;
-            }
-            if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
-                if min_mem_lock_ts < min_ts {
-                    min_ts = min_mem_lock_ts;
-                    ts_source = TsSource::MemoryLock(lock);
+            } else {
+                if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
+                    if min_mem_lock_ts < min_ts {
+                        min_ts = min_mem_lock_ts;
+                        ts_source = TsSource::MemoryLock(lock);
+                    }
                 }
-            }
 
-            let regions = leader_resolver
-                .resolve(regions, min_ts, Some(advance_ts_interval))
-                .await;
-            if !regions.is_empty() {
-                if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
-                    regions,
-                    ts: min_ts,
-                    ts_source,
-                }) {
-                    info!("failed to schedule advance event"; "err" => ?e);
+                let regions = leader_resolver
+                    .resolve(regions, min_ts, Some(advance_ts_interval))
+                    .await;
+                if !regions.is_empty() {
+                    if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
+                        regions,
+                        ts: min_ts,
+                        ts_source,
+                    }) {
+                        info!("failed to schedule advance event"; "err" => ?e);
+                    }
                 }
             }
 
@@ -718,12 +722,13 @@ mod tests {
         time::Duration,
     };
 
+    use concurrency_manager::ActionOnInvalidMaxTs;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
-    use pd_client::PdClient;
+    use pd_client::{PdClient, PdFuture};
     use protobuf::RepeatedField;
     use raftstore::store::util::RegionReadProgress;
-    use tikv_util::store::new_peer;
+    use tikv_util::{store::new_peer, worker::dummy_scheduler};
 
     use super::*;
 
@@ -918,6 +923,54 @@ mod tests {
         );
 
         let _ = server.shutdown().await;
+    }
+
+    struct FixedTsoPdClient(TimeStamp);
+    impl PdClient for FixedTsoPdClient {
+        fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
+            let ts = self.0;
+            Box::pin(async move { Ok(ts) })
+        }
+    }
+
+    #[test]
+    fn test_advance_ts_continues_after_max_ts_update_rejected() {
+        let limit = TimeStamp::compose(1_000_000, 0);
+        let pd_ts = TimeStamp::compose(limit.physical() + 600_000, 0);
+        let cm = ConcurrencyManager::new_with_config(
+            1.into(),
+            Duration::from_secs(60),
+            ActionOnInvalidMaxTs::Error,
+            Some(Arc::new(FixedTsoPdClient(limit))),
+            Duration::from_millis(1),
+        );
+        cm.set_max_ts_limit(limit);
+        // The TSO returned by PD is rejected by the concurrency manager, as
+        // its double check confirms a much smaller TSO.
+        cm.update_max_ts(pd_ts, "test").unwrap_err();
+
+        let (scheduler, mut rx) = dummy_scheduler();
+        let pd_client: Arc<dyn PdClient> = Arc::new(FixedTsoPdClient(pd_ts));
+        let worker = AdvanceTsWorker::new(pd_client.clone(), scheduler, cm);
+        let leader_resolver = LeadershipResolver::new(
+            1,
+            pd_client,
+            Arc::new(EnvBuilder::new().build()),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(60),
+        );
+        worker.advance_ts_for_regions(
+            vec![1],
+            leader_resolver,
+            Duration::from_millis(100),
+            Arc::new(Notify::new()),
+        );
+
+        // Resolved ts must not be advanced in this round, but the next round
+        // must still be scheduled.
+        let task = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert!(matches!(task, Task::AdvanceResolvedTs { .. }), "{:?}", task);
     }
 
     #[test]
