@@ -1,14 +1,19 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
 
-use std::sync::{Arc, atomic::AtomicU32};
+use std::{
+    sync::{Arc, atomic::AtomicU32},
+    time::Duration,
+};
 
 use pd_client::RpcClient;
+use tikv_util::time::Instant;
 
 mod resource_group;
 pub use resource_group::{
-    AdmissionDecision, CONTROL_TICK, DelaySlotGuard, HIGH_PRIORITY, LEEWAY_FACTOR, LEEWAY_FRACTION,
-    MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
+    AdmissionDecision, CONTROL_TICK, CONTROL_TICK_OVERLOADED, DelaySlotGuard, HIGH_PRIORITY,
+    LEEWAY_FACTOR, LEEWAY_FRACTION, MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType,
+    ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
@@ -72,7 +77,21 @@ pub fn start_periodic_tasks(
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
-    bg_worker.spawn_interval_task(CONTROL_TICK, move || {
+    // Woken every second and gated to the current tick, so neither tick has
+    // to divide the other: spawn_interval_task's period is fixed, and a wakeup
+    // at the shorter tick would round the longer one up to its next multiple.
+    // TICK_SLACK absorbs timer jitter, which would otherwise defer a tick that
+    // arrives a moment early by a whole wakeup.
+    const TICK_WAKEUP: Duration = Duration::from_secs(1);
+    const TICK_SLACK: Duration = Duration::from_millis(500);
+    let tick_mgr = mgr.clone();
+    let mut last_tick = Instant::now_coarse();
+    bg_worker.spawn_interval_task(TICK_WAKEUP, move || {
+        let now = Instant::now_coarse();
+        if now.saturating_duration_since(last_tick) + TICK_SLACK < tick_mgr.control_tick() {
+            return;
+        }
+        last_tick = now;
         worker.adjust_quota();
         // priority_worker.adjust();
     });

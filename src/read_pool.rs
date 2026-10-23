@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow,
     convert::TryFrom,
     future::Future,
     sync::{
@@ -29,7 +28,7 @@ use thiserror::Error;
 use tikv_util::{
     deadline::Deadline,
     future::async_timeout,
-    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, priority_from_task_meta},
+    resource_control::{TaskMetadata, group_label, priority_from_task_meta},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
@@ -187,14 +186,9 @@ async fn admission_and_enqueue(
             }
             None => {
                 let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-                // Bound the client-supplied name before it becomes a label.
                 let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
-                let label = match resource_manager.as_deref() {
-                    Some(rm) => rm.bounded_group_name(name),
-                    None => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
-                };
                 UNIFIED_READ_POOL_FULL_REJECTED
-                    .with_label_values(&[label.as_ref()])
+                    .with_label_values(&[group_label(name)])
                     .inc();
                 return Err(ReadPoolError::UnifiedReadPoolFull);
             }
@@ -474,14 +468,18 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
-    /// Bound a wire-supplied group name for use as a metric label.
-    fn bounded_group_label<'a>(&self, resource_group: &'a str) -> Cow<'a, str> {
+    /// Whether an overload has been pinned on some group and the read pool is
+    /// protecting the others from it. Only then does the busy threshold yield:
+    /// a saturated queue is full of the noisy group's requests, so the
+    /// estimated wait would turn every victim away to a follower while
+    /// priority or admission control is already clearing its path here.
+    fn overload_is_attributed(&self) -> bool {
         match self {
             ReadPoolHandle::Yatp {
                 resource_manager: Some(rm),
                 ..
-            } => rm.bounded_group_name(resource_group),
-            _ => Cow::Borrowed(DEFAULT_RESOURCE_GROUP_NAME),
+            } => rm.protects_reads() && rm.has_noisy_groups(),
+            _ => false,
         }
     }
 
@@ -492,6 +490,14 @@ impl ReadPoolHandle {
         resource_group: &[u8],
     ) -> Result<(), errorpb::ServerIsBusy> {
         if busy_threshold.is_zero() {
+            return Ok(());
+        }
+        // This wait is the whole pool's, so attribution is the better answer.
+        if self.overload_is_attributed() {
+            let group = std::str::from_utf8(resource_group).unwrap_or_default();
+            UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED
+                .with_label_values(&[group_label(group)])
+                .inc();
             return Ok(());
         }
         let estimated_wait = match self.get_estimated_wait_duration() {
@@ -506,7 +512,7 @@ impl ReadPoolHandle {
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
         let group = std::str::from_utf8(resource_group).unwrap_or_default();
         UNIFIED_READ_POOL_BUSY_THRESHOLD_REJECTED
-            .with_label_values(&[self.bounded_group_label(group).as_ref()])
+            .with_label_values(&[group_label(group)])
             .inc();
         warn!("Already many pending tasks in the read queue, task is rejected";
             "busy_threshold" => ?&busy_threshold,
@@ -832,6 +838,9 @@ impl ReadPoolCpuTimeTracker {
     }
 }
 struct ReadPoolConfigRunner {
+    // The period the timer last slept for, and so the window the tick's
+    // measurements cover. `on_timeout` re-picks it after the adjustment, which
+    // is what keeps it equal to the elapsed time rather than the next period.
     interval: Duration,
     sender: SyncSender<usize>,
     handle: ReadPoolHandle,
@@ -882,6 +891,11 @@ impl RunnableWithTimer for ReadPoolConfigRunner {
 
     fn on_timeout(&mut self) {
         self.adjust_pool_size();
+        // Re-picked every tick, and after the adjustment so a tick that has
+        // just found the node loaded is followed by a fast one. Outside
+        // adjust_pool_size because that returns early when auto_adjust is off,
+        // and the period should not be frozen by it.
+        self.interval = self.control_tick();
     }
 }
 
@@ -892,6 +906,20 @@ impl ReadPoolConfigRunner {
                 running_tasks.iter().map(|r| r.get()).sum()
             }
             _ => unreachable!(),
+        }
+    }
+
+    // The period for the next tick, from the resource manager's last verdict:
+    // shorter while the node is loaded. CONTROL_TICK when resource control is
+    // off, which is the only case where there is no verdict to follow.
+    fn control_tick(&self) -> Duration {
+        match &self.handle {
+            ReadPoolHandle::Yatp {
+                resource_manager, ..
+            } => resource_manager
+                .as_ref()
+                .map_or(CONTROL_TICK, |rm| rm.control_tick()),
+            _ => CONTROL_TICK,
         }
     }
 
@@ -1165,6 +1193,13 @@ mod metrics {
                 &["resource_group"]
             )
             .unwrap();
+        pub static ref UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED: IntCounterVec =
+            register_int_counter_vec!(
+                "tikv_unified_read_pool_busy_threshold_skipped_total",
+                "Requests that skipped the estimated-wait gate because resource control manages the read queue",
+                &["resource_group"]
+            )
+            .unwrap();
         pub static ref UNIFIED_READ_POOL_FULL_REJECTED: IntCounterVec =
             register_int_counter_vec!(
                 "tikv_unified_read_pool_full_rejected_total",
@@ -1193,7 +1228,8 @@ mod tests {
     use futures_executor::block_on;
     use kvproto::kvrpcpb::ResourceControlContext;
     use raftstore::store::{ReadStats, WriteStats};
-    use resource_control::ResourceGroupManager;
+    use resource_control::{ResourceGroupManager, config::Config as ResourceControlConfig};
+    use tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
 
     use super::*;
     use crate::storage::TestEngineBuilder;
@@ -2445,21 +2481,144 @@ mod tests {
             "rejection must be attributed to its own group"
         );
 
-        // An unconfigured name must not become a label of its own.
+        // No name means the default group, not an empty label.
         let default_before = counter(DEFAULT_RESOURCE_GROUP_NAME);
         handle
-            .check_busy_threshold(Duration::from_millis(100), b"../../etc/passwd\n{injected}")
+            .check_busy_threshold(Duration::from_millis(100), b"")
             .expect_err("the estimate is over the threshold");
-        assert_eq!(
-            counter("../../etc/passwd\n{injected}"),
-            0,
-            "an unconfigured group name must never reach the label"
+        assert_eq!(counter(""), 0, "an unset group must not become a label");
+        assert_eq!(counter(DEFAULT_RESOURCE_GROUP_NAME), default_before + 1);
+
+        running_tasks[0].sub(500);
+    }
+
+    #[test]
+    fn test_busy_threshold_yields_to_an_attributed_overload() {
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 1,
+            max_tasks_per_worker: 100,
+            ..Default::default()
+        };
+        let resource_manager =
+            Arc::new(ResourceGroupManager::new(ResourceControlConfig::default()));
+        resource_manager.add_resource_group(new_resource_group_ru("rc".into(), 5000, 1));
+        let _ctl = resource_manager.derive_controller("read".into(), true);
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool_with_name(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager.clone()),
+            CleanupMethod::InPlace,
+            "test-busy-threshold-rc".to_owned(),
+            false,
         );
-        assert_eq!(
-            counter(DEFAULT_RESOURCE_GROUP_NAME),
-            default_before + 1,
-            "it is counted against the default group instead"
+        let handle = pool.handle();
+        let (inspector, running_tasks) = match &handle {
+            ReadPoolHandle::Yatp {
+                time_slice_inspector,
+                running_tasks,
+                ..
+            } => (time_slice_inspector, running_tasks),
+            _ => panic!("expected a yatp pool"),
+        };
+        inspector.atomic_ewma_nanos.store(
+            Duration::from_millis(1).as_nanos() as u64,
+            std::sync::atomic::Ordering::Release,
         );
+        running_tasks[0].add(500);
+        let threshold = Duration::from_millis(100);
+        assert_eq!(
+            handle.get_estimated_wait_duration(),
+            Some(Duration::from_millis(500)),
+            "the wait is still measured, and still reported as a metric"
+        );
+
+        // Nobody named yet, so the gate behaves as it always has.
+        assert!(!resource_manager.has_noisy_groups());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("with no attribution the advisory applies");
+
+        // A loaded node with background at its floor is what the detector acts on.
+        resource_manager.record_ru_consumption("rc", 10_000_000);
+        resource_manager.set_bg_cpu_at_floor(true);
+        // Two ticks: blame needs `MIN_ENGAGE_TICKS` of sustained overshoot.
+        resource_manager.online_adjust_resource_quota(90.0);
+        resource_manager.online_adjust_resource_quota(90.0);
+        assert!(
+            resource_manager.has_noisy_groups(),
+            "the overload is attributed"
+        );
+        assert!(!resource_manager.reports_noisy_groups());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("with reporting disabled the advisory still applies");
+
+        // Write admission reports noisy groups but leaves reads unprotected,
+        // so victims keep their replica fallback.
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_write_admission_control = true;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
+        assert!(resource_manager.reports_noisy_groups());
+        assert!(!resource_manager.protects_reads());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("write-side control alone does not lift the advisory");
+
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_write_admission_control = false;
+                c.enable_read_admission_control = true;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
+
+        let skipped = UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.with_label_values(&["rc"]);
+        let before = skipped.get();
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect("attribution supersedes the whole-pool advisory");
+        assert_eq!(skipped.get(), before + 1);
+
+        // Releasing the scheduler alone is not enough while the throttle holds.
+        resource_manager.reset_group_priorities();
+        assert!(resource_manager.has_noisy_groups(), "still throttled");
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect("and so the gate stays out of the way");
+
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_read_admission_control = false;
+                Ok(())
+            })
+            .unwrap();
+        resource_manager.refresh_cached_config();
+        assert!(resource_manager.has_noisy_groups(), "still throttled");
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("disabling read-side control online restores the advisory");
+
+        // A quiet node ramps the limit back, then release finds nothing held.
+        for _ in 0..100 {
+            resource_manager.online_adjust_resource_quota(0.0);
+        }
+        resource_manager.reset_group_priorities();
+        assert!(!resource_manager.has_noisy_groups());
+        handle
+            .check_busy_threshold(threshold, b"rc")
+            .expect_err("with nobody named the advisory applies again");
 
         running_tasks[0].sub(500);
     }

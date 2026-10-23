@@ -939,6 +939,8 @@ fn test_serde_custom_tikv_config() {
         baseline_burst_pct: 20.0,
         admission_max_delayed_count: 10_000,
         request_base_cost_micros: 40,
+        normal_control_interval: ReadableDuration::secs(20),
+        overloaded_control_interval: ReadableDuration::secs(3),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

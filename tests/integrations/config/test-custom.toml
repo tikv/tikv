@@ -711,3 +711,5 @@ historical-usage-window-mins = 15
 baseline-burst-pct = 20.0
 admission-max-delayed-count = 10000
 request-base-cost-micros = 40
+normal-control-interval = "20s"
+overloaded-control-interval = "3s"
