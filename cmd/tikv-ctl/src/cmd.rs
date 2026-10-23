@@ -135,16 +135,24 @@ pub enum Cmd {
         #[clap(
             short = 'f',
             long,
+            required_unless_present = "region",
+            conflicts_with = "region",
             help = RAW_KEY_HINT,
         )]
-        from: String,
+        from: Option<String>,
 
         #[clap(
             short = 't',
             long,
+            conflicts_with = "region",
             help = RAW_KEY_HINT,
         )]
         to: Option<String>,
+
+        #[clap(short = 'r', long)]
+        /// Set the region id, print all mvcc keys & values in the range of the
+        /// region
+        region: Option<u64>,
 
         #[clap(long)]
         /// Set the scan limit
@@ -1012,6 +1020,38 @@ mod tests {
             Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
+    }
+
+    #[test]
+    fn scan_accepts_region_without_from() {
+        let opt = Opt::try_parse_from(["tikv-ctl", "scan", "-r", "2", "--limit", "10"]).unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::Scan {
+                from,
+                region,
+                limit,
+                ..
+            } => {
+                assert_eq!(from, None);
+                assert_eq!(region, Some(2));
+                assert_eq!(limit, Some(10));
+            }
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn scan_region_conflicts_with_from() {
+        assert!(
+            Opt::try_parse_from(["tikv-ctl", "scan", "-r", "2", "-f", "zk", "--limit", "10"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn scan_requires_from_or_region() {
+        assert!(Opt::try_parse_from(["tikv-ctl", "scan", "--limit", "10"]).is_err());
     }
 
     #[test]
