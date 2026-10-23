@@ -173,6 +173,16 @@ High-risk contracts:
   Ready leader/term transitions.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
+- The PD worker and split-check workers must be constructed from clones of the
+  same `CoprocessorHost`, so they share one `SplitValidator`. If they use
+  separate validators, PD's automatic-split disable notifications do not reach
+  the split-check worker and the early scan guard silently stops working.
+- Disabled automatic splits must still refresh approximate statistics and keep
+  idle checks eligible for size/key or table-boundary splits, so re-enabling or
+  validator expiry can resume splitting without additional writes. Small size
+  and key estimates alone cannot rule out a table-boundary split. Once normal
+  checks resume, an automatic check with no applicable checkers must clear both
+  retry hints, allowing idle in-table Regions to stop scheduling checks.
 - Store-to-peer broadcasts can fan out one peer message per region. Keep this
   work bounded on the store FSM. `StoreUnreachable` must only do its per-store
   backoff check, snapshot the target region IDs, and enqueue the first
