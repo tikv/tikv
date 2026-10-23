@@ -360,6 +360,9 @@ pub struct WriteCompactionFilter {
     safe_point: u64,
     engine: Option<RocksEngine>,
     is_bottommost_level: bool,
+    // Only a full compaction sees the complete version chain; otherwise a newer version
+    // (e.g. re-applied by a snapshot) may live outside the input. See `handle_filtered_write`.
+    is_full_compaction: bool,
     encountered_errors: bool,
 
     write_batch: DeleteBatch<RocksWriteBatchVec>,
@@ -406,6 +409,7 @@ impl WriteCompactionFilter {
             safe_point,
             engine,
             is_bottommost_level: context.is_bottommost_level(),
+            is_full_compaction: context.is_full_compaction(),
             encountered_errors: false,
 
             write_batch,
@@ -458,10 +462,14 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn handle_bottommost_delete(&mut self) {
-        // Valid MVCC records should begin with `DATA_PREFIX`.
+    // The key currently being filtered, stripped of the data prefix.
+    fn current_mvcc_key(&self) -> Key {
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
-        let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
+        Key::from_encoded_slice(&self.mvcc_key_prefix[1..])
+    }
+
+    fn handle_bottommost_delete(&mut self) {
+        let key = self.current_mvcc_key();
         self.mvcc_deletions.push(key);
     }
 
@@ -547,8 +555,23 @@ impl WriteCompactionFilter {
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
-            self.write_batch
-                .delete(&self.mvcc_key_prefix, write.start_ts)?;
+            if self.is_full_compaction {
+                // Complete chain seen: the Default value is unreferenced, delete inline.
+                self.write_batch
+                    .delete(&self.mvcc_key_prefix, write.start_ts)?;
+            } else {
+                // A newer Write re-applied by a snapshot may reference this Default from
+                // outside the input; deleting it inline would orphan it (tikv/tikv#19870).
+                // Defer to the GC worker, which re-reads live history. Dedup: one task per
+                // key covers all its versions, filtered contiguously.
+                let key = self.current_mvcc_key();
+                if self.mvcc_deletions.last() != Some(&key) {
+                    self.mvcc_deletions.push(key);
+                    if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                        self.gc_mvcc_deletions();
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1344,5 +1367,95 @@ pub mod tests {
             delete_batch.largest_key.as_ref().unwrap().as_encoded(),
             key3
         );
+    }
+
+    // A snapshot re-applies Write@21 -> Default@20 above stale copies in a lower
+    // level. A later partial (non-full) GC compaction over that level must not
+    // delete Default@20, else the re-applied Write@21 is orphaned and reads
+    // fail. See tikv/tikv#19870.
+    #[test]
+    fn test_snapshot_reapply_then_lower_compaction_keeps_reapplied_value() {
+        use engine_traits::{CF_DEFAULT, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
+        use txn_types::{Key, Write, WriteType};
+
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut engine = TestEngineBuilder::new()
+            .path(dir.path())
+            .build_with_cfg(&cfg)
+            .unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let key = b"z-snapshot-key";
+        let value_20 = vec![b'b'; 512];
+        let value_80 = vec![b'c'; 512];
+
+        must_prewrite_put(&mut engine, key, &value_20, key, 20);
+        must_commit(&mut engine, key, 20, 21);
+        must_prewrite_put(&mut engine, key, &value_80, key, 80);
+        must_commit(&mut engine, key, 80, 81);
+        must_prewrite_delete(&mut engine, key, key, 100);
+        must_commit(&mut engine, key, 100, 101);
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+        raw_engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Push the old local history below L0.
+        let mut gc_runner = TestGcRunner::new(1);
+        gc_runner.target_level = Some(5);
+        gc_runner.gc(&raw_engine);
+
+        // Snapshot cleanup uses DeleteByWriter by default (use-delete-range=false).
+        let cleanup_dir = tempfile::TempDir::new().unwrap();
+        let cleanup_sst = cleanup_dir.path().join("cleanup.sst");
+        let end = [0xff];
+        let ranges = [Range::new(b"", &end)];
+        fail::cfg("manually_set_max_delete_count_by_key", "return").unwrap();
+        raw_engine
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteByWriter {
+                    sst_path: cleanup_sst.to_string_lossy().into_owned(),
+                    allow_write_during_ingestion: true,
+                },
+                &ranges,
+            )
+            .unwrap();
+        fail::remove("manually_set_max_delete_count_by_key");
+
+        // Complete the re-apply: Write@21 -> Default@20 land in fresh L0 files.
+        let write_key = Key::from_raw(key).append_ts(21.into()).into_encoded();
+        let default_key = Key::from_raw(key).append_ts(20.into()).into_encoded();
+        let write = Write::new(WriteType::Put, 20.into(), None);
+        let mut wb = raw_engine.write_batch();
+        wb.put_cf(CF_DEFAULT, &default_key, &value_20).unwrap();
+        wb.put_cf(CF_WRITE, &write_key, &write.as_ref().to_bytes())
+            .unwrap();
+        wb.write().unwrap();
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+        raw_engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        must_get(&mut engine, key, 200, &value_20);
+
+        // Force a partial compaction over only the old lower-level write files.
+        let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
+        assert!(!level_files[5].is_empty());
+        let files: Vec<String> = level_files[5]
+            .iter()
+            .map(|file| dir.path().join(file).to_string_lossy().into_owned())
+            .collect();
+        gc_runner.safe_point(120);
+        gc_runner.ratio_threshold = Some(0.0);
+        gc_runner.target_level = Some(6);
+        gc_runner.gc_on_files(&raw_engine, &files, CF_WRITE);
+
+        // The re-applied Default value must survive.
+        assert!(
+            raw_engine
+                .get_value_cf(CF_DEFAULT, &default_key)
+                .unwrap()
+                .is_some()
+        );
+        must_get(&mut engine, key, 200, &value_20);
     }
 }
