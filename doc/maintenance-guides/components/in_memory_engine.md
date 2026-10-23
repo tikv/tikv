@@ -124,6 +124,11 @@ eviction.
   for the snapshot.
 - Region state transitions must stay legal; ad hoc transitions are a red flag.
 - Eviction and deletion must respect active snapshots and GC tasks.
+- `RegionManager` locks `regions_map` first. Unless the `regions_map` write
+  lock is held, `historical_regions` must be locked before any region snapshot
+  list, and neither may be held while waiting for the `regions_map` write lock.
+  Snapshots are dropped concurrently on reader threads, so breaking this order
+  can deadlock the whole in-memory engine.
 - Memory accounting must stay aligned with actual cached data structures.
 
 ## Observability And Operational Signals
