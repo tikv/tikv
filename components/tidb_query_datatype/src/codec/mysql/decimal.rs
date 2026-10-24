@@ -1885,14 +1885,15 @@ impl ConvertTo<Decimal> for JsonRef<'_> {
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         match self.get_type() {
             JsonType::String => {
-                Decimal::from_str(self.get_str()?).or_else(|e| {
-                    ctx.handle_truncate_err(e)?;
-                    // FIXME: if TiDB's MyDecimal::FromString return err,
-                    //  it may has res. However, if TiKV's Decimal::from_str
-                    //  return err, it has no res, so I return zero here,
-                    //  but it may different from TiDB's MyDecimal::FromString
-                    Ok(Decimal::zero())
-                })
+                // Keep the value produced by the parser on truncation or
+                // overflow, like TiDB's `MyDecimal::FromString`.
+                match Decimal::from_bytes(self.get_str()?.as_bytes()) {
+                    Ok(res) => res.into_result(ctx),
+                    Err(e) => {
+                        ctx.handle_truncate_err(e)?;
+                        Ok(Decimal::zero())
+                    }
+                }
             }
             _ => {
                 let r: f64 = self.convert(ctx)?;
