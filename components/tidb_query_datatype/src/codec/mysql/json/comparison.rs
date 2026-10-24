@@ -28,6 +28,30 @@ fn compare_f64_with_epsilon(x: f64, y: f64) -> Option<Ordering> {
     }
 }
 
+// `x as f64` is rounded when |x| > 2^53, so an integral double that looks equal
+// is compared with the integer exactly.
+fn compare_i64_f64(x: i64, y: f64) -> Option<Ordering> {
+    let ord = compare_f64_with_epsilon(x as f64, y)?;
+    if ord != Ordering::Equal || y.trunc() != y {
+        return Some(ord);
+    }
+    if y >= 9223372036854775808.0 {
+        return Some(Ordering::Less);
+    }
+    Some(x.cmp(&(y as i64)))
+}
+
+fn compare_u64_f64(x: u64, y: f64) -> Option<Ordering> {
+    let ord = compare_f64_with_epsilon(x as f64, y)?;
+    if ord != Ordering::Equal || y.trunc() != y {
+        return Some(ord);
+    }
+    if y >= 18446744073709551616.0 {
+        return Some(Ordering::Less);
+    }
+    Some(x.cmp(&(y as u64)))
+}
+
 impl JsonRef<'_> {
     fn get_precedence(&self) -> i32 {
         match self.get_type() {
@@ -92,9 +116,7 @@ impl PartialOrd for JsonRef<'_> {
                 JsonType::I64 => match right.get_type() {
                     JsonType::I64 => Some(compare(self.get_i64(), right.get_i64())),
                     JsonType::U64 => Some(compare_i64_u64(self.get_i64(), right.get_u64())),
-                    JsonType::Double => {
-                        compare_f64_with_epsilon(self.get_i64() as f64, right.as_f64().unwrap())
-                    }
+                    JsonType::Double => compare_i64_f64(self.get_i64(), right.as_f64().unwrap()),
                     _ => unreachable!(),
                 },
                 JsonType::U64 => match right.get_type() {
@@ -102,14 +124,16 @@ impl PartialOrd for JsonRef<'_> {
                         Some(compare_i64_u64(right.get_i64(), self.get_u64()).reverse())
                     }
                     JsonType::U64 => Some(compare(self.get_u64(), right.get_u64())),
-                    JsonType::Double => {
-                        compare_f64_with_epsilon(self.get_u64() as f64, right.as_f64().unwrap())
-                    }
+                    JsonType::Double => compare_u64_f64(self.get_u64(), right.as_f64().unwrap()),
                     _ => unreachable!(),
                 },
-                JsonType::Double => {
-                    compare_f64_with_epsilon(self.as_f64().unwrap(), right.as_f64().unwrap())
-                }
+                JsonType::Double => match right.get_type() {
+                    JsonType::I64 => compare_i64_f64(right.get_i64(), self.as_f64().unwrap())
+                        .map(Ordering::reverse),
+                    JsonType::U64 => compare_u64_f64(right.get_u64(), self.as_f64().unwrap())
+                        .map(Ordering::reverse),
+                    _ => compare_f64_with_epsilon(self.as_f64().unwrap(), right.as_f64().unwrap()),
+                },
                 JsonType::Literal => {
                     // false is less than true.
                     self.get_literal().partial_cmp(&right.get_literal())
@@ -265,6 +289,61 @@ mod tests {
             (Json::from_u64(9), Json::from_f64(9.0), Ordering::Equal),
             (Json::from_u64(9), Json::from_f64(8.9), Ordering::Greater),
             (Json::from_u64(9), Json::from_f64(9.1), Ordering::Less),
+            (
+                Json::from_i64(1 << 53),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_i64((1 << 53) + 1),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_f64(9007199254740992.0),
+                Json::from_i64((1 << 53) + 1),
+                Ordering::Less,
+            ),
+            (
+                Json::from_i64(-(1 << 53) - 1),
+                Json::from_f64(-9007199254740992.0),
+                Ordering::Less,
+            ),
+            (
+                Json::from_i64(i64::MAX),
+                Json::from_f64(9223372036854775808.0),
+                Ordering::Less,
+            ),
+            (
+                Json::from_i64(i64::MIN),
+                Json::from_f64(-9223372036854775808.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_u64(1 << 53),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_u64((1 << 53) + 1),
+                Json::from_f64(9007199254740992.0),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_f64(9007199254740992.0),
+                Json::from_u64((1 << 53) + 1),
+                Ordering::Less,
+            ),
+            (
+                Json::from_u64(u64::MAX),
+                Json::from_f64(18446744073709551616.0),
+                Ordering::Less,
+            ),
+            (
+                Json::from_u64(1 << 63),
+                Json::from_f64(9223372036854775808.0),
+                Ordering::Equal,
+            ),
         ];
 
         for (left, right, expected) in cases {
