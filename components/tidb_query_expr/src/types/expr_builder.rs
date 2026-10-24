@@ -502,7 +502,7 @@ where
                 )?
             }
             ExprType::MysqlDuration if eval_type == EvalType::Duration => {
-                extract_scalar_value_duration(tree_node.take_val())?
+                extract_scalar_value_duration(tree_node.take_val(), tree_node.get_field_type())?
             }
             ExprType::MysqlDecimal if eval_type == EvalType::Decimal => {
                 extract_scalar_value_decimal(tree_node.take_val())?
@@ -652,12 +652,18 @@ fn extract_scalar_value_date_time(
 }
 
 #[inline]
-fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
+fn extract_scalar_value_duration(val: Vec<u8>, field_type: &FieldType) -> Result<ScalarValue> {
     let n = val
         .as_slice()
         .read_i64()
         .map_err(|_| other_err!("Unable to decode duration from the request"))?;
-    let value = Duration::from_nanos(n, MAX_FSP)
+    let fsp = field_type.as_accessor().decimal();
+    let fsp = if (0..=MAX_FSP as isize).contains(&fsp) {
+        fsp as i8
+    } else {
+        MAX_FSP
+    };
+    let value = Duration::from_nanos(n, fsp)
         .map_err(|_| other_err!("Unable to decode duration from the request"))?;
     Ok(ScalarValue::Duration(Some(value)))
 }
@@ -1548,6 +1554,28 @@ mod tests {
         for i in 6..10 {
             RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
                 .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_duration_constant_fsp() {
+        let cases = vec![
+            (0, 0, "00:00:01"),
+            (1, 1, "00:00:01.0"),
+            (-1, MAX_FSP, "00:00:01.000000"),
+            (7, MAX_FSP, "00:00:01.000000"),
+        ];
+        for (decimal, fsp, expected) in cases {
+            let mut node =
+                ExprDefBuilder::constant_duration(Duration::from_secs(1, 0).unwrap()).build();
+            node.mut_field_type().set_decimal(decimal);
+            let exp =
+                RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 0)
+                    .unwrap();
+            let nodes = exp.into_inner();
+            let d = nodes[0].constant_value().as_duration().unwrap();
+            assert_eq!(d.fsp(), fsp as u8);
+            assert_eq!(d.to_string(), expected);
         }
     }
 
