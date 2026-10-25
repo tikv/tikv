@@ -118,6 +118,12 @@ lazy_static! {
         exponential_buckets(1024.0, 2.0, 16).unwrap()
     )
     .unwrap();
+    pub static ref UPLOAD_FILE_SIZE: CounterVec = register_counter_vec!(
+        "tikv_log_backup_upload_file_size_bytes",
+        "The total size in bytes of files uploaded by log backup.",
+        &["type"],
+    )
+    .unwrap();
     pub static ref INITIAL_SCAN_DURATION: Histogram = register_histogram!(
         "tikv_log_backup_initial_scan_duration_sec",
         "The duration of initial scanning.",
