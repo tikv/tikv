@@ -424,6 +424,10 @@ impl CompactionRunnerHandle {
     }
 }
 
+/// Tells raftstore that data in the Region key range `[start_key, end_key)`
+/// changed outside the Raft write path, so cached Region sizes there are stale.
+pub type RegionSizeChangeHint = Box<dyn Fn(Vec<u8>, Vec<u8>) + Send>;
+
 /// Runs automatic compaction on TiKV
 /// Runs in a dedicated thread and continuously evaluates compaction candidates
 pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
@@ -432,6 +436,7 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     engine: E,
     control: Arc<CompactionControl>,
     cfg_tracker: GcWorkerConfigManager,
+    region_size_change_hint: RegionSizeChangeHint,
 }
 
 /// Calculates compaction score based on tombstones, estimated reclaimable
@@ -518,6 +523,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             engine,
             cfg_tracker,
             Arc::new(CompactionControl::default()),
+            Box::new(|_: Vec<u8>, _: Vec<u8>| {}),
         )
     }
 
@@ -527,6 +533,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         engine: E,
         cfg_tracker: GcWorkerConfigManager,
         control: Arc<CompactionControl>,
+        region_size_change_hint: RegionSizeChangeHint,
     ) -> Self {
         Self {
             safe_point_provider,
@@ -534,6 +541,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             engine,
             control,
             cfg_tracker,
+            region_size_change_hint,
         }
     }
 
@@ -878,6 +886,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             AUTO_COMPACTION_DURATION_HISTOGRAM_VEC
                 .compact
                 .observe(compact_duration.as_secs_f64());
+
+            // GC reclaims space during this compaction without going through
+            // Raft, so neither `size_diff_hint` nor compaction-declined bytes
+            // reliably trigger a size recheck. Without one, PD keeps the stale
+            // size and never merges the Region.
+            (self.region_size_change_hint)(
+                current_candidate.region.get_start_key().to_vec(),
+                current_candidate.region.get_end_key().to_vec(),
+            );
 
             processed_count += 1;
             info!("compacted candidate";
