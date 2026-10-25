@@ -1566,9 +1566,13 @@ mod tests {
             (7, MAX_FSP, "00:00:01.000000"),
         ];
         for (decimal, fsp, expected) in cases {
+            let producer_fsp = if decimal == 1 { 1 } else { 0 };
             let mut node =
-                ExprDefBuilder::constant_duration(Duration::from_secs(1, 0).unwrap()).build();
-            node.mut_field_type().set_decimal(decimal);
+                ExprDefBuilder::constant_duration(Duration::from_secs(1, producer_fsp).unwrap())
+                    .build();
+            if decimal != 1 {
+                node.mut_field_type().set_decimal(decimal);
+            }
             let exp =
                 RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 0)
                     .unwrap();
