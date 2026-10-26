@@ -488,6 +488,81 @@ fn test_async_destroy_uninitialized_peer_reentry() {
     check_async_destroy_peer_reentry(false);
 }
 
+#[test]
+fn test_async_destroy_peer_completion_before_snapshot_step1() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.pd_client.must_add_peer(region_id, new_peer(2, 2));
+    let peer = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let (cleanup_tx, cleanup_rx) = mpsc::channel();
+    fail::cfg_callback("before_clear_peer_meta", move || {
+        cleanup_tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    // Pause the real worker's completion in the source FSM before it locks
+    // StoreMeta. Step1 queued below must be handled after this completion.
+    let (completed_tx, completed_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    fail::cfg_callback("raft_store_after_destroy_peer", move || {
+        completed_tx.send(()).unwrap();
+        let _ = resume_rx.lock().unwrap().recv();
+    })
+    .unwrap();
+    cluster.pd_client.must_remove_peer(region_id, peer);
+    completed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    cleanup_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Inject the dependency that a late target snapshot registers. Registration
+    // and sending Step1 hold the same lock, as in destroy_regions_for_snapshot.
+    let target_region_id = region_id + 1;
+    let router = cluster.get_router(3).unwrap();
+    {
+        let mut meta = cluster.store_metas[&3].lock().unwrap();
+        assert!(meta.regions.contains_key(&region_id));
+        meta.targets_map.insert(region_id, target_region_id);
+        meta.destroyed_region_for_snap.insert(region_id, true);
+        meta.atomic_snap_regions
+            .entry(target_region_id)
+            .or_default()
+            .insert(region_id, false);
+        router
+            .significant_send(
+                region_id,
+                SignificantMsg::MergeResult {
+                    target_region_id,
+                    target: new_peer(3, 4),
+                    result: MergeResultKind::FromTargetSnapshotStep1,
+                },
+            )
+            .unwrap();
+    }
+
+    drop(resume_tx);
+    cluster.must_remove_region(3, region_id);
+    fail::remove("raft_store_after_destroy_peer");
+    {
+        let meta = cluster.store_metas[&3].lock().unwrap();
+        assert!(!meta.regions.contains_key(&region_id));
+        assert!(!meta.targets_map.contains_key(&region_id));
+        assert!(!meta.destroyed_region_for_snap.contains_key(&region_id));
+        assert!(meta.atomic_snap_regions[&target_region_id].is_empty());
+    }
+
+    // A replacement peer must still install its snapshot and read the data.
+    // This also drains the old peer's region-worker tasks.
+    cluster.pd_client.must_add_peer(region_id, new_peer(3, 4));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    assert_eq!(cleanup_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+    fail::remove("before_clear_peer_meta");
+}
+
 fn check_async_destroy_peer_reentry(initialized: bool) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();

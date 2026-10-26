@@ -4507,28 +4507,16 @@ where
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        // Clear merge related structures.
-        if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
-            if need_atomic {
-                panic!(
-                    "{} should destroy with target region atomically",
-                    self.fsm.peer.tag
-                );
-            } else {
-                // Remove itself from atomic_snap_regions as it has cleaned both
-                // data and metadata.
-                let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                meta.atomic_snap_regions
-                    .get_mut(&target_region_id)
-                    .unwrap()
-                    .remove(&region_id);
-                meta.destroyed_region_for_snap.remove(&region_id);
-                info!("peer has destroyed, clean up for incoming overlapped snapshot";
-                    "region_id" => region_id,
-                    "peer_id" => self.fsm.peer_id(),
-                    "target_region_id" => target_region_id,
-                );
-            }
+        // Reconcile with snapshot registration under the same StoreMeta lock.
+        // Completion may precede Step1, which would otherwise clear need_atomic.
+        if let Some(target_region_id) =
+            meta.remove_destroyed_region_from_snapshot(region_id, merged_by_target)
+        {
+            info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => target_region_id,
+            );
         }
 
         meta.pending_merge_targets.remove(&region_id);
