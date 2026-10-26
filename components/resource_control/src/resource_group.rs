@@ -57,8 +57,13 @@ pub const HIGH_PRIORITY: u32 = 16;
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 
-/// Period of both control loops; every `*_PCT` below is per tick.
+/// Period of both control loops while quiet; every `*_PCT` below is per tick.
+/// Default for `resource-control.normal-control-interval`.
 pub const CONTROL_TICK: Duration = Duration::from_secs(10);
+
+/// Default for `resource-control.overloaded-control-interval`: the period
+/// while loaded.
+pub const CONTROL_TICK_OVERLOADED: Duration = Duration::from_secs(5);
 
 /// Margin below a setpoint before a controller expands into it.
 const LEEWAY_PCT: f64 = 10.0;
@@ -430,6 +435,16 @@ impl RuTrackerSlot {
     }
 }
 
+/// Held by either actuator: a finite CPU rate limit, or deprioritization.
+fn is_held(slot: &(RuTracker, Arc<ResourceLimiter>)) -> bool {
+    slot.0.scheduler_backpressure
+        || slot
+            .1
+            .get_limiter(ResourceType::Cpu)
+            .get_rate_limit()
+            .is_finite()
+}
+
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
@@ -460,6 +475,10 @@ pub struct ResourceGroupManager {
     read_pool_cpu_pressure: AtomicU64,
     // `Config::request_base_cost_micros`, mirrored out of the config lock.
     request_base_cost_micros: AtomicU64,
+    // `reports_noisy_groups`'s gate, off the config lock: asked per request.
+    reports_noisy_groups: AtomicBool,
+    // `protects_reads`'s gate, likewise: asked on every busy-threshold check.
+    protects_reads: AtomicBool,
     // Bucket count for a new tracker; the window is not hot-reloadable.
     ru_num_buckets: usize,
     // The read pool's own CPU tracker; its `quiet_baseline` is the floor.
@@ -470,6 +489,11 @@ pub struct ResourceGroupManager {
     read_pool_scale_up_allowed: AtomicBool,
     // The groups the last tick blamed: one writer, both actuators reading.
     noisy_groups: RwLock<HashSet<String>>,
+    // Mirror of `!noisy_groups.is_empty()`, read per request instead of the lock.
+    has_noisy_groups: AtomicBool,
+    // Last tick's `loaded` verdict, so both control loops can pick their period
+    // without recomputing the score on the read pool's own clock.
+    overloaded: AtomicBool,
 }
 
 impl Default for ResourceGroupManager {
@@ -575,6 +599,8 @@ impl ResourceGroupManager {
         // 2 buckets per minute (30s each), as the per-group trackers use.
         let num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
         let request_base_cost_micros = config.request_base_cost_micros;
+        let reports_noisy_groups = config.reports_noisy_groups();
+        let protects_reads = config.protects_reads();
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -590,9 +616,13 @@ impl ResourceGroupManager {
             bg_cpu_at_floor: AtomicBool::new(false),
             read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
             request_base_cost_micros: AtomicU64::new(request_base_cost_micros),
+            reports_noisy_groups: AtomicBool::new(reports_noisy_groups),
+            protects_reads: AtomicBool::new(protects_reads),
             read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, num_buckets)),
             read_pool_scale_up_allowed: AtomicBool::new(false),
             noisy_groups: RwLock::new(HashSet::new()),
+            has_noisy_groups: AtomicBool::new(false),
+            overloaded: AtomicBool::new(false),
         };
 
         // init the default resource group by default.
@@ -808,6 +838,21 @@ impl ResourceGroupManager {
         }
     }
 
+    /// Whether a client should be told about noisy groups at all: only once
+    /// fair scheduling or admission control is on. The throttle and detection
+    /// run regardless, but until an operator opts in to one of these, a client
+    /// reacting to the verdict is a behaviour change nobody asked for.
+    ///
+    /// Read from the cache `refresh_cached_config` keeps, not the config lock.
+    pub fn reports_noisy_groups(&self) -> bool {
+        self.reports_noisy_groups.load(Ordering::Relaxed)
+    }
+
+    /// Cached [`Config::protects_reads`].
+    pub fn protects_reads(&self) -> bool {
+        self.protects_reads.load(Ordering::Relaxed)
+    }
+
     /// Charges `group` the fixed arrival cost, whether it runs or not.
     fn charge_request_base_cost(&self, group: &str) {
         let micros = self.request_base_cost_micros.load(Ordering::Relaxed);
@@ -819,10 +864,34 @@ impl ResourceGroupManager {
 
     /// Re-reads the values the request path caches; once per control tick.
     pub fn refresh_cached_config(&self) {
-        self.request_base_cost_micros.store(
-            self.config.value().request_base_cost_micros,
-            Ordering::Relaxed,
-        );
+        let config = self.config.value();
+        self.request_base_cost_micros
+            .store(config.request_base_cost_micros, Ordering::Relaxed);
+        self.reports_noisy_groups
+            .store(config.reports_noisy_groups(), Ordering::Relaxed);
+        self.protects_reads
+            .store(config.protects_reads(), Ordering::Relaxed);
+    }
+
+    /// Whether an overload has been detected and attributed to some group.
+    pub fn has_noisy_groups(&self) -> bool {
+        self.has_noisy_groups.load(Ordering::Acquire)
+    }
+
+    /// The period both control loops should run at, from the last tick's
+    /// verdict: `overloaded_control_interval` while the node is loaded, so
+    /// detection reaches a verdict sooner, and `normal_control_interval`
+    /// otherwise.
+    ///
+    /// Relaxed, and read a tick late by design: the worst case is one tick at
+    /// the wrong period on either side of a transition.
+    pub fn control_tick(&self) -> Duration {
+        let config = self.config.value();
+        if self.overloaded.load(Ordering::Relaxed) {
+            config.overloaded_control_interval.0
+        } else {
+            config.normal_control_interval.0
+        }
     }
 
     /// Record `ru` units consumed by `group` into the sliding-window tracker
@@ -913,6 +982,10 @@ impl ResourceGroupManager {
         let loaded = cpu_score > threshold;
         let cleared = cpu_score < threshold * LEEWAY_FACTOR;
         let quiet = cpu_score < threshold * BASELINE_QUIET_FACTOR;
+        // Both loops read this to pick their next period. `loaded` rather than
+        // `under_pressure`: the faster tick is wanted while the evidence is
+        // still being gathered, which is before background has yielded.
+        self.overloaded.store(loaded, Ordering::Relaxed);
 
         // A group over its average is no problem on an idle node.
         let under_pressure = loaded && self.is_bg_cpu_at_floor();
@@ -924,7 +997,7 @@ impl ResourceGroupManager {
         self.evict_idle_trackers();
         // Written, never cleared here; `reset_group_priorities` clears it.
         if under_pressure {
-            *self.noisy_groups.write() = self.select_noisy_groups(cpu_score);
+            self.set_noisy_groups(self.select_noisy_groups(cpu_score));
         }
 
         self.adjust_group_throttling(cpu_score, under_pressure);
@@ -967,6 +1040,41 @@ impl ResourceGroupManager {
         self.noisy_groups.read().clone()
     }
 
+    /// The blamed groups, for reporting to clients. An empty result means
+    /// nothing is blamed; callers that put this on the wire must keep that
+    /// distinct from not reporting at all, since a client can only clear what
+    /// it knows on the strength of a positive "nobody" answer.
+    ///
+    /// Empty unless [`Self::reports_noisy_groups`]. Empty rather than
+    /// unreported, so that switching the gates off online clears what clients
+    /// already know instead of leaving the groups pinned.
+    pub fn noisy_group_names(&self) -> Vec<String> {
+        if !self.reports_noisy_groups() || !self.has_noisy_groups() {
+            return Vec::new();
+        }
+        self.noisy_groups.read().iter().cloned().collect()
+    }
+
+    /// The flag is stored while the set's write lock is held, with release
+    /// ordering: the detection tick and the read pool's reset run on different
+    /// threads, and a reader that sees the flag must then find a set that
+    /// agrees with it. A stale flag would skip the busy threshold on an
+    /// unattributed overload or report nobody noisy while groups are still
+    /// held.
+    fn set_noisy_groups(&self, groups: HashSet<String>) {
+        let mut set = self.noisy_groups.write();
+        let empty = groups.is_empty();
+        *set = groups;
+        self.has_noisy_groups.store(!empty, Ordering::Release);
+    }
+
+    /// Ends the episode. Callers must first check nothing is `is_held`.
+    fn clear_noisy_groups(&self) {
+        let mut set = self.noisy_groups.write();
+        set.clear();
+        self.has_noisy_groups.store(false, Ordering::Release);
+    }
+
     /// The biggest movers, taken until they cover the overshoot.
     fn select_noisy_groups(&self, cpu_score: f64) -> HashSet<String> {
         let cfg = self.config.value();
@@ -1003,13 +1111,7 @@ impl ResourceGroupManager {
             let guard = entry.lock().unwrap();
             let eligible = candidate_baseline(&guard.0, policy, burst_factor);
             let current = guard.0.current_rate();
-            // A finite CPU rate limit *is* backpressure: read the limiter.
-            let throttled = guard
-                .1
-                .get_limiter(ResourceType::Cpu)
-                .get_rate_limit()
-                .is_finite();
-            let held = throttled || guard.0.scheduler_backpressure;
+            let held = is_held(&guard);
             drop(guard);
 
             if held {
@@ -1065,6 +1167,7 @@ impl ResourceGroupManager {
 
         // Every group: the unnamed ones need their capacity handed back.
         let recovering = !under_pressure && cpu_score < leeway_threshold;
+        let mut still_held = false;
         for entry in &self.ru_trackers {
             let mut guard = entry.lock().unwrap();
             // One step per tick, INFINITY only past 2x the live average.
@@ -1091,6 +1194,8 @@ impl ResourceGroupManager {
                 }
             }
 
+            still_held |= is_held(&guard);
+
             let limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
             let val = if limit.is_finite() {
                 (limit / 1_000_000.0) * 100.0
@@ -1100,6 +1205,11 @@ impl ResourceGroupManager {
             metrics::GROUP_QUOTA_LIMIT_VEC
                 .with_label_values(&[guard.1.name(), "cpu"])
                 .set(val);
+        }
+
+        // The throttle's own clock; the read pool's release may never come.
+        if !under_pressure && !still_held {
+            self.clear_noisy_groups();
         }
     }
 
@@ -1145,9 +1255,15 @@ impl ResourceGroupManager {
         for controller in self.registry.read().iter() {
             controller.reset_all_group_phases();
         }
-        self.noisy_groups.write().clear();
+        let mut still_held = false;
         for entry in &self.ru_trackers {
-            entry.lock().unwrap().0.set_scheduler_backpressure(false);
+            let mut guard = entry.lock().unwrap();
+            guard.0.set_scheduler_backpressure(false);
+            still_held |= is_held(&guard);
+        }
+        // The throttle runs on its own clock, so a still-limited group stays named.
+        if !still_held {
+            self.clear_noisy_groups();
         }
     }
 
@@ -1163,7 +1279,7 @@ impl ResourceGroupManager {
         now: u64,
     ) -> f64 {
         let historical_cpu = self.record_read_pool_cpu_at(read_pool_cpu, interval_secs, now);
-        // The quiet-tick floor: the live average rises as load is shed.
+        // The normal-interval floor: the live average rises as load is shed.
         let quiet_cpu = self.quiet_read_pool_floor();
         let floor_cpu = quiet_cpu.unwrap_or(0.0).max(MIN_READ_POOL_TARGET_CORES);
 
@@ -1906,6 +2022,72 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_noisy_group_names_mirrors_the_set() {
+        let mgr = ResourceGroupManager::new(Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        });
+        assert!(mgr.noisy_group_names().is_empty());
+
+        mgr.set_noisy_groups(HashSet::from(["tenant1".to_owned(), "tenant2".to_owned()]));
+        let mut names = mgr.noisy_group_names();
+        names.sort();
+        assert_eq!(names, vec!["tenant1".to_owned(), "tenant2".to_owned()]);
+
+        // Clearing has to be visible, since this is what tells a client to stop
+        // pinning the group.
+        mgr.clear_noisy_groups();
+        assert!(mgr.noisy_group_names().is_empty());
+    }
+
+    // The detection tick sets the group set while the read pool's reset clears
+    // it, from different threads. Whatever a reader observes, the flag and the
+    // set must agree, or the busy threshold is skipped on an unattributed
+    // overload.
+    #[test]
+    fn test_noisy_flag_agrees_with_set_under_concurrent_set_and_clear() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let setter = {
+            let (mgr, stop) = (mgr.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    mgr.set_noisy_groups(HashSet::from(["tenant1".to_owned()]));
+                    mgr.clear_noisy_groups();
+                }
+            })
+        };
+        let clearer = {
+            let (mgr, stop) = (mgr.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    mgr.clear_noisy_groups();
+                }
+            })
+        };
+
+        for _ in 0..20_000 {
+            // Take the read lock first so the writer cannot slip between the two
+            // observations; the invariant is about the pair the writer publishes.
+            let set = mgr.noisy_groups.read();
+            let flag = mgr.has_noisy_groups();
+            assert_eq!(
+                flag,
+                !set.is_empty(),
+                "flag {flag} disagrees with set {set:?}"
+            );
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        setter.join().unwrap();
+        clearer.join().unwrap();
+    }
+
+    #[test]
     fn test_resource_group() {
         let resource_manager = ResourceGroupManager::default();
         assert_eq!(resource_manager.resource_groups.len(), 1);
@@ -2435,7 +2617,7 @@ pub(crate) mod tests {
                 .refresh_engagement_ticks(burst_factor, loaded, cleared);
         }
         if under_pressure {
-            *mgr.noisy_groups.write() = mgr.select_noisy_groups(cpu_score);
+            mgr.set_noisy_groups(mgr.select_noisy_groups(cpu_score));
         }
         mgr.adjust_group_throttling(cpu_score, under_pressure);
     }
@@ -2468,7 +2650,7 @@ pub(crate) mod tests {
 
     /// Runs detection and stores the verdict, without the tracker refresh.
     fn stage_noisy(mgr: &ResourceGroupManager) {
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
+        mgr.set_noisy_groups(mgr.select_noisy_groups(PEAK_CPU_PCT));
     }
 
     /// Marks `name` as over its target long enough to be blamed.
@@ -2682,6 +2864,79 @@ pub(crate) mod tests {
             0.0,
             "the gauge must be dropped on eviction, not left holding its last value"
         );
+    }
+
+    #[test]
+    fn test_noisy_groups_are_reported_only_behind_a_gate() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        mgr.add_resource_group(new_resource_group_ru(
+            "held".to_owned(),
+            1000,
+            MEDIUM_PRIORITY,
+        ));
+        let t0 = RuTracker::now_secs();
+        seed_tracker(&mgr, "held", 100.0, 1000.0, t0);
+        mgr.set_noisy_groups(HashSet::from(["held".to_owned()]));
+
+        // Named, but with every gate off nothing reaches a client.
+        assert!(!mgr.reports_noisy_groups());
+        assert!(mgr.noisy_group_names().is_empty());
+        // Detection itself is not gated, only the reporting of it.
+        assert!(mgr.has_noisy_groups());
+
+        // Any one gate is enough.
+        type Gate = fn(&mut Config);
+        let gates: [Gate; 3] = [
+            |c| c.enable_fair_scheduling = true,
+            |c| c.enable_read_admission_control = true,
+            |c| c.enable_write_admission_control = true,
+        ];
+        for enable in gates {
+            let mut cfg = Config::default();
+            enable(&mut cfg);
+            mgr.get_config()
+                .update(|c| -> Result<(), ()> {
+                    *c = cfg.clone();
+                    Ok(())
+                })
+                .unwrap();
+            // Written past the dispatcher, so refresh as a tick would.
+            mgr.refresh_cached_config();
+            assert!(mgr.reports_noisy_groups());
+            assert_eq!(mgr.noisy_group_names(), vec!["held".to_owned()]);
+        }
+
+        // Switched back off online: the names go empty, which clears clients.
+        mgr.get_config()
+            .update(|c| -> Result<(), ()> {
+                *c = Config::default();
+                Ok(())
+            })
+            .unwrap();
+        mgr.refresh_cached_config();
+        assert!(mgr.noisy_group_names().is_empty());
+    }
+
+    #[test]
+    fn test_control_tick_follows_the_load() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        let threshold = mgr.config.value().fg_cpu_throttle_threshold;
+
+        // Nothing measured yet, so the quiet period rather than the fast one:
+        // a node is not assumed loaded until a tick says so.
+        assert_eq!(mgr.control_tick(), CONTROL_TICK);
+
+        mgr.online_adjust_resource_quota(threshold + 10.0);
+        assert_eq!(mgr.control_tick(), CONTROL_TICK_OVERLOADED);
+
+        // Still loaded while merely inside the leeway band, which is the band
+        // that holds the candidacy counter rather than clearing it.
+        mgr.online_adjust_resource_quota(threshold + 0.1);
+        assert_eq!(mgr.control_tick(), CONTROL_TICK_OVERLOADED);
+
+        // And back, so an idle node stops paying for the faster tick.
+        mgr.online_adjust_resource_quota(threshold - 10.0);
+        assert_eq!(mgr.control_tick(), CONTROL_TICK);
     }
 
     #[test]
@@ -4035,6 +4290,75 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_has_noisy_groups_mirrors_the_set() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        mgr.set_bg_cpu_at_floor(true);
+        seed_tracker(&mgr, "tenant1", 100.0, 1000.0, t0);
+        assert!(!mgr.has_noisy_groups(), "nothing named yet");
+
+        tick(&mgr, 90.0);
+        assert!(mgr.noisy_groups().contains("tenant1"));
+        assert!(mgr.has_noisy_groups(), "the mirror follows the write");
+
+        mgr.set_noisy_groups(HashSet::new());
+        assert!(!mgr.has_noisy_groups(), "an empty write reads as not noisy");
+
+        mgr.set_noisy_groups(HashSet::from(["tenant1".to_owned()]));
+        assert!(mgr.has_noisy_groups());
+
+        // The scheduler releasing alone is not enough while the limit stands.
+        mgr.reset_group_priorities();
+        assert!(mgr.has_noisy_groups(), "still throttled, so still named");
+
+        // Hand the limit back and the next release clears both together.
+        mgr.ru_trackers
+            .get("tenant1")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .1
+            .get_limiter(ResourceType::Cpu)
+            .set_rate_limit(f64::INFINITY);
+        mgr.reset_group_priorities();
+        assert!(
+            !mgr.has_noisy_groups(),
+            "nothing holds anything, so the set and the mirror clear together"
+        );
+        assert!(mgr.noisy_groups().is_empty());
+    }
+
+    #[test]
+    fn test_the_throttle_ends_the_episode_without_the_read_pool() {
+        // The read pool's release runs on its own clock and may never come.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        mgr.set_bg_cpu_at_floor(true);
+        seed_tracker(&mgr, "spike", 100.0, 1000.0, t0);
+
+        tick(&mgr, 90.0);
+        assert!(mgr.has_noisy_groups(), "named and clamped");
+        assert!(limit_of(&mgr, "spike").is_finite());
+
+        // A named group may not be clamped yet, so no clear while live.
+        mgr.set_bg_cpu_at_floor(true);
+        tick(&mgr, 90.0);
+        assert!(mgr.has_noisy_groups(), "still under pressure");
+
+        // Quiet node: the throttle ramps the limit back to unlimited.
+        set_sampled_rate(&mgr, "spike", 100.0);
+        for _ in 0..40 {
+            tick(&mgr, 50.0);
+        }
+        assert!(limit_of(&mgr, "spike").is_infinite(), "limit handed back");
+        assert!(
+            !mgr.has_noisy_groups(),
+            "and the episode ends with it, with no read pool involved"
+        );
+        assert!(mgr.noisy_groups().is_empty());
+    }
+
+    #[test]
     fn test_lifecycle_baseline_catching_up_does_not_release_the_culprit() {
         // One of three spikes, and its own average then rises to absorb it.
         let mgr = ResourceGroupManager::new(Config::default());
@@ -4127,7 +4451,7 @@ pub(crate) mod tests {
         let t0 = RuTracker::now_secs();
         seed_tracker(&mgr, "spike", 100.0, 1000.0, t0);
 
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
+        mgr.set_noisy_groups(mgr.select_noisy_groups(PEAK_CPU_PCT));
         assert!(
             mgr.noisy_groups().contains("spike"),
             "named on the first tick"
@@ -4136,7 +4460,7 @@ pub(crate) mod tests {
 
         // Next tick: the throttle has worked and it is back inside its gate.
         set_sampled_rate(&mgr, "spike", 100.0);
-        *mgr.noisy_groups.write() = mgr.select_noisy_groups(PEAK_CPU_PCT);
+        mgr.set_noisy_groups(mgr.select_noisy_groups(PEAK_CPU_PCT));
         assert!(
             mgr.noisy_groups().contains("spike"),
             "still held, so the cache must still name it"

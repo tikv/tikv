@@ -383,7 +383,7 @@ grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", rev = "f8ad079c8e9812ed5900b0c12b5f1d97171464c4" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
