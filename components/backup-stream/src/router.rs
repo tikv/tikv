@@ -972,6 +972,10 @@ pub struct StreamTaskHandler {
     flushing_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// flushing_meta_files contains meta files pending flush.
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
+    /// Checkpoint proof bound to the current flushing generation: set on the
+    /// first flush, reused on retry, cleared with the files on success. Keeps
+    /// the published checkpoint tied to the uploaded payload. See #19897.
+    flushing_resolved: RwLock<Option<ResolvedRegions>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
     /// The min resolved TS of all regions involved.
@@ -1053,6 +1057,7 @@ impl StreamTaskHandler {
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
+            flushing_resolved: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
@@ -1085,6 +1090,7 @@ impl StreamTaskHandler {
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
+            flushing_resolved: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
@@ -1237,6 +1243,22 @@ impl StreamTaskHandler {
         self.flushing.load(Ordering::SeqCst)
     }
 
+    /// True when no proof is bound yet, i.e. this flush is not a retry.
+    pub async fn is_new_flush_generation(&self) -> bool {
+        self.flushing_resolved.read().await.is_none()
+    }
+
+    /// The proof to flush with: the bound one on retry, or `fresh` (stored) on
+    /// a new generation. Keeps the published checkpoint bound to the
+    /// uploaded payload. See #19897.
+    pub async fn effective_flushing_resolved(&self, fresh: ResolvedRegions) -> ResolvedRegions {
+        self.flushing_resolved
+            .write()
+            .await
+            .get_or_insert(fresh)
+            .clone()
+    }
+
     /// move need-flushing files to flushing_files.
     #[instrument(skip_all)]
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
@@ -1269,6 +1291,9 @@ impl StreamTaskHandler {
 
     #[instrument(skip_all)]
     pub async fn clear_flushing_files(&self) {
+        // Drop the generation's proof with its files so the next flush resolves
+        // fresh. See #19897.
+        *self.flushing_resolved.write().await = None;
         for (_, data_file, _) in self.flushing_files.write().await.drain(..) {
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
             self.total_size
@@ -1342,6 +1367,10 @@ impl StreamTaskHandler {
             .await?;
 
         let filepath = &merged_file_info.path;
+
+        fail::fail_point!("log_backup_flush_log_upload", |_| {
+            Err(Error::Other(box_err!("injected upload failure")))
+        });
 
         // flush to external storage
         let ret = self
