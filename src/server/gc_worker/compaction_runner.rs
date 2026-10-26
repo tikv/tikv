@@ -887,15 +887,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 .compact
                 .observe(compact_duration.as_secs_f64());
 
-            // GC reclaims space during this compaction without going through
-            // Raft, so neither `size_diff_hint` nor compaction-declined bytes
-            // reliably trigger a size recheck. Without one, PD keeps the stale
-            // size and never merges the Region.
-            (self.region_size_change_hint)(
-                current_candidate.region.get_start_key().to_vec(),
-                current_candidate.region.get_end_key().to_vec(),
-            );
-
             processed_count += 1;
             info!("compacted candidate";
                   "region_id" => current_candidate.region.get_id(),
@@ -923,22 +914,33 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let end_key = enc_end_key(&candidate.region);
 
         // Compact write CF first (most important for GC)
-        self.compact_range_cf(
+        let write_result = self.compact_range_cf(
             CF_WRITE,
             Some(&start_key),
             Some(&end_key),
             bottommost_level_force,
-        )?;
+        );
 
         // Then compact default CF
-        self.compact_range_cf(
+        let default_result = self.compact_range_cf(
             CF_DEFAULT,
             Some(&start_key),
             Some(&end_key),
             bottommost_level_force,
-        )?;
+        );
 
-        Ok(())
+        // GC reclaims space during these compactions without going through
+        // Raft, so neither `size_diff_hint` nor compaction-declined bytes
+        // reliably trigger a size recheck. Without one, PD keeps the stale
+        // size and never merges the Region. Either CF may have reclaimed space.
+        if write_result.is_ok() || default_result.is_ok() {
+            (self.region_size_change_hint)(
+                candidate.region.get_start_key().to_vec(),
+                candidate.region.get_end_key().to_vec(),
+            );
+        }
+
+        write_result.and(default_result)
     }
 
     /// Compacts a range in a specific column family
