@@ -150,6 +150,12 @@ High-risk contracts:
 
 ## Critical Invariants
 
+- Peer destruction can wait for persisted readies and flushed log GC before
+  scheduling metadata cleanup. Once scheduled, cleanup and destruction observers
+  must not run again, and late merge messages must preserve `ReadyToDestroy`
+  until the region worker's completion message stops the peer FSM.
+  A late target snapshot must wait for the source's existing cleanup; its
+  dependency is removed only when that cleanup completes.
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
 - Normal load-based split keys must be validated against the current Region's
