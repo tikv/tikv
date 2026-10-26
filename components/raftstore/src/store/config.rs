@@ -24,6 +24,9 @@ use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
 const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
 
+/// Same as the normal store pool's default size.
+const DEFAULT_STORE_LOW_PRIORITY_POOL_SIZE: usize = 2;
+
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
@@ -306,6 +309,10 @@ pub struct Config {
     #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
+
+    /// Moves a noisy tenant's regions to the low-priority store pollers.
+    /// Does not affect resource control's other throttling.
+    pub enable_noisy_tenant_demotion: bool,
 
     /// If it is 0, it means io tasks are handled in store threads.
     pub store_io_pool_size: usize,
@@ -611,6 +618,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
+            enable_noisy_tenant_demotion: false,
             store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
@@ -979,9 +987,25 @@ impl Config {
                 limit
             ));
         }
-        if self.store_batch_system.low_priority_pool_size > 0 {
-            // The store thread pool doesn't need a low-priority thread currently.
-            self.store_batch_system.low_priority_pool_size = 0;
+        // A demoted tenant's whole working set lands here, so default to more
+        // than the apply pool's one poller.
+        if self.store_batch_system.low_priority_pool_size.is_none() {
+            self.store_batch_system.low_priority_pool_size =
+                Some(DEFAULT_STORE_LOW_PRIORITY_POOL_SIZE);
+        }
+        let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size();
+        // With no low poller, demoted regions would never be polled again.
+        if self.enable_noisy_tenant_demotion && store_low_priority_pool_size == 0 {
+            return Err(box_err!(
+                "store-low-priority-pool-size must be greater than 0 while \
+                 enable-noisy-tenant-demotion is true, or demoted regions stop being polled"
+            ));
+        }
+        if store_low_priority_pool_size > limit {
+            return Err(box_err!(
+                "store-low-priority-pool-size should be less than or equal to: {}",
+                limit
+            ));
         }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 || size > 10240 {
@@ -1291,7 +1315,7 @@ impl Config {
             .set(self.apply_batch_system.reschedule_duration.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_priority_pool_size"])
-            .set(self.apply_batch_system.low_priority_pool_size as f64);
+            .set(self.apply_batch_system.low_priority_pool_size() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
@@ -1304,7 +1328,7 @@ impl Config {
             .set(self.store_batch_system.reschedule_duration.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_priority_pool_size"])
-            .set(self.store_batch_system.low_priority_pool_size as f64);
+            .set(self.store_batch_system.low_priority_pool_size() as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
@@ -1677,6 +1701,48 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        // Unset, the store low pool gets its own default; apply keeps the
+        // shared one.
+        cfg = Config::new();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, None);
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(2));
+        assert_eq!(
+            cfg.apply_batch_system.low_priority_pool_size(),
+            1,
+            "the apply pool keeps the shared default"
+        );
+
+        cfg = Config::new();
+        cfg.store_batch_system.low_priority_pool_size = Some(4);
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(
+            cfg.store_batch_system.low_priority_pool_size,
+            Some(4),
+            "a configured size is kept, not clamped"
+        );
+
+        // Zero would strand demoted regions.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = Some(0);
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        // ...unless demotion is off.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = false;
+        cfg.store_batch_system.low_priority_pool_size = Some(0);
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(0));
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(10241);

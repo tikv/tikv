@@ -3,7 +3,7 @@
 use std::{
     sync::{Arc, atomic::AtomicUsize},
     thread::sleep,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use batch_system::{test_runner::*, *};
@@ -246,5 +246,149 @@ fn test_thread_priority() {
         .unwrap();
     // Low priority pollers are left untouched.
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(caller_pri));
+    system.shutdown();
+}
+
+/// An FSM whose priority changes must move to the matching pool and back, as
+/// noisy-region demotion relies on.
+#[test]
+fn test_priority_change_migrates_fsm_between_pools() {
+    // Returns (FSM priority, handling pool). No asserts inside the poller: a
+    // panic there kills the thread and hides the real failure.
+    fn observe(
+        router: &BatchRouter<Runner, Runner>,
+        tx: &mpsc::Sender<(Priority, Priority)>,
+        rx: &mpsc::Receiver<(Priority, Priority)>,
+    ) -> (Priority, Priority) {
+        let tx = tx.clone();
+        router
+            .send(
+                1,
+                Message::Callback(Box::new(move |h: &Handler, r: &mut Runner| {
+                    tx.send((r.get_priority(), h.get_priority())).unwrap();
+                })),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).unwrap()
+    }
+
+    fn set_priority(
+        router: &BatchRouter<Runner, Runner>,
+        tx: &mpsc::Sender<(Priority, Priority)>,
+        rx: &mpsc::Receiver<(Priority, Priority)>,
+        priority: Priority,
+    ) {
+        let tx = tx.clone();
+        router
+            .send(
+                1,
+                Message::Callback(Box::new(move |h: &Handler, r: &mut Runner| {
+                    r.set_priority(priority);
+                    tx.send((r.get_priority(), h.get_priority())).unwrap();
+                })),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    // Probes until `want` handles the FSM. The move happens at the end of the
+    // round, so the old poller may still drain a message sent right after.
+    fn wait_for_pool(
+        router: &BatchRouter<Runner, Runner>,
+        tx: &mpsc::Sender<(Priority, Priority)>,
+        rx: &mpsc::Receiver<(Priority, Priority)>,
+        want: Priority,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (fsm_priority, pool) = observe(router, tx, rx);
+            if pool == want {
+                assert_eq!(
+                    fsm_priority, want,
+                    "the FSM and the pool handling it must agree once it has moved"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "FSM never reached the {:?} pool",
+                want
+            );
+        }
+    }
+
+    let (control_tx, control_fsm) = Runner::new(10);
+    let (router, mut system) =
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
+    system.spawn("test".to_owned(), Builder::new());
+    let (tx, rx) = mpsc::unbounded();
+
+    let state_cnt = Arc::new(AtomicUsize::new(0));
+    let (fsm_tx, fsm) = Runner::new(10);
+    router.register(1, BasicMailbox::new(fsm_tx, fsm, state_cnt));
+
+    // Starts on the normal pool.
+    assert_eq!(
+        observe(&router, &tx, &rx),
+        (Priority::Normal, Priority::Normal)
+    );
+
+    // Demote it.
+    set_priority(&router, &tx, &rx, Priority::Low);
+    wait_for_pool(&router, &tx, &rx, Priority::Low);
+
+    // Releasing it must send it back.
+    set_priority(&router, &tx, &rx, Priority::Normal);
+    wait_for_pool(&router, &tx, &rx, Priority::Normal);
+
+    system.shutdown();
+}
+
+fn poller_busy_seconds(pool: &str) -> f64 {
+    prometheus::gather()
+        .iter()
+        .filter(|f| f.get_name() == "tikv_batch_system_poller_busy_seconds_total")
+        .flat_map(|f| f.get_metric())
+        .filter(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.get_name() == "priority" && l.get_value() == pool)
+                && m.get_label()
+                    .iter()
+                    .any(|l| l.get_name() == "type" && l.get_value() == "store")
+        })
+        .map(|m| m.get_counter().get_value())
+        .sum()
+}
+
+#[test]
+fn test_poller_busy_time_counts_time_spent_handling() {
+    let (control_tx, control_fsm) = Runner::new(10);
+    let (router, mut system) =
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
+    system.spawn("test".to_owned(), Builder::new());
+    let (tx, rx) = mpsc::unbounded();
+    let state_cnt = Arc::new(AtomicUsize::new(0));
+    let (fsm_tx, fsm) = Runner::new(10);
+    router.register(1, BasicMailbox::new(fsm_tx, fsm, state_cnt));
+
+    // Off-CPU time spent holding an FSM counts as busy.
+    let before = poller_busy_seconds("normal");
+    router
+        .send(
+            1,
+            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
+                sleep(Duration::from_millis(100));
+                tx.send(()).unwrap();
+            })),
+        )
+        .unwrap();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Flushed at the end of the round, after the callback acks.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while poller_busy_seconds("normal") - before < 0.1 {
+        assert!(Instant::now() < deadline, "busy time was never flushed");
+        sleep(Duration::from_millis(10));
+    }
     system.shutdown();
 }

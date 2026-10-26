@@ -523,7 +523,7 @@ where
             store_id,
             pending_create_peers,
             priority,
-            yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
+            yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size() > 0,
             pending_ssts: vec![],
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
@@ -6982,7 +6982,7 @@ mod tests {
         let cfg = {
             let mut cfg = Config::default();
             cfg.apply_batch_system.pool_size = 1;
-            cfg.apply_batch_system.low_priority_pool_size = 0;
+            cfg.apply_batch_system.low_priority_pool_size = Some(0);
             Arc::new(VersionTrack::new(cfg))
         };
         let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
@@ -7166,7 +7166,7 @@ mod tests {
         let cfg = {
             let mut cfg = Config::default();
             cfg.apply_batch_system.pool_size = 1;
-            cfg.apply_batch_system.low_priority_pool_size = 0;
+            cfg.apply_batch_system.low_priority_pool_size = Some(0);
             Arc::new(VersionTrack::new(cfg))
         };
         let (router, mut system) = create_apply_batch_system(&cfg.value(), None);

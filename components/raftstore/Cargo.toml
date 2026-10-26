@@ -92,4 +92,5 @@ engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 file_system = { workspace = true, features = ["testexport"] }
 panic_hook = { workspace = true }
+resource_control = { workspace = true, features = ["testexport"] }
 test_sst_importer = { workspace = true }
