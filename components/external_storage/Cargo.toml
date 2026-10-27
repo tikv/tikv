@@ -13,7 +13,7 @@ failpoints = ["fail/failpoints"]
 fips = ["gcp_v2/fips"]
 
 [dependencies]
-async-compression = { version = "0.4.27", features = ["futures-io", "zstd"] }
+async-compression = { version = "0.4.45", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 aws = { workspace = true }
 azure = { workspace = true }

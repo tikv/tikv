@@ -2547,7 +2547,8 @@ mod tests {
                 buf.extend_from_slice(slice.as_ref());
             }
         }
-        block_on_external_io(writer.flush()).unwrap();
+        // Finish the compression frame before reading the underlying buffer.
+        block_on_external_io(writer.shutdown()).unwrap();
         drop(writer);
 
         // calc checksum of the file buffer

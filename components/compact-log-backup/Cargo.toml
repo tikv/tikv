@@ -8,7 +8,7 @@ edition = "2021"
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-async-compression = { version = "0.4.12", features = ["tokio", "futures-io", "zstd"] }
+async-compression = { version = "0.4.45", features = ["tokio", "futures-io", "zstd"] }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
@@ -50,7 +50,7 @@ txn_types = { workspace = true }
 uuid = { version = "0.8", features = ["v4", "serde"] }
 
 # Below are used by `test_utils` only.
-zstd = "0.11"
+zstd = "0.14.3"
 
 [dev-dependencies]
 pprof = { version = "0.13", default-features = false, features = [
