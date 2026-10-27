@@ -1,6 +1,6 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{future::Future, io, pin::Pin};
+use std::{future::Future, io, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
 use cloud::{
@@ -144,6 +144,11 @@ impl std::error::Error for GcsApiError {
 }
 
 const PUT_READ_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Upper bound for a single object upload. A request that stalls without
+/// failing would otherwise never return, so callers such as the log backup
+/// flush could neither retry nor report an error.
+const PUT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 struct PutResourceSource {
     reader: Mutex<PutResource<'static>>,
@@ -465,15 +470,17 @@ async fn put_with_client<S>(
     content_length: u64,
     storage_class: Option<String>,
     predefined_acl: Option<String>,
+    timeout: Duration,
 ) -> io::Result<()>
 where
     S: StorageStub + 'static,
 {
-    // SAFETY: `put()` awaits `write_object(...).send_buffered()` to
-    // completion before returning, so the widened lifetime never outlives
-    // the original `reader`. In google-cloud-storage 1.0.0, the buffered
-    // upload path consumes the payload inside that future and does not
-    // detach it into a background task.
+    // SAFETY: `put()` either awaits `write_object(...).send_buffered()` to
+    // completion or drops that future on timeout before returning, so the
+    // widened lifetime never outlives the original `reader`. In
+    // google-cloud-storage 1.0.0, the buffered upload path consumes the
+    // payload inside that future and does not detach it into a background
+    // task.
     let reader = unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) };
     let payload = PutResourceSource::new(reader, content_length);
     let begin = Instant::now_coarse();
@@ -494,9 +501,14 @@ where
     if let Some(predefined_acl) = predefined_acl.as_ref() {
         builder = builder.set_predefined_acl(predefined_acl.clone());
     }
-    builder
-        .send_buffered()
+    tokio::time::timeout(timeout, builder.send_buffered())
         .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("gcp_v2 write_object timed out after {timeout:?}"),
+            )
+        })?
         .map(|_| ())
         .map_err(|e| GcsApiError::new("write_object", e).into_io_error())?;
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC
@@ -533,6 +545,7 @@ impl BlobStorage for GcsStorage {
             content_length,
             storage_class,
             predefined_acl,
+            PUT_TIMEOUT,
         ))
         .await
     }
@@ -703,6 +716,23 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct StalledWriteStorageStub;
+
+    impl google_cloud_storage::stub::Storage for StalledWriteStorageStub {
+        fn write_object_buffered<P>(
+            &self,
+            _payload: P,
+            _req: WriteObjectRequest,
+            _options: RequestOptions,
+        ) -> impl Future<Output = google_cloud_storage::Result<Object>> + Send
+        where
+            P: google_cloud_storage::streaming_source::StreamingSource + Send + Sync + 'static,
+        {
+            future::pending()
+        }
+    }
+
     #[test]
     fn gax_grpc_code_maps_to_io_kind() {
         let status = google_cloud_gax::error::rpc::Status::default()
@@ -770,6 +800,7 @@ mod tests {
             5,
             storage.inner.config.storage_class.clone(),
             storage.inner.config.predefined_acl.clone(),
+            PUT_TIMEOUT,
         ))
         .await?;
 
@@ -793,6 +824,7 @@ mod tests {
             0,
             storage.inner.config.storage_class.clone(),
             storage.inner.config.predefined_acl.clone(),
+            PUT_TIMEOUT,
         ))
         .await?;
 
@@ -800,6 +832,28 @@ mod tests {
         let after_simple = histogram_sample_count("gcp", "insert_simple");
         assert!(after_multipart > before_multipart);
         assert_eq!(after_simple, before_simple);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stalled_put_times_out() -> io::Result<()> {
+        let storage = make_test_storage("COLDLINE", "projectPrivate")?;
+        let client = google_cloud_storage::client::Storage::from_stub(StalledWriteStorageStub);
+
+        let err = Box::pin(put_with_client(
+            &client,
+            storage.bucket_resource_name(),
+            storage.full_path("stalled"),
+            PutResource(Box::new(futures::io::Cursor::new(b"alpha".to_vec()))),
+            5,
+            storage.inner.config.storage_class.clone(),
+            storage.inner.config.predefined_acl.clone(),
+            Duration::from_millis(50),
+        ))
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         Ok(())
     }
 }
