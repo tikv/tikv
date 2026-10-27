@@ -10345,6 +10345,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_pessimistic_lock_resumable_wake_up_after_failure() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let k = Key::from_raw(b"k");
+
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(k.clone(), b"v".to_vec())],
+                    b"k".to_vec(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Two resumable requests that require the key not to exist wait for the lock.
+        let (tx1, rx1) = channel();
+        for start_ts in [11, 12] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(k.clone(), true)],
+                        start_ts,
+                        start_ts,
+                        false,
+                        false,
+                    )
+                    .allow_lock_with_conflict(true),
+                    expect_value_with_checker_callback(
+                        tx1.clone(),
+                        start_ts as i32,
+                        |res: Result<PessimisticLockResults>| {
+                            let e = res.unwrap().0[0].unwrap_err();
+                            match e.inner() {
+                                ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                                    mvcc::Error(box mvcc::ErrorInner::WriteConflict { .. }),
+                                ))) => (),
+                                e => panic!("unexpected error chain: {:?}", e),
+                            }
+                        },
+                    ),
+                )
+                .unwrap();
+        }
+        rx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
+
+        // Committing the key wakes up the first waiter, which fails as the key now
+        // exists without acquiring the lock. The second waiter must still be woken up.
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k], 10.into(), 20.into(), None, Context::default()),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut finished = vec![
+            rx1.recv_timeout(Duration::from_secs(5)).unwrap(),
+            rx1.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ];
+        finished.sort();
+        assert_eq!(finished, vec![11, 12]);
+    }
+
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
