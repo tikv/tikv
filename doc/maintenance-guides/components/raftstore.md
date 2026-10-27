@@ -181,10 +181,15 @@ High-risk contracts:
   idle checks eligible for size/key or table-boundary splits, so re-enabling or
   validator expiry can resume splitting without additional writes. Small size
   and key estimates alone cannot rule out a table-boundary split. Once normal
-  checks resume, an automatic whole-Region check with no applicable checkers or
-  no split keys must clear both retry hints, allowing idle in-table Regions to
-  stop scheduling checks even when bucket-only checkers are present. A partial
-  key-range check cannot establish that the entire Region is unsplittable.
+  checks resume, an automatic whole-Region check with no applicable checkers,
+  or no approximate split keys and both estimates below their split thresholds,
+  must clear both retry hints so idle in-table Regions stop checking even with
+  bucket-only checkers. An empty approximate result alone cannot rule out a
+  split: size/key estimates include memtables, but split candidates require SST
+  properties. For empty approximate results, retain retry hints if either
+  estimate is missing or at or above its threshold, so a later flush can resume
+  splitting without new writes. A partial key-range check cannot establish that
+  the entire Region is unsplittable.
 - Approximate checks selected for buckets must still honor table-boundary
   splits. The table checker returns an already known boundary or requests a
   scan fallback when the boundary requires examining keys; disabled automatic

@@ -157,6 +157,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
             }
         };
 
+        host.approximate_size = Some(region_size);
         // send it to raftstore to update region approximate size
         self.router
             .update_approximate_size(region_id, Some(region_size), None);

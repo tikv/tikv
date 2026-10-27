@@ -835,9 +835,14 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             }
             CheckPolicy::Approximate => match host.approximate_split_keys(region, tablet) {
                 Ok(keys) => {
-                    if keys.is_empty() && reason != SplitReason::Admin && !is_key_range {
-                        // Bucket-only checks can finish without scanning. Clear
-                        // whole-Region retry hints just as a completed scan does.
+                    if keys.is_empty()
+                        && reason != SplitReason::Admin
+                        && !is_key_range
+                        && host.is_below_split_thresholds()
+                    {
+                        // Bucket-only checks can finish without scanning. An
+                        // oversized Region may lack SST samples until a flush,
+                        // so only clear hints when both estimates are small.
                         self.router
                             .update_approximate_size(region_id, None, Some(false));
                         self.router
@@ -1410,7 +1415,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::KvTestEngine,
     };
-    use engine_traits::{ALL_CFS, MiscExt, SyncMutable};
+    use engine_traits::{ALL_CFS, MiscExt, Range, RangePropertiesExt, SyncMutable};
     use tempfile::TempDir;
     use tikv_util::config::ReadableSize;
 
@@ -1753,6 +1758,111 @@ mod tests {
             assert_eq!(refreshed_buckets, buckets_enabled);
             trigger.post_triggered();
             assert!(trigger.should_skip(u64::MAX));
+        }
+    }
+
+    #[test]
+    fn test_disabled_split_check_with_unflushed_data() {
+        for ((split_by_keys, buckets_enabled), expire) in [false, true]
+            .into_iter()
+            .cartesian_product([false, true])
+            .cartesian_product([false, true])
+        {
+            let path = TempDir::new().unwrap();
+            let engine =
+                engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+            let (max_size, max_keys) = if split_by_keys {
+                (1_000_000, 10)
+            } else {
+                (4096, 1_000_000)
+            };
+            let policy = if split_by_keys {
+                CheckPolicy::Approximate
+            } else {
+                // Let the size observer select Approximate from the threshold.
+                CheckPolicy::Scan
+            };
+            let mut cfg = Config {
+                region_max_size: Some(ReadableSize(max_size)),
+                region_split_size: Some(ReadableSize(max_size / 2)),
+                region_max_keys: Some(max_keys),
+                region_split_keys: Some(max_keys / 2),
+                region_size_threshold_for_approximate: ReadableSize(8192),
+                enable_region_bucket: Some(buckets_enabled),
+                region_bucket_size: ReadableSize(1024),
+                ..Default::default()
+            };
+            cfg.validate(false).unwrap();
+            for i in 0..20 {
+                let key = Key::from_raw(format!("{i:04}").as_bytes()).append_ts(1.into());
+                engine
+                    .put_cf(CF_WRITE, &keys::data_key(key.as_encoded()), &[0; 1024])
+                    .unwrap();
+            }
+            let mut region = Region::default();
+            region.set_id(1);
+            region.mut_peers().push(Default::default());
+            // Memtable bytes count towards the split threshold, but there are
+            // no SST properties from which to choose an approximate split key.
+            let start = keys::enc_start_key(&region);
+            let end = keys::enc_end_key(&region);
+            assert!(
+                engine
+                    .get_range_approximate_split_keys(Range::new(&start, &end), 1)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (tx, rx) = mpsc::sync_channel(100);
+            let host = CoprocessorHost::new(tx.clone(), cfg);
+            let validator = host.split_validator.clone();
+            let mut runner = Runner::new(engine.clone(), tx, host, None);
+            let mut trigger = SplitCheckTrigger::default();
+            validator.disable(region.get_id());
+            runner.run(Task::split_check(region.clone(), true, policy, None));
+            check_disabled_result(
+                &rx,
+                &mut trigger,
+                [!split_by_keys, split_by_keys],
+                buckets_enabled,
+            );
+            if expire {
+                validator.expire_for_test(region.get_id());
+            } else {
+                validator.enable(region.get_id());
+            }
+            // Two idle checks must retain retry eligibility. A subsequent flush
+            // makes split keys available without any additional logical writes.
+            for flushed in [false, false, true] {
+                assert!(!trigger.should_skip(u64::MAX));
+                if flushed {
+                    engine.flush_cf(CF_WRITE, true).unwrap();
+                }
+                trigger.post_triggered();
+                runner.run(Task::split_check(region.clone(), true, policy, None));
+                let mut asked_split = false;
+                for task in rx.try_iter() {
+                    match task {
+                        SchedTask::UpdateApproximateSize {
+                            size, splitable, ..
+                        } => {
+                            trigger.on_approximate_region_size(size, splitable);
+                        }
+                        SchedTask::UpdateApproximateKeys {
+                            keys, splitable, ..
+                        } => {
+                            trigger.on_approximate_region_keys(keys, splitable);
+                        }
+                        SchedTask::AskSplit { .. } => asked_split = true,
+                        SchedTask::RefreshRegionBuckets { .. } => {}
+                        task => panic!("unexpected split check result: {task:?}"),
+                    }
+                }
+                assert_eq!(asked_split, flushed);
+                assert!(
+                    !trigger.should_skip(u64::MAX),
+                    "lost retry eligibility: split_by_keys={split_by_keys}, buckets={buckets_enabled}, expire={expire}"
+                );
+            }
         }
     }
 
