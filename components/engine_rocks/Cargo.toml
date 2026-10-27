@@ -58,6 +58,8 @@ txn_types = { workspace = true }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
+# PR https://github.com/tikv/rust-rocksdb/pull/866 enables patched zstd dependencies.
+rev = "a23b35bd22a816dce17e4a4f5580c48957e85ab2"
 package = "rocksdb"
 features = ["encryption"]
 
