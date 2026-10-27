@@ -473,3 +473,7 @@ incremental = false
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+# Replace this temporary fork with the upstream revision after tikv/rust-rocksdb#865 merges.
+[patch.'https://github.com/tikv/rust-rocksdb']
+rocksdb = { git = "https://github.com/hbisheng/rust-rocksdb", rev = "c823c3483882b5b61ce88c511497af2caea43804" }
