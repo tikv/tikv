@@ -793,7 +793,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             .new_split_checker_host(region, tablet, reason, policy);
 
         if host.skip() {
-            if reason != SplitReason::Admin {
+            if reason != SplitReason::Admin && !is_key_range {
                 // No checker needs this Region. Clear retry hints retained
                 // while automatic splits were disabled, including table splits.
                 self.router
@@ -835,6 +835,14 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             }
             CheckPolicy::Approximate => match host.approximate_split_keys(region, tablet) {
                 Ok(keys) => {
+                    if keys.is_empty() && reason != SplitReason::Admin && !is_key_range {
+                        // Bucket-only checks can finish without scanning. Clear
+                        // whole-Region retry hints just as a completed scan does.
+                        self.router
+                            .update_approximate_size(region_id, None, Some(false));
+                        self.router
+                            .update_approximate_keys(region_id, None, Some(false));
+                    }
                     if host.enable_region_bucket() {
                         if let Err(e) =
                             self.approximate_check_bucket(tablet, region, &mut host, bucket_ranges)
@@ -1605,8 +1613,15 @@ mod tests {
                 Key::from_raw(&prefix).into_encoded()
             })
             .collect();
-        for key in &table_keys {
-            engine.put_cf(CF_WRITE, &keys::data_key(key), b"v").unwrap();
+        for table_id in [1, 2] {
+            for handle in 0..20 {
+                let key = tidb_query_datatype::codec::table::encode_row_key(table_id, handle);
+                let key = keys::data_key(Key::from_raw(&key).as_encoded());
+                engine.put_cf(CF_WRITE, &key, b"v").unwrap();
+                if handle % 10 == 9 {
+                    engine.flush_cf(CF_WRITE, true).unwrap();
+                }
+            }
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
         let cfg = Config {
@@ -1627,9 +1642,21 @@ mod tests {
         let mut region = Region::default();
         region.set_id(1);
         region.mut_peers().push(Default::default());
-        region.set_start_key(table_keys[0].clone());
-
-        for expire in [false, true] {
+        for (((start_in_table, buckets_enabled), prefer_approximate_bucket), expire) in
+            [false, true]
+                .into_iter()
+                .cartesian_product([false, true])
+                .cartesian_product([false, true])
+                .cartesian_product([false, true])
+        {
+            region.set_start_key(if start_in_table {
+                table_keys[0].clone()
+            } else {
+                Vec::new()
+            });
+            runner.coprocessor.cfg.enable_region_bucket = Some(buckets_enabled);
+            runner.coprocessor.cfg.prefer_approximate_bucket = prefer_approximate_bucket;
+            runner.coprocessor.cfg.region_bucket_size = ReadableSize(1);
             validator.disable(region.get_id());
             let mut trigger = SplitCheckTrigger::default();
             for _ in 0..3 {
@@ -1640,7 +1667,8 @@ mod tests {
                     CheckPolicy::Scan,
                     None,
                 ));
-                let (size, keys) = check_disabled_result(&rx, &mut trigger, [true, false], false);
+                let (size, keys) =
+                    check_disabled_result(&rx, &mut trigger, [true, false], buckets_enabled);
                 assert!(size < max_size);
                 assert!(keys < max_keys);
             }
@@ -1659,15 +1687,24 @@ mod tests {
             ));
             assert!(rx.try_iter().any(|task| matches!(
                 task,
-                SchedTask::AskSplit { split_keys, .. } if split_keys == vec![table_keys[1].clone()]
+                SchedTask::AskSplit { split_keys, .. }
+                    if split_keys == vec![table_keys[usize::from(start_in_table)].clone()]
             )));
         }
 
         // An in-table Region cannot split at a table boundary. Once the
         // disable state is gone, normal checks must clear the retry hint.
+        region.set_start_key(table_keys[0].clone());
         let end_key = tidb_query_datatype::codec::table::encode_row_key(1, i64::MAX);
         region.set_end_key(Key::from_raw(&end_key).into_encoded());
-        for expire in [false, true] {
+        for ((buckets_enabled, prefer_approximate_bucket), expire) in [false, true]
+            .into_iter()
+            .cartesian_product([false, true])
+            .cartesian_product([false, true])
+        {
+            runner.coprocessor.cfg.enable_region_bucket = Some(buckets_enabled);
+            runner.coprocessor.cfg.prefer_approximate_bucket = prefer_approximate_bucket;
+            runner.coprocessor.cfg.region_bucket_size = ReadableSize(1);
             validator.disable(region.get_id());
             let mut trigger = SplitCheckTrigger::default();
             runner.run(Task::split_check(
@@ -1676,7 +1713,11 @@ mod tests {
                 CheckPolicy::Scan,
                 None,
             ));
-            check_disabled_result(&rx, &mut trigger, [true, false], false);
+            let (size, keys) =
+                check_disabled_result(&rx, &mut trigger, [true, false], buckets_enabled);
+            assert!(size >= 2 * runner.coprocessor.cfg.region_bucket_size.0);
+            assert!(size < max_size);
+            assert!(keys < max_keys);
             if expire {
                 validator.expire_for_test(region.get_id());
             } else {
@@ -1690,6 +1731,7 @@ mod tests {
                 None,
             ));
             trigger.post_triggered();
+            let mut refreshed_buckets = false;
             for task in rx.try_iter() {
                 match task {
                     SchedTask::UpdateApproximateSize {
@@ -1702,9 +1744,13 @@ mod tests {
                     } => {
                         trigger.on_approximate_region_keys(keys, splitable);
                     }
+                    SchedTask::RefreshRegionBuckets { .. } => {
+                        refreshed_buckets = true;
+                    }
                     task => panic!("unexpected in-table split check result: {task:?}"),
                 }
             }
+            assert_eq!(refreshed_buckets, buckets_enabled);
             trigger.post_triggered();
             assert!(trigger.should_skip(u64::MAX));
         }

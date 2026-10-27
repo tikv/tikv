@@ -181,8 +181,14 @@ High-risk contracts:
   idle checks eligible for size/key or table-boundary splits, so re-enabling or
   validator expiry can resume splitting without additional writes. Small size
   and key estimates alone cannot rule out a table-boundary split. Once normal
-  checks resume, an automatic check with no applicable checkers must clear both
-  retry hints, allowing idle in-table Regions to stop scheduling checks.
+  checks resume, an automatic whole-Region check with no applicable checkers or
+  no split keys must clear both retry hints, allowing idle in-table Regions to
+  stop scheduling checks even when bucket-only checkers are present. A partial
+  key-range check cannot establish that the entire Region is unsplittable.
+- Approximate checks selected for buckets must still honor table-boundary
+  splits. The table checker returns an already known boundary or requests a
+  scan fallback when the boundary requires examining keys; disabled automatic
+  splits must return before either checker construction or that fallback.
 - Store-to-peer broadcasts can fan out one peer message per region. Keep this
   work bounded on the store FSM. `StoreUnreachable` must only do its per-store
   backoff check, snapshot the target region IDs, and enqueue the first

@@ -1092,6 +1092,14 @@ fn test_report_approximate_size_after_split_check() {
     fail::remove("on_approximate_region_size");
     rx.recv().unwrap();
     fail::remove("test_raftstore::pd::region_heartbeat");
+    // Notifications may belong to an earlier check or a retry-hint-only
+    // update. Wait for PD to receive statistics reflecting the writes.
+    test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .is_some_and(|size| size > approximate_size)
+    });
     let size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
