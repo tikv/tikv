@@ -192,12 +192,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                     encountered_locks.push(lock_info);
                 }
                 Err(e) => {
-                    // The request was woken up but failed without acquiring the lock (e.g. the
-                    // key was written by the transaction that just released the lock, and
-                    // `should_not_exist` is set). Since no delayed wake up is scheduled when
-                    // waking up a resumable request, the remaining waiters on the key would
-                    // never be woken up as no lock will be released. Report the key as
-                    // released so that the next waiter can be woken up.
+                    // Failed without acquiring the lock, so no release will wake up the
+                    // remaining waiters. Report the key as released to wake up the next one.
                     let (conflict_start_ts, conflict_commit_ts) = match &e {
                         MvccError(box MvccErrorInner::WriteConflict {
                             conflict_start_ts,
