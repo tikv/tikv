@@ -748,7 +748,11 @@ fn test_auto_compaction_refreshes_region_approximate_size() {
         let key = format!("k{:02}", i);
         for commit_ts in [10, 30] {
             let start_ts = commit_ts - 3;
-            let mutations = vec![new_mutation(Op::Put, key.as_bytes(), &vec![b'x'; 512 * 1024])];
+            let mutations = vec![new_mutation(
+                Op::Put,
+                key.as_bytes(),
+                &vec![b'x'; 512 * 1024],
+            )];
             must_kv_prewrite(
                 &client,
                 ctx.clone(),
@@ -847,7 +851,11 @@ fn test_auto_compaction_refreshes_size_of_region_merged_after_collection() {
         let key = format!("k{:02}", i);
         for commit_ts in [10, 30] {
             let start_ts = commit_ts - 3;
-            let mutations = vec![new_mutation(Op::Put, key.as_bytes(), &vec![b'x'; 512 * 1024])];
+            let mutations = vec![new_mutation(
+                Op::Put,
+                key.as_bytes(),
+                &vec![b'x'; 512 * 1024],
+            )];
             must_kv_prewrite(
                 &client,
                 ctx.clone(),
@@ -914,7 +922,11 @@ fn test_auto_compaction_refreshes_size_of_region_merged_after_collection() {
     for i in 0..16 {
         let key = format!("k{:02}", 60 + i);
         let (start_ts, commit_ts) = (37, 40);
-        let mutations = vec![new_mutation(Op::Put, key.as_bytes(), &vec![b'x'; 512 * 1024])];
+        let mutations = vec![new_mutation(
+            Op::Put,
+            key.as_bytes(),
+            &vec![b'x'; 512 * 1024],
+        )];
         must_kv_prewrite(
             &client,
             ctx.clone(),
