@@ -332,7 +332,7 @@ mod tests {
         ] {
             assert_eq!(parse_json_path_expr(p).unwrap(), expected, "{:?}", p);
         }
-        assert!(parse_json_path_expr("$.a[1to last]").is_err());
+        parse_json_path_expr("$.a[1to last]").unwrap_err();
     }
 
     #[test]
