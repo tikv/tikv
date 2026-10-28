@@ -4,6 +4,7 @@
 use std::{
     collections::{VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crossbeam::utils::CachePadded;
@@ -11,6 +12,8 @@ use parking_lot::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;
+const WAITING_ELEM_SIZE: usize = std::mem::size_of::<Option<(u64, u64)>>();
+const LATCH_SLOT_SIZE: usize = std::mem::size_of::<CachePadded<Mutex<Latch>>>();
 
 /// Latch which is used to serialize accesses to resources hashed to the same
 /// slot.
@@ -158,6 +161,7 @@ impl Lock {
 pub struct Latches {
     slots: Vec<CachePadded<Mutex<Latch>>>,
     size: usize,
+    waiting_queue_bytes: AtomicUsize,
 }
 
 impl Latches {
@@ -168,7 +172,36 @@ impl Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
         (0..size).for_each(|_| slots.push(Mutex::new(Latch::new()).into()));
-        Latches { slots, size }
+        Latches {
+            slots,
+            size,
+            waiting_queue_bytes: AtomicUsize::new(0),
+        }
+    }
+
+    fn account_capacity_change(&self, before: usize, after: usize) {
+        if after > before {
+            self.waiting_queue_bytes
+                .fetch_add((after - before) * WAITING_ELEM_SIZE, Ordering::Relaxed);
+        } else if before > after {
+            self.waiting_queue_bytes
+                .fetch_sub((before - after) * WAITING_ELEM_SIZE, Ordering::Relaxed);
+        } else {
+            return;
+        }
+        crate::storage::metrics::SCHED_LATCH_MEMORY_USAGE_GAUGE.set(self.memory_usage() as i64);
+    }
+
+    pub fn slot_memory_usage(&self) -> usize {
+        self.slots.capacity() * LATCH_SLOT_SIZE
+    }
+
+    pub fn waiting_queue_memory_usage(&self) -> usize {
+        self.waiting_queue_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.slot_memory_usage() + self.waiting_queue_memory_usage()
     }
 
     /// Tries to acquire the latches specified by the `lock` for command with ID
@@ -182,19 +215,28 @@ impl Latches {
         let mut acquired_count: usize = 0;
         for &key_hash in &lock.required_hashes[lock.owned_count..] {
             let mut latch = self.lock_latch(key_hash);
-            match latch.get_first_req_by_hash(key_hash) {
+            let before = latch.waiting.capacity();
+            let should_break = match latch.get_first_req_by_hash(key_hash) {
                 Some(cid) => {
                     if cid == who {
                         acquired_count += 1;
+                        false
                     } else {
                         latch.wait_for_wake(key_hash, who);
-                        break;
+                        true
                     }
                 }
                 None => {
                     latch.wait_for_wake(key_hash, who);
                     acquired_count += 1;
+                    false
                 }
+            };
+            let after = latch.waiting.capacity();
+            drop(latch);
+            self.account_capacity_change(before, after);
+            if should_break {
+                break;
             }
         }
         lock.owned_count += acquired_count;
@@ -233,6 +275,7 @@ impl Latches {
         let mut wakeup_list: Vec<u64> = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
+            let before = latch.waiting.capacity();
             let (v, front) = latch.pop_front(key_hash).unwrap();
             assert_eq!(front, who);
             assert_eq!(v, key_hash);
@@ -256,6 +299,9 @@ impl Latches {
             } else {
                 latch.push_preemptive(key_hash, keep_latches_for_cid.unwrap());
             }
+            let after = latch.waiting.capacity();
+            drop(latch);
+            self.account_capacity_change(before, after);
         }
 
         assert!(keep_latches_it.next().is_none());
@@ -274,6 +320,33 @@ mod tests {
     use std::iter::once;
 
     use super::*;
+
+    #[test]
+    fn test_latch_memory_usage() {
+        let latches = Latches::new(256);
+        assert_eq!(latches.slot_memory_usage(), 256 * LATCH_SLOT_SIZE);
+        assert_eq!(latches.waiting_queue_memory_usage(), 0);
+        assert_eq!(latches.memory_usage(), latches.slot_memory_usage());
+
+        let mut locks: Vec<Lock> = (0..64)
+            .map(|_| Lock::new(std::iter::once(&"same_key")))
+            .collect();
+        for (i, lock) in locks.iter_mut().enumerate() {
+            latches.acquire(lock, i as u64 + 1);
+        }
+
+        let peak = latches.waiting_queue_memory_usage();
+        assert!(peak > 0);
+        assert!(latches.memory_usage() > latches.slot_memory_usage());
+
+        latches.release(&locks[0], 1, None);
+        for (i, lock) in locks.iter_mut().enumerate().skip(1) {
+            let cid = i as u64 + 1;
+            assert!(latches.acquire(lock, cid));
+            latches.release(lock, cid, None);
+        }
+        assert!(latches.waiting_queue_memory_usage() < peak);
+    }
 
     #[test]
     fn test_wakeup() {
