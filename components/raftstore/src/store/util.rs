@@ -29,6 +29,7 @@ use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
 };
 use raft_proto::ConfChangeI;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::{
     Either, box_err,
     codec::number::{NumberEncoder, decode_u64},
@@ -39,7 +40,7 @@ use tikv_util::{
 };
 use time::Duration;
 use tokio::sync::Notify;
-use txn_types::WriteBatchFlags;
+use txn_types::{Key, WriteBatchFlags};
 
 use super::{Config, metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage};
 use crate::{
@@ -1983,6 +1984,45 @@ pub fn validate_split_region(
         check_key_in_region(key, region)?;
     }
     Ok(())
+}
+
+/// The TiDB table a memcomparable-encoded key belongs to, or `None` if it is
+/// not table data. A trailing timestamp is ignored.
+pub fn encoded_key_table_id(encoded_key: &[u8]) -> Option<i64> {
+    let raw = Key::from_encoded_slice(encoded_key).to_raw().ok()?;
+    table_codec::decode_table_id(&raw).ok()
+}
+
+/// The inclusive range of TiDB table ids the region's keys can belong to, or
+/// `None` if it holds no table data.
+pub fn region_table_range(region: &metapb::Region) -> Option<(i64, i64)> {
+    // Encoded start of the `t` and `u` keyspaces, bounding all table data.
+    let space = |prefix: &[u8]| Key::from_raw(prefix).into_encoded();
+
+    let start = region.get_start_key();
+    let first = match encoded_key_table_id(start) {
+        Some(table) => table,
+        None if start < space(b"u").as_slice() => i64::MIN,
+        None => return None,
+    };
+
+    let end = region.get_end_key();
+    let last = if end.is_empty() {
+        i64::MAX
+    } else {
+        let raw = Key::from_encoded_slice(end).to_raw().ok();
+        match raw
+            .as_deref()
+            .map(|r| (r.len(), table_codec::decode_table_id(r)))
+        {
+            // Exactly `t{table}`: the end is exclusive, so `table` is outside.
+            Some((table_codec::TABLE_PREFIX_KEY_LEN, Ok(table))) => table.checked_sub(1)?,
+            Some((_, Ok(table))) => table,
+            _ if end <= space(b"t").as_slice() => return None,
+            _ => i64::MAX,
+        }
+    };
+    (first <= last).then_some((first, last))
 }
 
 #[cfg(test)]

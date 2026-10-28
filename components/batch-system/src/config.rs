@@ -12,14 +12,21 @@ pub struct Config {
     pub pool_size: usize,
     #[online_config(skip)]
     pub reschedule_duration: ReadableDuration,
+    /// `None` means the owning pool's default; store and apply differ.
     #[online_config(skip)]
-    pub low_priority_pool_size: usize,
+    pub low_priority_pool_size: Option<usize>,
 }
 
 impl Config {
     pub fn max_batch_size(&self) -> usize {
         // `Config::validate` is not called for test so the `max_batch_size` is None.
         self.max_batch_size.unwrap_or(256)
+    }
+
+    /// Defaults to one poller, upstream's apply-pool size. The raftstore
+    /// `Config::validate` sets the store pool's own default.
+    pub fn low_priority_pool_size(&self) -> usize {
+        self.low_priority_pool_size.unwrap_or(1)
     }
 }
 
@@ -29,7 +36,7 @@ impl Default for Config {
             max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
-            low_priority_pool_size: 1,
+            low_priority_pool_size: None,
         }
     }
 }

@@ -390,6 +390,48 @@ make_static_metric! {
 }
 
 lazy_static! {
+    pub static ref NOISY_TABLE_MARKS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_noisy_table_marks_total",
+        "Outcome of attributing a proposal to a noisy table",
+        &["reason"]
+    )
+    .unwrap();
+    // Resolved once: every proposal hits one.
+    pub static ref NOISY_MARK_NO_MANAGER: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_manager"]);
+    pub static ref NOISY_MARK_NO_GROUP: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_group"]);
+    pub static ref NOISY_MARK_NOT_BLAMED: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["not_blamed"]);
+    pub static ref NOISY_MARK_NO_TABLE: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_table"]);
+    pub static ref NOISY_MARK_MARKED: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["marked"]);
+
+    pub static ref STORE_POOL_MSGS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_store_pool_msgs_total",
+        "Peer messages handled by the store batch system, by poller pool",
+        &["pool"]
+    )
+    .unwrap();
+    pub static ref STORE_POOL_MSGS_NORMAL: IntCounter =
+        STORE_POOL_MSGS_VEC.with_label_values(&["normal"]);
+    pub static ref STORE_POOL_MSGS_LOW: IntCounter =
+        STORE_POOL_MSGS_VEC.with_label_values(&["low"]);
+
+    pub static ref NOISY_REGION_DEMOTIONS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_noisy_region_demotions_total",
+        "Raft FSMs moved between store poller pools by noisy-tenant demotion, by destination pool",
+        &["to"]
+    )
+    .unwrap();
+    pub static ref NOISY_REGION_TO_LOW: IntCounter =
+        NOISY_REGION_DEMOTIONS_VEC.with_label_values(&["low"]);
+    pub static ref NOISY_REGION_TO_NORMAL: IntCounter =
+        NOISY_REGION_DEMOTIONS_VEC.with_label_values(&["normal"]);
+}
+
+lazy_static! {
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_duration_secs",

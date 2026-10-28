@@ -17,6 +17,7 @@ use std::{
 
 use fail::fail_point;
 use file_system::{IoType, set_io_type};
+use prometheus::Counter;
 use resource_control::{
     ResourceController,
     channel::{Receiver, Sender, unbounded},
@@ -128,17 +129,25 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
+    /// `pool` is the fetching poller's priority, i.e. the queue the FSM waited
+    /// in.
+    fn push(&mut self, fsm: FsmTypes<N, C>, pool: Priority) -> bool {
+        let pool = match pool {
+            Priority::Normal => FsmPriority::normal,
+            Priority::Low => FsmPriority::low,
+        };
         match fsm {
             FsmTypes::Normal((n, schedule_time)) => {
                 FSM_SCHEDULE_WAIT_DURATION
                     .get(N::FSM_TYPE)
+                    .get(pool)
                     .observe(schedule_time.saturating_elapsed_secs());
                 self.normals.push(Some(NormalFsm::new(n)));
             }
             FsmTypes::Control((c, schedule_time)) => {
                 FSM_SCHEDULE_WAIT_DURATION
                     .get(C::FSM_TYPE)
+                    .get(pool)
                     .observe(schedule_time.saturating_elapsed_secs());
                 assert!(self.control.is_none());
                 self.control = Some(c);
@@ -362,19 +371,28 @@ enum ReschedulePolicy {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
+    fn fetch_fsm(
+        &mut self,
+        batch: &mut Batch<N, C>,
+        busy: &Counter,
+        busy_since: &mut Instant,
+    ) -> bool {
         if batch.control.is_some() {
             return true;
         }
 
+        let pool = self.handler.get_priority();
         if let Ok(fsm) = self.fsm_receiver.try_recv() {
-            return batch.push(fsm);
+            return batch.push(fsm, pool);
         }
 
         if batch.is_empty() {
             self.handler.pause();
-            if let Ok(fsm) = self.fsm_receiver.recv() {
-                return batch.push(fsm);
+            busy.inc_by(busy_since.saturating_elapsed_secs());
+            let fsm = self.fsm_receiver.recv();
+            *busy_since = Instant::now();
+            if let Ok(fsm) = fsm {
+                return batch.push(fsm, pool);
             }
         }
         !batch.is_empty()
@@ -392,8 +410,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // from becoming hungry if some regions are hot points. Since we fetch new FSM
         // every time calling `poll`, we do not need to configure a large value for
         // `self.max_batch_size`.
+        let pool = match self.handler.get_priority() {
+            Priority::Normal => "normal",
+            Priority::Low => "low",
+        };
+        let busy = POLLER_BUSY_SECONDS_VEC.with_label_values(&[N::FSM_TYPE.get_str(), pool]);
+        let mut busy_since = Instant::now();
         let mut run = true;
-        while run && self.fetch_fsm(&mut batch) {
+        while run && self.fetch_fsm(&mut batch, &busy, &mut busy_since) {
             // If there is a region that waits to be dealt, we must deal with it even if it
             // has overhead max size of batch. It's helpful to protect regions
             // from becoming hungry if some regions are hot points.
@@ -447,7 +471,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             let mut fsm_cnt = batch.normals.len();
             while batch.normals.len() < max_batch_size {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
-                    run = batch.push(fsm);
+                    run = batch.push(fsm, self.handler.get_priority());
                 }
                 // When `fsm_cnt >= batch.normals.len()`:
                 // - No more FSMs in `fsm_receiver`.
@@ -487,6 +511,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 batch.swap_reclaim(*index);
             }
             reschedule_fsms.clear();
+
+            // Flushed every round, so a pool that never goes idle still reports.
+            busy.inc_by(busy_since.saturating_elapsed_secs());
+            busy_since = Instant::now();
         }
         if let Some(fsm) = batch.control.take() {
             self.router.control_scheduler.schedule(fsm);
@@ -765,7 +793,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         workers: Arc::new(Mutex::new(Vec::new())),
         joinable_workers: Arc::new(Mutex::new(Vec::new())),
         reschedule_duration: cfg.reschedule_duration.0,
-        low_priority_pool_size: cfg.low_priority_pool_size,
+        low_priority_pool_size: cfg.low_priority_pool_size(),
         thread_priority: None,
         pool_state_builder: Some(pool_state_builder),
     };

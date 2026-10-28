@@ -14,8 +14,14 @@ make_auto_flush_static_metric! {
         "type" => FsmType,
     }
 
+    pub label_enum FsmPriority {
+        normal,
+        low,
+    }
+
     pub struct FsmScheduleWaitDurationVec: LocalHistogram {
         "type" => FsmType,
+        "priority" => FsmPriority,
     }
 
     pub struct FsmPollDurationVec: LocalHistogram {
@@ -53,11 +59,18 @@ lazy_static! {
     register_histogram_vec!(
         "tikv_batch_system_fsm_schedule_wait_seconds",
         "Duration of fsm waiting to be polled.",
-        &["type"],
+        &["type", "priority"],
         exponential_buckets(0.001, 1.59, 20).unwrap(), // max 10s
     ).unwrap();
     pub static ref FSM_SCHEDULE_WAIT_DURATION: FsmScheduleWaitDurationVec =
     auto_flush_from!(FSM_SCHEDULE_WAIT_DURATION_VEC, FsmScheduleWaitDurationVec);
+
+    pub static ref POLLER_BUSY_SECONDS_VEC: CounterVec = register_counter_vec!(
+        "tikv_batch_system_poller_busy_seconds_total",
+        "Wall time pollers spent handling FSMs rather than waiting for one. Includes off-CPU time, so it is occupancy, not CPU",
+        &["type", "priority"]
+    )
+    .unwrap();
 
     pub static ref FSM_POLL_DURATION_VEC: HistogramVec =
     register_histogram_vec!(

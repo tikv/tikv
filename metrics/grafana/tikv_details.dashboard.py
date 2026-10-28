@@ -2476,6 +2476,24 @@ def RaftProcess() -> RowPanel:
     )
     layout.row(
         [
+            graph_panel(
+                title="Raft poller busy",
+                description="Busy threads in each raft poller pool (100% = one thread fully busy). Counts time a poller holds an FSM, including off-CPU time such as raft-engine syncs, so it can be high while raftstore CPU is low. A pool near its thread count has no spare capacity.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_batch_system_poller_busy_seconds_total",
+                            by_labels=["instance", "type", "priority"],
+                        ),
+                        legend_format="{{type}}-{{priority}}-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Store fsm schedule wait duration",
                 description="Duration of store fsm waiting to be polled",
@@ -10945,6 +10963,102 @@ def LoadShedding() -> RowPanel:
                             by_labels=["resource_group"],
                         ).extra(" > 0"),
                         legend_format="busy-threshold-skipped-{{resource_group}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 5: Noisy tenant demotion to the low-priority store pool
+    layout.row(
+        [
+            graph_panel(
+                title="Noisy Groups and Tables",
+                description="Resource groups blamed for the overload, and TiDB tables whose regions are demoted to the low-priority store pool.",
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_resource_control_noisy_groups"),
+                        legend_format="groups-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_resource_control_noisy_tables"),
+                        legend_format="tables-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Noisy Table Marks",
+                description="Outcome of attributing each raft proposal to a noisy table. Only `marked` demotes a table.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_noisy_table_marks_total",
+                            by_labels=["reason"],
+                        ).extra(" > 0"),
+                        legend_format="{{reason}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Region Pool Moves",
+                description="Raft FSMs moved between store poller pools by noisy-tenant demotion, by destination pool.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_noisy_region_demotions_total",
+                            by_labels=["to"],
+                        ).extra(" > 0"),
+                        legend_format="to-{{to}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Store Pool Messages",
+                description="Peer messages handled per store poller pool.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_store_pool_msgs_total",
+                            by_labels=["instance", "pool"],
+                        ),
+                        legend_format="{{pool}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Poller Busy",
+                description="Busy threads in each store poller pool (100% = one thread fully busy), including off-CPU time.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_batch_system_poller_busy_seconds_total",
+                            label_selectors=['type="store"'],
+                            by_labels=["instance", "priority"],
+                        ),
+                        legend_format="{{priority}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Schedule Wait by Pool",
+                description="p99 time a store FSM waits to be polled, by pool. Demotion should keep the normal pool's wait low.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_batch_system_fsm_schedule_wait_seconds",
+                            label_selectors=['type="store"'],
+                            by_labels=["instance", "priority"],
+                        ),
+                        legend_format="{{priority}}-{{instance}}",
                     ),
                 ],
             ),

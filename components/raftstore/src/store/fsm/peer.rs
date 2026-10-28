@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use batch_system::{BasicMailbox, Fsm, FsmType};
+use batch_system::{BasicMailbox, Fsm, FsmType, Priority};
 use collections::{HashMap, HashSet};
 use engine_traits::{
     CF_LOCK, CF_RAFT, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt,
@@ -53,6 +53,7 @@ use raft::{
     StateRole,
     eraftpb::{self, ConfChangeType, MessageType},
 };
+use resource_control::ResourceGroupManager;
 use smallvec::SmallVec;
 use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
@@ -244,6 +245,16 @@ where
     /// Before actually destroying a peer, ensure all log gc tasks are finished,
     /// so we can start destroying without seeking.
     logs_gc_flushed: bool,
+
+    /// Poller pool for this FSM. `Low` when the region holds any noisy table.
+    /// Cached; the other `noisy_*` fields are the cache key.
+    noisy_priority: Priority,
+    noisy_priority_gen: u64,
+    noisy_enabled: bool,
+    /// Region epoch version, which split and merge bump, and the table ids
+    /// the region spans as of that version.
+    noisy_region_version: Option<u64>,
+    noisy_region_tables: Option<(i64, i64)>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -359,6 +370,11 @@ where
                     None,
                     raft_metrics,
                 )?,
+                noisy_priority: Priority::Normal,
+                noisy_priority_gen: 0,
+                noisy_enabled: false,
+                noisy_region_version: None,
+                noisy_region_tables: None,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -421,6 +437,11 @@ where
                     Some(create_by_peer),
                     raft_metrics,
                 )?,
+                noisy_priority: Priority::Normal,
+                noisy_priority_gen: 0,
+                noisy_enabled: false,
+                noisy_region_version: None,
+                noisy_region_tables: None,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -717,6 +738,64 @@ where
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    /// Called on every send, so keep it a field read.
+    #[inline]
+    fn get_priority(&self) -> Priority {
+        self.noisy_priority
+    }
+}
+
+impl<EK, ER> PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    /// Re-reads this region's demotion verdict if its cache key changed.
+    /// Called once per poll round.
+    #[inline]
+    pub fn refresh_noisy_priority(
+        &mut self,
+        mgr: Option<&Arc<ResourceGroupManager>>,
+        enabled: bool,
+    ) {
+        let Some(mgr) = mgr else {
+            return;
+        };
+        let region = self.peer.region();
+        let version = Some(region.get_region_epoch().get_version());
+        let generation = mgr.noisy_tables_gen();
+        if self.noisy_priority_gen == generation
+            && self.noisy_region_version == version
+            && self.noisy_enabled == enabled
+        {
+            return;
+        }
+        // Decoded only when split or merge moved the region's bounds.
+        if self.noisy_region_version != version {
+            self.noisy_region_tables = util::region_table_range(region);
+            self.noisy_region_version = version;
+        }
+        // Evaluated even when disabled, so turning it off promotes regions back.
+        let next = match self.noisy_region_tables {
+            Some((first, last))
+                if enabled && mgr.any_noisy_table(|table| (first..=last).contains(&table)) =>
+            {
+                Priority::Low
+            }
+            _ => Priority::Normal,
+        };
+        self.noisy_priority_gen = generation;
+        self.noisy_enabled = enabled;
+        // Counted per transition, so idle demoted regions still show up.
+        if next != self.noisy_priority {
+            match next {
+                Priority::Low => NOISY_REGION_TO_LOW.inc(),
+                Priority::Normal => NOISY_REGION_TO_NORMAL.inc(),
+            }
+            self.noisy_priority = next;
+        }
     }
 }
 
@@ -7842,7 +7921,7 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -8107,5 +8186,249 @@ mod tests {
         let size = req2.compute_size();
         builder.add(RaftCommand::new(req2, Callback::None), size);
         assert!(builder.duplicate_put_on_lock_cf_detected);
+    }
+
+    /// The encoded `t{table_id}` boundary a region split on that table has.
+    fn table_boundary(table_id: i64) -> Vec<u8> {
+        use tikv_util::codec::number::NumberEncoder;
+        let mut raw = tidb_query_datatype::codec::table::TABLE_PREFIX.to_vec();
+        raw.encode_i64(table_id).unwrap();
+        txn_types::Key::from_raw(&raw).into_encoded()
+    }
+
+    /// Moves the region to `[start, end)`, bumping the epoch as split and
+    /// merge do.
+    fn move_region(fsm: &mut PeerFsm<KvTestEngine, RaftTestEngine>, start: Vec<u8>, end: Vec<u8>) {
+        let mut region = fsm.peer.region().clone();
+        region.set_start_key(start);
+        region.set_end_key(end);
+        let version = region.get_region_epoch().get_version();
+        region.mut_region_epoch().set_version(version + 1);
+        fsm.peer.mut_store().set_region(region);
+    }
+
+    /// A peer for `region_id`, holding exactly `table_id`.
+    fn test_peer_fsm(
+        region_id: u64,
+        table_id: i64,
+    ) -> (
+        tempfile::TempDir,
+        Box<PeerFsm<KvTestEngine, RaftTestEngine>>,
+    ) {
+        let dir = tempfile::Builder::new()
+            .prefix("noisy-priority")
+            .tempdir()
+            .unwrap();
+        let engines = engine_test::new_temp_engine(&dir);
+        let (region_scheduler, _region_rx) = tikv_util::worker::dummy_scheduler();
+        let (fetch_scheduler, _fetch_rx) = tikv_util::worker::dummy_scheduler();
+
+        let store_id = 1;
+        let mut region = metapb::Region::default();
+        region.set_id(region_id);
+        region.set_start_key(table_boundary(table_id));
+        region.set_end_key(table_boundary(table_id + 1));
+        region.mut_region_epoch().set_version(1);
+        let mut peer = metapb::Peer::default();
+        peer.set_id(10 + region_id);
+        peer.set_store_id(store_id);
+        region.mut_peers().push(peer);
+
+        let (_tx, fsm) = PeerFsm::create(
+            store_id,
+            &Config::default(),
+            region_scheduler,
+            fetch_scheduler,
+            engines,
+            &region,
+            false,
+            &RaftMetrics::new(true),
+        )
+        .unwrap();
+        (dir, fsm)
+    }
+
+    #[test]
+    fn test_a_regions_table_being_marked_moves_it_to_the_low_priority_pool_and_back() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+
+        // Every region starts on the normal pool.
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Low,
+            "a region of a blamed table must be routed to the low-priority pollers"
+        );
+
+        // Releasing it must send it back.
+        manager.publish_noisy_tables_for_test(false);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+    }
+
+    #[test]
+    fn test_demotion_disabled_leaves_a_marked_table_on_the_normal_pool() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        fsm.refresh_noisy_priority(Some(&manager), false);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Normal,
+            "the flag gates the pool selection, not just the marking"
+        );
+
+        // The generation alone cannot see a flag flip.
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Low);
+        fsm.refresh_noisy_priority(Some(&manager), false);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Normal,
+            "turning demotion off must not strand regions on the low pool"
+        );
+    }
+
+    #[test]
+    fn test_only_regions_of_the_marked_table_are_demoted() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        let (_dir, mut other) = test_peer_fsm(8, 101);
+        other.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(other.get_priority(), Priority::Normal);
+    }
+
+    #[test]
+    fn test_a_region_the_group_never_proposed_to_is_still_demoted() {
+        // E.g. a freshly split child: demoted without being attributed first.
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        let (_dir, mut sibling) = test_peer_fsm(9, 100);
+        sibling.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(sibling.get_priority(), Priority::Low);
+    }
+
+    #[test]
+    fn test_a_region_outside_table_data_is_never_demoted() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        // Holds only keys before table data, e.g. meta.
+        let (_dir, mut fsm) = test_peer_fsm(10, 100);
+        move_region(
+            &mut fsm,
+            vec![],
+            txn_types::Key::from_raw(b"n").into_encoded(),
+        );
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+    }
+
+    #[test]
+    fn test_refresh_is_inert_without_a_resource_manager() {
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+        fsm.refresh_noisy_priority(None, true);
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+    }
+
+    #[test]
+    fn test_an_unchanged_generation_is_not_re_queried() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Low);
+
+        // Forge a stale verdict; an unchanged generation must not re-query.
+        fsm.noisy_priority = Priority::Normal;
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Normal,
+            "refresh must short-circuit on an unchanged generation"
+        );
+
+        // Republishing the same set does not bump the generation.
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Normal);
+
+        manager.publish_noisy_tables_for_test(false);
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Low,
+            "a changed set must invalidate the cached verdict"
+        );
+    }
+
+    #[test]
+    fn test_a_split_into_another_table_invalidates_the_cached_verdict() {
+        // Split and merge do not bump the generation.
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.mark_noisy_table(100);
+        manager.publish_noisy_tables_for_test(true);
+
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Low);
+
+        move_region(&mut fsm, table_boundary(101), table_boundary(102));
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Normal,
+            "a region that moved out of the blamed table must be released"
+        );
+
+        move_region(&mut fsm, table_boundary(100), table_boundary(101));
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(fsm.get_priority(), Priority::Low);
+    }
+
+    #[test]
+    fn test_a_region_holding_several_tables_is_demoted_if_any_is_noisy() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        let (_dir, mut fsm) = test_peer_fsm(7, 100);
+        // Small tables 100..=104 merged into one region.
+        move_region(&mut fsm, table_boundary(100), table_boundary(105));
+
+        manager.mark_noisy_table(105);
+        manager.publish_noisy_tables_for_test(true);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Normal,
+            "the end key is exclusive"
+        );
+
+        manager.mark_noisy_table(103);
+        manager.publish_noisy_tables_for_test(true);
+        fsm.refresh_noisy_priority(Some(&manager), true);
+        assert_eq!(
+            fsm.get_priority(),
+            Priority::Low,
+            "a noisy table in the middle of the region must demote it"
+        );
     }
 }
