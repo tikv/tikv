@@ -383,8 +383,12 @@ impl RegionStatsManager {
                 deletable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
-                    // This callback will be executed when eviction finishes at `on_delete_regions`
-                    // and when the rx.recv() returns, we know some memory are freed.
+                    // This callback will be executed when eviction finishes at
+                    // `on_delete_regions`. `rx.recv()` returning `Some(())`
+                    // means one eviction has completed and its memory is
+                    // freed; `None` only means no more notifications can
+                    // arrive (every callback ran or was discarded), not that all
+                    // candidate regions finished eviction.
                     Some(Box::new(move || {
                         Box::pin(async move {
                             let _ = tx_clone.send(()).await;
@@ -403,6 +407,9 @@ impl RegionStatsManager {
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
+            // Drop the original sender so that `recv` returns `None` once every callback
+            // has either run or been discarded (e.g. the region was already evicted).
+            drop(tx);
             for _ in 0..regions.len() {
                 // It's better to use `timeout(Duration, rx.recv())` but which needs to use
                 // tokio runtime with timer enabled while yatp does not.
@@ -476,6 +483,7 @@ pub mod tests {
     use tikv_util::{
         box_err,
         config::{ReadableDuration, ReadableSize, VersionTrack},
+        future::block_on_timeout,
         worker::dummy_scheduler,
     };
 
@@ -755,6 +763,163 @@ pub mod tests {
         }
 
         let _ = handle.join();
+    }
+
+    #[test]
+    fn test_evict_on_threshold_reached_with_dropped_callbacks() {
+        let skiplist_engine = SkiplistEngine::new();
+        let mut config = InMemoryEngineConfig::config_for_test();
+        config.stop_load_threshold = Some(ReadableSize::kb(1));
+        config.mvcc_amplification_threshold = 10;
+        let config = Arc::new(VersionTrack::new(config));
+        let mc = MemoryController::new(config.clone(), skiplist_engine);
+        let (scheduler, _rx) = dummy_scheduler();
+
+        let regions = [
+            new_region(1, b"k01", b"k02"),
+            new_region(2, b"k03", b"k04"),
+            new_region(3, b"k05", b"k06"),
+            new_region(4, b"k07", b"k08"),
+            new_region(5, b"k09", b"k10"),
+            new_region(6, b"k11", b"k12"),
+        ];
+        let stats = [
+            new_region_stat(1, 100, 6),
+            new_region_stat(1, 10000, 1000),
+            new_region_stat(1, 100000, 100000),
+            new_region_stat(1, 100, 50),
+            new_region_stat(1, 1000, 120),
+            new_region_stat(1, 20, 2),
+        ];
+        let top_regions = regions
+            .iter()
+            .cloned()
+            .zip(stats.iter().cloned())
+            .collect::<Vec<_>>();
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(vec![]),
+            region_stats: Mutex::new(HashMap::default()),
+        });
+        sim.set_top_regions(&top_regions);
+        sim.set_region_stats(&top_regions);
+        let rsm = RegionStatsManager::new(config, Duration::from_millis(10), sim);
+
+        // Simulate regions that were already evicted by someone else: the
+        // callback is discarded and never invoked. The controller must not hang.
+        let evicted = Arc::new(Mutex::new(0));
+        let evicted2 = evicted.clone();
+        let evict_fn = move |_: &CacheRegion,
+                             _: EvictReason,
+                             _: Option<OnEvictFinishedCallback>|
+              -> Vec<CacheRegion> {
+            *evicted2.lock() += 1;
+            vec![]
+        };
+        let fut = rsm.evict_on_evict_threshold_reached(
+            evict_fn,
+            &scheduler,
+            new_cached_regions(vec![1, 2, 3, 4, 5, 6]),
+            &mc,
+        );
+        block_on_timeout(fut, Duration::from_secs(3)).unwrap();
+        assert!(*evicted.lock() >= 2);
+    }
+
+    #[test]
+    fn test_evict_on_threshold_reached_with_partially_dropped_callbacks() {
+        let skiplist_engine = SkiplistEngine::new();
+        let mut config = InMemoryEngineConfig::config_for_test();
+        config.stop_load_threshold = Some(ReadableSize::kb(1));
+        config.mvcc_amplification_threshold = 10;
+        let config = Arc::new(VersionTrack::new(config));
+        let mc = MemoryController::new(config.clone(), skiplist_engine);
+        let (scheduler, _rx) = dummy_scheduler();
+
+        let regions = [
+            new_region(1, b"k01", b"k02"),
+            new_region(2, b"k03", b"k04"),
+            new_region(3, b"k05", b"k06"),
+            new_region(4, b"k07", b"k08"),
+            new_region(5, b"k09", b"k10"),
+            new_region(6, b"k11", b"k12"),
+        ];
+        let stats = [
+            new_region_stat(1, 100, 6),
+            new_region_stat(1, 10000, 1000),
+            new_region_stat(1, 100000, 100000),
+            new_region_stat(1, 100, 50),
+            new_region_stat(1, 1000, 120),
+            new_region_stat(1, 20, 2),
+        ];
+        let top_regions = regions
+            .iter()
+            .cloned()
+            .zip(stats.iter().cloned())
+            .collect::<Vec<_>>();
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(vec![]),
+            region_stats: Mutex::new(HashMap::default()),
+        });
+        sim.set_top_regions(&top_regions);
+        sim.set_region_stats(&top_regions);
+        let rsm = RegionStatsManager::new(config, Duration::from_millis(10), sim);
+
+        // The first eviction of a chunk discards its callback (as if the region was
+        // already being evicted); the second one keeps it until we fire it.
+        let calls = Arc::new(Mutex::new(0));
+        let retained = Arc::new(Mutex::new(vec![]));
+        let (calls2, retained2) = (calls.clone(), retained.clone());
+        let evict_fn = move |_: &CacheRegion,
+                             _: EvictReason,
+                             cb: Option<OnEvictFinishedCallback>|
+              -> Vec<CacheRegion> {
+            let mut calls = calls2.lock();
+            *calls += 1;
+            if *calls == 2 {
+                retained2.lock().push(cb.unwrap());
+            }
+            vec![]
+        };
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished2 = finished.clone();
+        let handle = std::thread::spawn(move || {
+            block_on(async {
+                rsm.evict_on_evict_threshold_reached(
+                    evict_fn,
+                    &scheduler,
+                    new_cached_regions(vec![1, 2, 3, 4, 5, 6]),
+                    &mc,
+                )
+                .await
+            });
+            finished2.store(true, Ordering::SeqCst);
+        });
+
+        let t = Instant::now();
+        while retained.lock().is_empty() {
+            assert!(
+                t.elapsed() < Duration::from_secs(3),
+                "callback not retained"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The retained callback is still pending, so the controller must keep waiting
+        // even though the other one was discarded.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!finished.load(Ordering::SeqCst));
+
+        let cb = retained.lock().pop().unwrap();
+        block_on(cb());
+        let t = Instant::now();
+        while !finished.load(Ordering::SeqCst) {
+            assert!(
+                t.elapsed() < Duration::from_secs(3),
+                "controller still parked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        handle.join().unwrap();
     }
 
     #[test]
