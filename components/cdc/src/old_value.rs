@@ -67,6 +67,7 @@ impl OldValueCache {
                 capacity.0 as usize,
                 0,
                 OldValueCacheSizePolicy(0),
+                true,
             ),
             access_count: 0,
             miss_count: 0,
