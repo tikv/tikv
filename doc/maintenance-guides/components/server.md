@@ -125,6 +125,10 @@ High-risk config contracts:
 
 ## Observability And Operational Signals
 
+- `setup.rs` applies `security.redact-info-log` to log wrappers and protobuf
+  formatting. The default is `on`; explicit `false` / `"off"` disables redaction,
+  and `"marker"` preserves user data inside redaction markers. Online changes
+  are applied by `SecurityConfigManager` in `components/security`.
 - startup and shutdown logs
 - config persistence and validation output
 - disk-space reservation and lock-file failures
