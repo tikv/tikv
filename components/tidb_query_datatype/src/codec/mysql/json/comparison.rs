@@ -344,6 +344,22 @@ mod tests {
                 Json::from_f64(9223372036854775808.0),
                 Ordering::Equal,
             ),
+            (
+                Json::from_i64(1),
+                Json::from_f64(1.0 - f64::EPSILON / 2.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_u64(1),
+                Json::from_f64(1.0 - f64::EPSILON / 2.0),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_i64(i64::MIN),
+                Json::from_f64(-1e19),
+                Ordering::Greater,
+            ),
+            (Json::from_u64(0), Json::from_f64(-1.0), Ordering::Greater),
         ];
 
         for (left, right, expected) in cases {
