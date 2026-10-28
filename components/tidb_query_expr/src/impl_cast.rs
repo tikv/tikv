@@ -6044,6 +6044,33 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_when_cast_json_string_as_decimal() {
+        let cs = vec![
+            // (origin, result, errcode)
+            ("12x", "12", WARN_DATA_TRUNCATED),
+            ("1.5abc", "1.5", WARN_DATA_TRUNCATED),
+        ];
+
+        for (input, result, errcode) in cs {
+            let input = Json::from_string(input.to_string()).unwrap();
+            let result = Decimal::from_bytes(result.as_bytes()).unwrap().unwrap();
+            let mut ctx = CtxConfig {
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
+
+            let rft = FieldTypeConfig::default().into();
+            let extra = make_extra(&rft);
+            let r = cast_json_as_decimal(&mut ctx, &extra, Some(input.as_ref()));
+
+            let log = make_log(&input, &result, &r);
+            check_result(Some(&result), &r, log.as_str());
+            check_warning(&ctx, Some(errcode), log.as_str());
+        }
+    }
+
+    #[test]
     fn test_truncate_when_cast_json_object_or_array_as_decimal() {
         test_none_with_ctx(cast_any_as_any::<Real, Int>);
 
