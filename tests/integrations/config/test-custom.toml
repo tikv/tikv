@@ -640,6 +640,7 @@ linux-user = "hadoop"
 num-threads = 123
 stream-channel-window = 123
 import-mode-timeout = "1453s"
+use-direct-io-for-ingest = true
 
 [gc]
 ratio-threshold = 1.2
@@ -710,3 +711,5 @@ historical-usage-window-mins = 15
 baseline-burst-pct = 20.0
 admission-max-delayed-count = 10000
 request-base-cost-micros = 40
+normal-control-interval = "20s"
+overloaded-control-interval = "3s"

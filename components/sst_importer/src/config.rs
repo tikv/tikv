@@ -22,6 +22,21 @@ pub struct Config {
     pub import_mode_timeout: ReadableDuration,
     /// the ratio of system memory used for import.
     pub memory_use_ratio: f64,
+    /// Write ingested SSTs with direct I/O, and verify their checksums with
+    /// direct I/O too, so the ingest does not populate the OS page cache and
+    /// evict the working set that concurrent foreground reads depend on.
+    ///
+    /// Only applies to DDL-sourced ingest (an `ImportSST.Write` whose
+    /// `request_source` task name is `ddl`); all other ingest, and the
+    /// download/restore path, stay buffered.
+    ///
+    /// Requires a data directory on a filesystem that supports direct I/O
+    /// (`O_DIRECT` on Linux). Enabling it elsewhere will fail SST writes, so it
+    /// is off by default.
+    ///
+    /// Read at `SstImporter` construction, so changing it needs a restart.
+    #[online_config(skip)]
+    pub use_direct_io_for_ingest: bool,
 }
 
 impl Default for Config {
@@ -31,6 +46,7 @@ impl Default for Config {
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
             memory_use_ratio: 0.3,
+            use_direct_io_for_ingest: false,
         }
     }
 }

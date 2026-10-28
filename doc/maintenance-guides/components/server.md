@@ -101,6 +101,12 @@ High-risk config contracts:
 - Startup ordering matters. Many subsystems assume other pieces already exist.
 - Shutdown ordering matters. Workers and services must stop after their
   dependents drain.
+- In `server.rs`, `TikvServer::engines` must stay populated until `stop()`.
+  `prepare_stop` uses it to disable manual compactions through the KV engine
+  before workers are joined; without that, shutdown waits for an in-flight
+  manual compaction that the KV engine would otherwise cancel. Threads that
+  need the engines, such as the signal handler, get a clone. `server2.rs`
+  (raftstore-v2) has no equivalent cancellation and needs separate handling.
 - Config validation must remain backward-compatible with persisted data layout
   and engine selection.
 - The effective advertised store address, and the status address when enabled,
@@ -119,6 +125,10 @@ High-risk config contracts:
 
 ## Observability And Operational Signals
 
+- `setup.rs` applies `security.redact-info-log` to log wrappers and protobuf
+  formatting. The default is `on`; explicit `false` / `"off"` disables redaction,
+  and `"marker"` preserves user data inside redaction markers. Online changes
+  are applied by `SecurityConfigManager` in `components/security`.
 - startup and shutdown logs
 - config persistence and validation output
 - disk-space reservation and lock-file failures

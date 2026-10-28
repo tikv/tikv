@@ -2125,6 +2125,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let tag = format!("{}-{}", RAFTSTORE_THREAD, store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
+        // The nice value is per thread, so it has to be set by every raftstore
+        // poller itself rather than by the thread starting the system.
+        self.system.set_thread_priority(sys_util::HIGH_PRI);
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -2191,9 +2194,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.pd_worker.start(pd_runner));
 
-        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
         self.workers = Some(workers);
         Ok(())
     }

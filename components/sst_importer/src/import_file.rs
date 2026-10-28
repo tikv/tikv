@@ -430,11 +430,16 @@ impl<E: KvEngine> ImportDir<E> {
         &self,
         metas: &[SstMeta],
         key_manager: Option<Arc<DataKeyManager>>,
+        use_direct_io: bool,
     ) -> Result<()> {
         for meta in metas {
             let path = self.join_for_read(meta)?;
             let path_str = path.save.to_str().unwrap();
-            let sst_reader = E::SstReader::open(path_str, key_manager.clone())?;
+            // This reads the just-written SST in full. When the write used direct
+            // I/O, the read must too, or it repopulates the OS page cache with the
+            // data the write deliberately kept out of it.
+            let sst_reader =
+                E::SstReader::open_for_one_shot_read(path_str, key_manager.clone(), use_direct_io)?;
             sst_reader.verify_checksum()?;
         }
         Ok(())
