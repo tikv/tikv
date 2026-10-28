@@ -18,7 +18,7 @@ impl UnicodeVersion for Unicode0900 {
     #[inline]
     fn char_weight(ch: char) -> u128 {
         let r = ch as usize;
-        if r > UNICODE_CI_TABLE.len() {
+        if r >= UNICODE_CI_TABLE.len() {
             return (r as u128 >> 15) + 0xFBC0 + (((r as u128 & 0x7FFF) | 0x8000) << 16);
         }
 
@@ -12340,3 +12340,21 @@ static UNICODE_CI_TABLE: [u64; 0x2CEA1] = [
  0xCE89FB85,   0xCE8AFB85,   0xCE8BFB85,   0xCE8CFB85,   0xCE8DFB85,   0xCE8EFB85,   0xCE8FFB85,   0xCE90FB85,   0xCE91FB85,   0xCE92FB85,   0xCE93FB85,   0xCE94FB85,   0xCE95FB85,   0xCE96FB85,   0xCE97FB85,  
  0xCE98FB85,   0xCE99FB85,   0xCE9AFB85,   0xCE9BFB85,   0xCE9CFB85,   0xCE9DFB85,   0xCE9EFB85,   0xCE9FFB85,   0xCEA0FB85, 
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{UNICODE_CI_TABLE, Unicode0900, UnicodeVersion};
+
+    #[test]
+    fn test_unicode0900_char_weight_table_len_boundary() {
+        let r = UNICODE_CI_TABLE.len();
+        let ch = char::from_u32(r as u32)
+            .expect("UNICODE_CI_TABLE.len() must be a valid Unicode scalar value");
+
+        let got = <Unicode0900 as UnicodeVersion>::char_weight(ch);
+
+        let r = r as u128;
+        let expected = (r >> 15) + 0xFBC0 + (((r & 0x7FFF) | 0x8000) << 16);
+        assert_eq!(got, expected);
+    }
+}
