@@ -106,6 +106,7 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
+    resource_control::group_label,
     time::{Instant, InstantExt, ThreadReadId, duration_to_ms, duration_to_sec},
 };
 use tracker::{
@@ -853,6 +854,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -943,7 +946,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                             continue;
                         }
                     };
@@ -990,6 +1000,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             begin_instant,
                             source,
                             resource_priority,
+                            resource_group.clone(),
                         );
                         continue;
                     }
@@ -1035,6 +1046,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                                 Err(e) => {
@@ -1044,12 +1056,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                         }
                     }
                 }
@@ -1888,7 +1908,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_limiter,
             Some(admission_deadline),
         );
-        async move { res.map_err(read_pool_error).await? }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     // The entry point of the storage scheduler. Not only transaction commands need
@@ -2172,6 +2192,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -2259,6 +2281,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -2275,6 +2298,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
@@ -2286,6 +2310,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 begin_instant,
                                 ctx.take_request_source(),
                                 resource_priority,
+                                resource_group.clone(),
                             );
                         }
                     }
@@ -3401,7 +3426,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             None,
         );
 
-        async move { res.map_err(read_pool_error).await? }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     fn read_pool_spawn_with_busy_check<Fut, T>(
@@ -3439,7 +3464,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     resource_limiter,
                     admission_deadline,
                 )
-                .map_err(read_pool_error)
+                .map_err(read_pool_spawn_error)
                 .await?
         })
     }
@@ -3527,11 +3552,11 @@ pub struct DynamicConfigs {
     pub in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
-/// Converts a failure to run a read in the read pool into a storage error. A
-/// read whose deadline passes while it waits for admission reports
-/// `DeadlineExceeded`, the others report that the scheduler is busy.
-fn read_pool_error(e: ReadPoolError) -> Error {
-    match e {
+/// Converts a failure to run a read in the read pool into a storage error.
+/// A read whose deadline passes while it waits for admission reports
+/// `DeadlineExceeded`; every other spawn failure is the scheduler being busy.
+fn read_pool_spawn_error(err: ReadPoolError) -> Error {
+    match err {
         ReadPoolError::DeadlineExceeded => Error::from(ErrorInner::DeadlineExceeded),
         _ => Error::from(ErrorInner::SchedTooBusy),
     }
@@ -3955,6 +3980,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     );
 }
 
@@ -4384,6 +4410,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -4400,6 +4427,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
@@ -4520,6 +4548,27 @@ mod tests {
         },
     };
 
+    #[test]
+    fn test_read_pool_spawn_error_reports_only_the_deadline_distinctly() {
+        for err in [
+            ReadPoolError::UnifiedReadPoolFull,
+            ReadPoolError::Rejected,
+            ReadPoolError::Canceled(futures::channel::oneshot::Canceled),
+        ] {
+            assert!(matches!(
+                read_pool_spawn_error(err),
+                Error(box ErrorInner::SchedTooBusy)
+            ));
+        }
+
+        // A read that misses its deadline while waiting for admission is not
+        // load shedding; it reports the deadline.
+        assert!(matches!(
+            read_pool_spawn_error(ReadPoolError::DeadlineExceeded),
+            Error(box ErrorInner::DeadlineExceeded)
+        ));
+    }
+
     // Background KV reads charge their response bytes to the background egress
     // limiter, the same bytes they report through `record_network_out_bytes`, so
     // that the next background read pays the debt at admission. Foreground reads
@@ -4620,6 +4669,57 @@ mod tests {
         assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
         assert_eq!(scan(&storage, ctx_with_source("internal_ddl")).len(), 1);
         assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
+
+    /// A write whose admission wait would outlast its deadline is not
+    /// scheduled: it waits out the deadline, then fails as timed out and
+    /// takes no latch.
+    #[test]
+    fn test_write_admission_delay_past_deadline_is_not_scheduled() {
+        let rm = Arc::new(resource_control::ResourceGroupManager::new(
+            resource_control::config::Config {
+                enable_write_admission_control: true,
+                ..Default::default()
+            },
+        ));
+        rm.refresh_cached_config();
+        let ctl = rm.derive_controller("test".into(), false);
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build_for_resource_controller(rm.clone(), ctl)
+            .unwrap();
+        // Deep in debt: the group's next write would wait for seconds.
+        let limiter = rm.get_resource_limiter("default", "", 0).unwrap();
+        limiter.set_cpu_rate_limit_for_test(1000.0);
+        limiter.consume(
+            Duration::from_secs(10),
+            file_system::IoBytes::default(),
+            true,
+            false,
+        );
+        assert!(limiter.admission_delay(false) > Duration::from_secs(1));
+
+        let mut ctx = Context::default();
+        ctx.max_execution_duration_ms = 50;
+        let started = std::time::Instant::now();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_context(
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"v".to_vec())],
+                    b"x".to_vec(),
+                    10.into(),
+                    ctx,
+                ),
+                expect_fail_callback(tx, 0, |e| match e {
+                    Error(box ErrorInner::DeadlineExceeded) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Not failed early: the error arrives at the deadline, not before.
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        must_unlocked(&mut storage.engine, b"x");
     }
 
     #[test]

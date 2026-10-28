@@ -138,6 +138,18 @@ lazy_static! {
     .unwrap();
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
         auto_flush_from!(COPR_REQ_WAIT_TIME, ReqWaitHistogram);
+    // Per-group companion to `COPR_REQ_WAIT_TIME`, which is a static metric and
+    // so cannot carry a client-supplied group name. The `req` breakdown is dropped to keep the cross product small; `type` is
+    // kept because separating schedule from snapshot wait is the whole point.
+    // There is no per-group handle-time companion: end-to-end latency per group
+    // is already in `tikv_grpc_msg_duration_seconds_by_group`.
+    pub static ref COPR_REQ_WAIT_TIME_BY_GROUP: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_wait_seconds_by_group",
+        "Bucketed histogram of coprocessor request wait duration per resource group",
+        &["resource_group", "type"],
+        crate::server::metrics::by_group_wait_buckets()
+    )
+    .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",
