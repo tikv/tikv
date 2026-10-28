@@ -28,10 +28,10 @@
 use nom::{
     IResult,
     branch::alt,
-    bytes::complete::tag,
+    bytes::complete::{tag, take_while, take_while1},
     character::{
         complete,
-        complete::{char, none_of, satisfy, space0, space1},
+        complete::{char, none_of, satisfy},
     },
     combinator::{map, map_opt},
     multi::{many0, many1},
@@ -40,6 +40,16 @@ use nom::{
 
 use super::json_unquote::unquote_string;
 use crate::codec::Result;
+
+// TiDB skips whitespace in JSON paths with `unicode.IsSpace`, which matches
+// `char::is_whitespace`. nom's `space0`/`space1` only accept spaces and tabs.
+fn space0(input: &str) -> IResult<&str, &str> {
+    take_while(char::is_whitespace)(input)
+}
+
+fn space1(input: &str) -> IResult<&str, &str> {
+    take_while1(char::is_whitespace)(input)
+}
 
 fn lift_error_to_failure<E>(err: nom::Err<E>) -> nom::Err<E> {
     if let nom::Err::Error(err) = err {
@@ -310,6 +320,20 @@ pub fn parse_json_path_expr(path_expr_input: &str) -> Result<PathExpression> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_path_expression_unicode_whitespace() {
+        // Same whitespace set as TiDB's `unicode.IsSpace`.
+        let expected = parse_json_path_expr("$.a[1 to last - 1]").unwrap();
+        for p in [
+            "\n$.a[1 to last - 1]",
+            "$\r\n.\u{a0}a[\u{2003}1\x0b to\x0c last\n-\n1\t]\n",
+            "\u{3000}$.a[1\u{85}to\u{2028}last\u{2029}-\u{1680}1]",
+        ] {
+            assert_eq!(parse_json_path_expr(p).unwrap(), expected, "{:?}", p);
+        }
+        parse_json_path_expr("$.a[1to last]").unwrap_err();
+    }
 
     #[test]
     fn test_path_expression_flag() {
