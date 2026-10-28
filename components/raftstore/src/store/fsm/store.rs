@@ -308,6 +308,32 @@ impl StoreMeta {
         }
     }
 
+    /// Release a completed source's dependency on a target snapshot.
+    pub(super) fn remove_destroyed_region_from_snapshot(
+        &mut self,
+        region_id: u64,
+        merged_by_target: bool,
+    ) -> Option<u64> {
+        let need_atomic = *self.destroyed_region_for_snap.get(&region_id)?;
+        let target_region_id = *self.targets_map.get(&region_id).unwrap();
+        let sources = self.atomic_snap_regions.get_mut(&target_region_id).unwrap();
+        let is_ready = *sources.get(&region_id).unwrap();
+        if need_atomic {
+            // Step1 can be queued behind the independent cleanup completion.
+            // A false readiness flag guarantees the target has not included
+            // this source in its snapshot's destroy_regions. Once ready, the
+            // source must finish through the atomic snapshot protocol instead.
+            assert!(
+                !merged_by_target && !is_ready,
+                "[region {}] should destroy with target region atomically",
+                region_id,
+            );
+        }
+        sources.remove(&region_id);
+        self.destroyed_region_for_snap.remove(&region_id);
+        Some(target_region_id)
+    }
+
     #[inline]
     pub fn set_region<EK: KvEngine, ER: RaftEngine>(
         &mut self,
@@ -3656,7 +3682,59 @@ mod tests {
     use engine_traits::CompactedEvent;
     use kvproto::raft_serverpb::ExtraMessageType;
 
-    use super::ExtraMessageFullLogLimiter;
+    use super::{ExtraMessageFullLogLimiter, StoreMeta};
+
+    fn snapshot_source_meta(is_ready: bool) -> StoreMeta {
+        let mut meta = StoreMeta::new(0);
+        meta.targets_map.insert(1, 2);
+        meta.destroyed_region_for_snap.insert(1, true);
+        meta.atomic_snap_regions
+            .entry(2)
+            .or_default()
+            .insert(1, is_ready);
+        meta
+    }
+
+    #[test]
+    fn test_remove_destroyed_region_from_snapshot() {
+        let mut meta = snapshot_source_meta(false);
+        // Another source can already be ready for atomic destruction. Removing
+        // the independently destroyed source must preserve that dependency.
+        meta.atomic_snap_regions
+            .get_mut(&2)
+            .unwrap()
+            .insert(3, true);
+        assert_eq!(
+            meta.remove_destroyed_region_from_snapshot(1, false),
+            Some(2)
+        );
+        assert!(!meta.destroyed_region_for_snap.contains_key(&1));
+        assert_eq!(meta.atomic_snap_regions[&2].len(), 1);
+        assert_eq!(meta.atomic_snap_regions[&2].get(&3), Some(&true));
+        assert_eq!(meta.remove_destroyed_region_from_snapshot(1, false), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_ready_source() {
+        let mut meta = snapshot_source_meta(true);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_atomic_cleanup() {
+        let mut meta = snapshot_source_meta(false);
+        meta.remove_destroyed_region_from_snapshot(1, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_destroyed_region_from_snapshot_requires_source_dependency() {
+        let mut meta = snapshot_source_meta(false);
+        meta.atomic_snap_regions.get_mut(&2).unwrap().remove(&1);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
 
     #[test]
     fn test_extra_message_full_log_limiter() {
