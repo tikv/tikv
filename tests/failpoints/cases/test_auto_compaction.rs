@@ -724,7 +724,7 @@ fn test_auto_compaction_refreshes_region_approximate_size() {
     let fp_compaction_start = "gc_worker_auto_compaction_start";
     fail::cfg(fp_compaction_start, "pause").unwrap();
 
-    let (mut cluster, client, ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+    let (cluster, client, ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
         cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
         cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
         cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
