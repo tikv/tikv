@@ -424,6 +424,10 @@ impl CompactionRunnerHandle {
     }
 }
 
+/// Tells raftstore that data in the Region key range `[start_key, end_key)`
+/// changed outside the Raft write path, so cached Region sizes there are stale.
+pub type RegionSizeChangeHint = Box<dyn Fn(Vec<u8>, Vec<u8>) + Send>;
+
 /// Runs automatic compaction on TiKV
 /// Runs in a dedicated thread and continuously evaluates compaction candidates
 pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: KvEngine> {
@@ -432,6 +436,7 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     engine: E,
     control: Arc<CompactionControl>,
     cfg_tracker: GcWorkerConfigManager,
+    region_size_change_hint: RegionSizeChangeHint,
 }
 
 /// Calculates compaction score based on tombstones, estimated reclaimable
@@ -518,6 +523,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             engine,
             cfg_tracker,
             Arc::new(CompactionControl::default()),
+            Box::new(|_: Vec<u8>, _: Vec<u8>| {}),
         )
     }
 
@@ -527,6 +533,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         engine: E,
         cfg_tracker: GcWorkerConfigManager,
         control: Arc<CompactionControl>,
+        region_size_change_hint: RegionSizeChangeHint,
     ) -> Self {
         Self {
             safe_point_provider,
@@ -534,6 +541,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             engine,
             control,
             cfg_tracker,
+            region_size_change_hint,
         }
     }
 
@@ -906,22 +914,33 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
         let end_key = enc_end_key(&candidate.region);
 
         // Compact write CF first (most important for GC)
-        self.compact_range_cf(
+        let write_result = self.compact_range_cf(
             CF_WRITE,
             Some(&start_key),
             Some(&end_key),
             bottommost_level_force,
-        )?;
+        );
 
         // Then compact default CF
-        self.compact_range_cf(
+        let default_result = self.compact_range_cf(
             CF_DEFAULT,
             Some(&start_key),
             Some(&end_key),
             bottommost_level_force,
-        )?;
+        );
 
-        Ok(())
+        // GC reclaims space during these compactions without going through
+        // Raft, so neither `size_diff_hint` nor compaction-declined bytes
+        // reliably trigger a size recheck. Without one, PD keeps the stale
+        // size and never merges the Region. Either CF may have reclaimed space.
+        if write_result.is_ok() || default_result.is_ok() {
+            (self.region_size_change_hint)(
+                candidate.region.get_start_key().to_vec(),
+                candidate.region.get_end_key().to_vec(),
+            );
+        }
+
+        write_result.and(default_result)
     }
 
     /// Compacts a range in a specific column family

@@ -6,7 +6,7 @@ use std::{
     cmp::{self, Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
-        Bound::{Excluded, Included, Unbounded},
+        Bound::{Excluded, Unbounded},
     },
     mem,
     ops::{Deref, DerefMut},
@@ -3428,18 +3428,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
-        let start_key = data_key(start_key);
-        let end_key = data_end_key(end_key);
-
         let mut regions = vec![];
         {
             let meta = self.ctx.store_meta.lock().unwrap();
-            for (_, region_id) in meta
-                .region_ranges
-                .range((Excluded(start_key), Included(end_key)))
-            {
-                regions.push(*region_id);
-            }
+            // Include the Region containing `end_key`. Its boundaries may have
+            // changed since the caller looked up the range, e.g. by a merge, so
+            // it can extend past `end_key` while still covering changed data.
+            meta.search_region(start_key, end_key, |region| regions.push(region.get_id()));
         }
         for region_id in regions {
             let _ = self.ctx.router.send(
