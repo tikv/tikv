@@ -138,6 +138,7 @@ where
         ctx: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftStoreResult<()>;
 
     fn release_snapshot_cache(&mut self);
@@ -272,8 +273,9 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
         ctx: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftStoreResult<()> {
-        self.local_reader.read(ctx, req, cb);
+        self.local_reader.read(ctx, req, cb, extra_opts);
         Ok(())
     }
 
