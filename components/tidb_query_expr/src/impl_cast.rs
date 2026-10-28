@@ -16,7 +16,7 @@ use tidb_query_datatype::{
         collation::Encoding,
         convert::*,
         data_type::*,
-        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
+        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN},
         mysql::{
             Time, binary_literal,
             time::{MAX_YEAR, MIN_YEAR},
@@ -1426,9 +1426,24 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_vector_float32_as_vector_float32(val: VectorFloat32Ref) -> Result<Option<VectorFloat32>> {
+fn cast_vector_float32_as_vector_float32(
+    extra: &RpnFnCallExtra<'_>,
+    val: VectorFloat32Ref,
+) -> Result<Option<VectorFloat32>> {
+    let flen = extra.ret_field_type.as_accessor().flen();
+    if flen != UNSPECIFIED_LENGTH && val.len() != flen as usize {
+        return Err(Error::Eval(
+            format!(
+                "vector has {} dimensions, does not fit VECTOR({})",
+                val.len(),
+                flen
+            ),
+            ERR_UNKNOWN,
+        )
+        .into());
+    }
     Ok(Some(val.to_owned()))
 }
 
@@ -7234,6 +7249,77 @@ mod tests {
             let result = cast_json_as_json(Some(input.as_ref()));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_cast_vector_float32_as_vector_float32() {
+        let cases = [
+            (vec![1.0, 2.0, 3.0], 3),
+            (vec![1.0, 2.0, 3.0], UNSPECIFIED_LENGTH),
+            (vec![], UNSPECIFIED_LENGTH),
+        ];
+        for (values, flen) in cases {
+            let input = VectorFloat32::from_f32(values).unwrap();
+            let output: Option<VectorFloat32> = RpnFnScalarEvaluator::new()
+                .push_param(input.clone())
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::TiDbVectorFloat32)
+                        .flen(flen)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::CastVectorFloat32AsVectorFloat32)
+                .unwrap();
+            assert_eq!(output, Some(input));
+        }
+    }
+
+    #[test]
+    fn test_cast_vector_float32_as_vector_float32_dimension_mismatch() {
+        for flen in [2, 4] {
+            let input = VectorFloat32::from_f32(vec![1.0, 2.0, 3.0]).unwrap();
+            let err = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    input,
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::TiDbVectorFloat32)
+                        .flen(3)
+                        .build(),
+                )
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::TiDbVectorFloat32)
+                        .flen(flen)
+                        .build(),
+                )
+                .evaluate::<VectorFloat32>(ScalarFuncSig::CastVectorFloat32AsVectorFloat32)
+                .unwrap_err();
+            let tidb_query_common::error::ErrorInner::Evaluate(err) = *err.0 else {
+                panic!("Expected an evaluation error");
+            };
+            assert_eq!(err.code(), ERR_UNKNOWN);
+            assert_eq!(
+                err.to_string(),
+                format!("vector has 3 dimensions, does not fit VECTOR({})", flen)
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_vector_float32_as_vector_float32_null() {
+        for flen in [2, UNSPECIFIED_LENGTH] {
+            let output: Option<VectorFloat32> = RpnFnScalarEvaluator::new()
+                .push_param(None::<VectorFloat32>)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::TiDbVectorFloat32)
+                        .flen(flen)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::CastVectorFloat32AsVectorFloat32)
+                .unwrap();
+            assert_eq!(output, None);
         }
     }
 }
