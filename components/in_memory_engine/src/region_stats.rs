@@ -383,9 +383,10 @@ impl RegionStatsManager {
                 deletable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
-                    // This callback will be executed when eviction finishes at `on_delete_regions`.
-                    // `rx.recv()` returning `Some(())` means one eviction has completed and
-                    // its memory is freed; `None` only means no more notifications can
+                    // This callback will be executed when eviction finishes at
+                    // `on_delete_regions`. `rx.recv()` returning `Some(())`
+                    // means one eviction has completed and its memory is
+                    // freed; `None` only means no more notifications can
                     // arrive (every callback ran or was discarded), not that all
                     // candidate regions finished eviction.
                     Some(Box::new(move || {
