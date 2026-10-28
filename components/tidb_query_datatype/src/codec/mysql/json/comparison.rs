@@ -28,28 +28,14 @@ fn compare_f64_with_epsilon(x: f64, y: f64) -> Option<Ordering> {
     }
 }
 
-// `x as f64` is rounded when |x| > 2^53, so an integral double that looks equal
-// is compared with the integer exactly.
-fn compare_i64_f64(x: i64, y: f64) -> Option<Ordering> {
-    let ord = compare_f64_with_epsilon(x as f64, y)?;
-    if ord != Ordering::Equal || y.trunc() != y {
-        return Some(ord);
+// `x as f64` is rounded when |x| > 2^53, so an integral double is compared
+// with the integer exactly.
+fn compare_int_f64(x: i128, y: f64) -> Option<Ordering> {
+    if y.trunc() == y {
+        Some(x.cmp(&(y as i128)))
+    } else {
+        compare_f64_with_epsilon(x as f64, y)
     }
-    if y >= 9223372036854775808.0 {
-        return Some(Ordering::Less);
-    }
-    Some(x.cmp(&(y as i64)))
-}
-
-fn compare_u64_f64(x: u64, y: f64) -> Option<Ordering> {
-    let ord = compare_f64_with_epsilon(x as f64, y)?;
-    if ord != Ordering::Equal || y.trunc() != y {
-        return Some(ord);
-    }
-    if y >= 18446744073709551616.0 {
-        return Some(Ordering::Less);
-    }
-    Some(x.cmp(&(y as u64)))
 }
 
 impl JsonRef<'_> {
@@ -116,7 +102,9 @@ impl PartialOrd for JsonRef<'_> {
                 JsonType::I64 => match right.get_type() {
                     JsonType::I64 => Some(compare(self.get_i64(), right.get_i64())),
                     JsonType::U64 => Some(compare_i64_u64(self.get_i64(), right.get_u64())),
-                    JsonType::Double => compare_i64_f64(self.get_i64(), right.as_f64().unwrap()),
+                    JsonType::Double => {
+                        compare_int_f64(self.get_i64().into(), right.as_f64().unwrap())
+                    }
                     _ => unreachable!(),
                 },
                 JsonType::U64 => match right.get_type() {
@@ -124,14 +112,20 @@ impl PartialOrd for JsonRef<'_> {
                         Some(compare_i64_u64(right.get_i64(), self.get_u64()).reverse())
                     }
                     JsonType::U64 => Some(compare(self.get_u64(), right.get_u64())),
-                    JsonType::Double => compare_u64_f64(self.get_u64(), right.as_f64().unwrap()),
+                    JsonType::Double => {
+                        compare_int_f64(self.get_u64().into(), right.as_f64().unwrap())
+                    }
                     _ => unreachable!(),
                 },
                 JsonType::Double => match right.get_type() {
-                    JsonType::I64 => compare_i64_f64(right.get_i64(), self.as_f64().unwrap())
-                        .map(Ordering::reverse),
-                    JsonType::U64 => compare_u64_f64(right.get_u64(), self.as_f64().unwrap())
-                        .map(Ordering::reverse),
+                    JsonType::I64 => {
+                        compare_int_f64(right.get_i64().into(), self.as_f64().unwrap())
+                            .map(Ordering::reverse)
+                    }
+                    JsonType::U64 => {
+                        compare_int_f64(right.get_u64().into(), self.as_f64().unwrap())
+                            .map(Ordering::reverse)
+                    }
                     _ => compare_f64_with_epsilon(self.as_f64().unwrap(), right.as_f64().unwrap()),
                 },
                 JsonType::Literal => {
