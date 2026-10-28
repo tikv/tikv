@@ -637,11 +637,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     /// Refresh statistics without scanning for split keys. Keep retrying checks
     /// for potentially large Regions or table-boundary splits so expiry or
     /// re-enabling automatic splits can take effect even without further
-    /// writes.
-    fn refresh_disabled_region_stats(&self, region: &Region, engine: &EK) {
+    /// writes. Returns the refreshed approximate size, if available.
+    fn refresh_disabled_region_stats(&self, region: &Region, engine: &EK) -> Option<u64> {
         let cfg = &self.coprocessor.cfg;
         let region_id = region.get_id();
-        match get_region_approximate_size(
+        let size = match get_region_approximate_size(
             engine,
             region,
             cfg.region_max_size().0 * cfg.batch_split_limit,
@@ -656,13 +656,15 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     // can run after automatic splitting is re-enabled.
                     Some(cfg.split_region_on_table || size >= cfg.region_max_size().0),
                 );
+                Some(size)
             }
             Err(e) => {
                 warn!("failed to refresh disabled region size"; "region_id" => region_id, "err" => %e);
                 self.router
                     .update_approximate_size(region_id, None, Some(true));
+                None
             }
-        }
+        };
         match get_region_approximate_keys(
             engine,
             region,
@@ -682,6 +684,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     .update_approximate_keys(region_id, None, Some(true));
             }
         }
+        size
     }
 
     /// Checks a Region with split and bucket checkers to produce split keys and
@@ -768,9 +771,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         if reason != SplitReason::Admin && self.coprocessor.split_validator.is_disabled(region_id) {
             // PD may prohibit automatic splits of affinity Regions. Their size
             // and keys must still be refreshed for PD's merge and split decisions.
-            self.refresh_disabled_region_stats(region, tablet);
+            let size = self.refresh_disabled_region_stats(region, tablet);
             let mut host = SplitCheckerHost::new(reason, &self.coprocessor.cfg);
+            // Match the size checker: Regions too small for two buckets get none.
             if host.enable_region_bucket()
+                && size.is_some_and(|size| size >= 2 * self.coprocessor.cfg.region_bucket_size.0)
                 && bucket_ranges
                     .as_ref()
                     .is_none_or(|ranges| !ranges.is_empty())
@@ -866,8 +871,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                         .collect()
                 }
                 Err(e) => {
-                    error!(%e;
+                    warn!(
                         "failed to get approximate split key, try scan way";
+                        "err" => %e,
                         "region_id" => region_id,
                         "is_key_range" => is_key_range,
                         "start_key" => log_wrappers::Value::key(&start_key),
@@ -1759,6 +1765,34 @@ mod tests {
             trigger.post_triggered();
             assert!(trigger.should_skip(u64::MAX));
         }
+    }
+
+    #[test]
+    fn test_disabled_split_check_skips_buckets_for_small_region() {
+        let path = TempDir::new().unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let cfg = Config {
+            enable_region_bucket: Some(true),
+            region_bucket_size: ReadableSize::mb(96),
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::sync_channel(100);
+        let host = CoprocessorHost::new(tx.clone(), cfg);
+        let validator = host.split_validator.clone();
+        let mut runner = Runner::new(engine.clone(), tx, host, None);
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Default::default());
+        put_split_check_data(&engine, 0, 5);
+        validator.disable(region.get_id());
+        runner.run(Task::split_check(
+            region,
+            true,
+            CheckPolicy::Approximate,
+            None,
+        ));
+        let mut trigger = SplitCheckTrigger::default();
+        check_disabled_result(&rx, &mut trigger, [false; 2], false);
     }
 
     #[test]
