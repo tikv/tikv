@@ -1247,8 +1247,13 @@
 ##   false | "off": Output raw data to info log.
 ##   "marker": Encapsulate the raw data with "‹..›" to info log.
 ##
+<<<<<<< HEAD
 ## Default is false. 
 # redact-info-log = false
+=======
+## Default is true.
+# redact-info-log = true
+>>>>>>> bcd6b69371 (security: enable log redaction by default (#20324))
 
 ## Configurations for encryption at rest. Experimental.
 [security.encryption]

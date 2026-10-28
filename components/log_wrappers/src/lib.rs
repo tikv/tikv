@@ -67,7 +67,13 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
 /// data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RedactOption {
+<<<<<<< HEAD
     Flag(bool),
+=======
+    Off,
+    #[default]
+    On,
+>>>>>>> bcd6b69371 (security: enable log redaction by default (#20324))
     Marker,
 }
 
@@ -273,6 +279,7 @@ mod tests {
             redact_info_log: RedactOption,
         }
 
+<<<<<<< HEAD
         assert_eq!(
             RedactOption::from_str("").unwrap(),
             RedactOption::Flag(false)
@@ -285,6 +292,11 @@ mod tests {
             RedactOption::from_str("off").unwrap(),
             RedactOption::Flag(false)
         );
+=======
+        assert_eq!(RedactOption::from_str("").unwrap(), RedactOption::On);
+        assert_eq!(RedactOption::from_str("on").unwrap(), RedactOption::On);
+        assert_eq!(RedactOption::from_str("off").unwrap(), RedactOption::Off);
+>>>>>>> bcd6b69371 (security: enable log redaction by default (#20324))
         assert_eq!(
             RedactOption::from_str("marker").unwrap(),
             RedactOption::Marker
@@ -297,8 +309,8 @@ mod tests {
 
         let mut template = r#""#;
         let mut test_config: TestRedactInfo = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::default());
-        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
             redact-info-log = true  
@@ -352,12 +364,16 @@ mod tests {
     fn test_redact_info_log() {
         let buffer = crate::test_util::SyncLoggerBuffer::new();
         let logger = buffer.build_logger();
+<<<<<<< HEAD
         set_redact_info_log(RedactOption::Flag(true));
+=======
+        set_redact_info_log(RedactOption::default());
+>>>>>>> bcd6b69371 (security: enable log redaction by default (#20324))
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
 
         buffer.clear();
-        set_redact_info_log(RedactOption::default());
+        set_redact_info_log(RedactOption::Off);
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
 

@@ -941,6 +941,7 @@ fn test_serde_custom_tikv_config() {
 fn test_serde_default_config() {
     let cfg: TikvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TikvConfig::default());
+    assert_eq!(cfg.security.redact_info_log, log_wrappers::RedactOption::On);
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
     let cfg: TikvConfig = toml::from_str(&content).unwrap();
