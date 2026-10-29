@@ -417,7 +417,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{impl_arithmetic::arithmetic_fn_meta, util::mock_executor::MockExecutor};
+    use crate::{
+        impl_arithmetic::{arithmetic_fn_meta, arithmetic_with_ctx_fn_meta},
+        util::mock_executor::MockExecutor,
+    };
 
     #[test]
     fn test_top_0() {
@@ -663,7 +666,7 @@ mod tests {
                     .push_column_ref_for_test(2)
                     .push_constant_for_test(2)
                     .push_fn_call_for_test(
-                        arithmetic_fn_meta::<IntDivideInt>(),
+                        arithmetic_with_ctx_fn_meta::<IntDivideInt>(),
                         2,
                         FieldTypeTp::Long,
                     )

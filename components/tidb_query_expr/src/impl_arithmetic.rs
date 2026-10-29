@@ -214,12 +214,12 @@ impl ArithmeticOp for DecimalMinus {
 #[derive(Debug)]
 pub struct IntIntMod;
 
-impl ArithmeticOp for IntIntMod {
+impl ArithmeticOpWithCtx for IntIntMod {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(lhs % rhs))
     }
@@ -228,12 +228,12 @@ impl ArithmeticOp for IntIntMod {
 #[derive(Debug)]
 pub struct IntUintMod;
 
-impl ArithmeticOp for IntUintMod {
+impl ArithmeticOpWithCtx for IntUintMod {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
 
         if *lhs > 0 {
@@ -250,12 +250,12 @@ impl ArithmeticOp for IntUintMod {
 #[derive(Debug)]
 pub struct UintIntMod;
 
-impl ArithmeticOp for UintIntMod {
+impl ArithmeticOpWithCtx for UintIntMod {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(
             ((*lhs as u64) % (rhs.overflowing_abs().0 as u64)) as i64,
@@ -265,12 +265,12 @@ impl ArithmeticOp for UintIntMod {
 
 #[derive(Debug)]
 pub struct UintUintMod;
-impl ArithmeticOp for UintUintMod {
+impl ArithmeticOpWithCtx for UintUintMod {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(((*lhs as u64) % (*rhs as u64)) as i64))
     }
@@ -279,12 +279,12 @@ impl ArithmeticOp for UintUintMod {
 #[derive(Debug)]
 pub struct RealMod;
 
-impl ArithmeticOp for RealMod {
+impl ArithmeticOpWithCtx for RealMod {
     type T = Real;
 
-    fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         if rhs.into_inner() == 0f64 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(*lhs % *rhs))
     }
@@ -398,12 +398,12 @@ impl ArithmeticOp for UintUintMultiply {
 #[derive(Debug)]
 pub struct IntDivideInt;
 
-impl ArithmeticOp for IntDivideInt {
+impl ArithmeticOpWithCtx for IntDivideInt {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(div_i64(*lhs, *rhs)?))
     }
@@ -412,12 +412,12 @@ impl ArithmeticOp for IntDivideInt {
 #[derive(Debug)]
 pub struct IntDivideUint;
 
-impl ArithmeticOp for IntDivideUint {
+impl ArithmeticOpWithCtx for IntDivideUint {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(div_i64_with_u64(*lhs, *rhs as u64).map(|r| r as i64)?))
     }
@@ -426,12 +426,12 @@ impl ArithmeticOp for IntDivideUint {
 #[derive(Debug)]
 pub struct UintDivideUint;
 
-impl ArithmeticOp for UintDivideUint {
+impl ArithmeticOpWithCtx for UintDivideUint {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(((*lhs as u64) / (*rhs as u64)) as i64))
     }
@@ -440,12 +440,12 @@ impl ArithmeticOp for UintDivideUint {
 #[derive(Debug)]
 pub struct UintDivideInt;
 
-impl ArithmeticOp for UintDivideInt {
+impl ArithmeticOpWithCtx for UintDivideInt {
     type T = Int;
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+    fn calc(ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0 {
-            return Ok(None);
+            return Ok(ctx.handle_division_by_zero().map(|_| None)?);
         }
         Ok(Some(div_u64_with_i64(*lhs as u64, *rhs).map(|r| r as i64)?))
     }
@@ -1315,7 +1315,25 @@ mod tests {
                 2.33.into(),
                 0.0.into(),
             ),
+            (
+                ScalarFuncSig::ModReal,
+                FieldTypeTp::Double,
+                2.33.into(),
+                0.0.into(),
+            ),
         ];
+        let int_cases = [
+            ScalarFuncSig::ModIntSignedSigned,
+            ScalarFuncSig::ModIntSignedUnsigned,
+            ScalarFuncSig::ModIntUnsignedSigned,
+            ScalarFuncSig::ModIntUnsignedUnsigned,
+            ScalarFuncSig::ModInt,
+            ScalarFuncSig::IntDivideInt,
+        ];
+        let mut cases = cases;
+        for sig in int_cases {
+            cases.push((sig, FieldTypeTp::LongLong, 5i64.into(), 0i64.into()));
+        }
 
         // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
         let modes = vec![
