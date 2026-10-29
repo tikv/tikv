@@ -20,6 +20,10 @@ use super::{
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// Default and maximum pessimistic lock wait. After a lock owner change, a
+    /// fair waiter is not re-registered in the wait-for graph until this
+    /// wait ends, so raising this also raises worst-case deadlock detection
+    /// delay for those waits.
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
