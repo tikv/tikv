@@ -1033,7 +1033,7 @@ where
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: !cfg.unsafe_disable_check_quorum,
-            skip_bcast_commit: true,
+            skip_bcast_commit: !cfg.raft_bcast_commit,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
@@ -3301,9 +3301,16 @@ where
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
-                // Urgent requests are flushed, make it lazy again.
-                self.raft_group.skip_bcast_commit(true);
+                // Urgent requests are flushed.
                 self.last_urgent_proposal_idx = u64::MAX;
+            }
+            if self.last_urgent_proposal_idx == u64::MAX {
+                // No urgent proposal is pending, so follow the configured
+                // policy. This runs on every batch of committed entries so a
+                // hot-reloaded `raft-bcast-commit` reaches existing leaders
+                // instead of only peers created after the change.
+                self.raft_group
+                    .skip_bcast_commit(!ctx.cfg.raft_bcast_commit);
             }
             let cbs = if !self.proposals.is_empty() {
                 let current_term = self.term();

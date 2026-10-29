@@ -155,6 +155,7 @@ raftdb-path = "/var"
 capacity = 123
 raft-base-tick-interval = "12s"
 raft-heartbeat-ticks = 1
+raft-bcast-commit = true
 raft-election-timeout-ticks = 12
 raft-min-election-timeout-ticks = 14
 raft-max-election-timeout-ticks = 20
