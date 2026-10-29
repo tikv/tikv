@@ -64,6 +64,25 @@ pub struct Config {
     pub raft_base_tick_interval: ReadableDuration,
     #[online_config(hidden)]
     pub raft_heartbeat_ticks: usize,
+    /// Broadcast the commit index to followers as soon as an entry is
+    /// committed, instead of piggybacking it on the next append or heartbeat.
+    ///
+    /// When disabled, a follower of a region that received one
+    /// write and then went quiet does not learn the commit index until the
+    /// next heartbeat, up to `raft-base-tick-interval * raft-heartbeat-ticks`
+    /// (2s by default). Until then it cannot apply the entry, and because the
+    /// leader's resolved-ts is tagged with the leader's applied index, the
+    /// follower's stale-read safe-ts is stuck one entry behind as well. On a
+    /// store with thousands of follower regions the worst follower safe-ts is
+    /// therefore always ~2s old, regardless of
+    /// `resolved-ts.advance-ts-interval`.
+    ///
+    /// Enabling this sends one extra small MsgAppend per follower per commit
+    /// when no further write is pending, roughly doubling Raft message count
+    /// on a write-heavy store, in exchange for follower safe-ts tracking the
+    /// leader within one round trip. Disabled by default. Hot-reloadable; a
+    /// leader applies the new value with its next batch of committed entries.
+    pub raft_bcast_commit: bool,
     #[online_config(hidden)]
     pub raft_election_timeout_ticks: usize,
     #[online_config(hidden)]
@@ -538,6 +557,7 @@ impl Default for Config {
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
+            raft_bcast_commit: false,
             raft_election_timeout_ticks: 10,
             raft_min_election_timeout_ticks: 0,
             raft_max_election_timeout_ticks: 0,
@@ -697,7 +717,7 @@ impl Config {
             max_inflight_msgs: self.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
-            skip_bcast_commit: true,
+            skip_bcast_commit: !self.raft_bcast_commit,
             pre_vote: self.prevote,
             max_committed_size_per_ready: ReadableSize::mb(16).0,
             ..Default::default()
