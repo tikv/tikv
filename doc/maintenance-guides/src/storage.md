@@ -142,6 +142,9 @@ High-risk contracts:
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
+- `CheckTxnStatus` must check whether a shared lock belongs to the queried
+  transaction before rejecting it as an invalid primary. Unrelated shared
+  holders must not hide that transaction's commit or rollback record.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as
