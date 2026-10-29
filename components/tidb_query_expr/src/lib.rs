@@ -295,19 +295,19 @@ fn multiply_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 
 fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => arithmetic_fn_meta::<IntIntMod>(),
-        (false, true) => arithmetic_fn_meta::<IntUintMod>(),
-        (true, false) => arithmetic_fn_meta::<UintIntMod>(),
-        (true, true) => arithmetic_fn_meta::<UintUintMod>(),
+        (false, false) => arithmetic_with_ctx_fn_meta::<IntIntMod>(),
+        (false, true) => arithmetic_with_ctx_fn_meta::<IntUintMod>(),
+        (true, false) => arithmetic_with_ctx_fn_meta::<UintIntMod>(),
+        (true, true) => arithmetic_with_ctx_fn_meta::<UintUintMod>(),
     }
 }
 
 fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
-        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
-        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
-        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
+        (false, false) => arithmetic_with_ctx_fn_meta::<IntDivideInt>(),
+        (false, true) => arithmetic_with_ctx_fn_meta::<IntDivideUint>(),
+        (true, false) => arithmetic_with_ctx_fn_meta::<UintDivideInt>(),
+        (true, true) => arithmetic_with_ctx_fn_meta::<UintDivideUint>(),
     }
 }
 
@@ -456,13 +456,13 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
         ScalarFuncSig::IntDivideDecimal => map_int_sig(value, children, divide_decimal_mapper)?,
-        ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
+        ScalarFuncSig::ModReal => arithmetic_with_ctx_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
-        ScalarFuncSig::ModIntUnsignedUnsigned => arithmetic_fn_meta::<UintUintMod>(),
-        ScalarFuncSig::ModIntUnsignedSigned => arithmetic_fn_meta::<UintIntMod>(),
-        ScalarFuncSig::ModIntSignedUnsigned => arithmetic_fn_meta::<IntUintMod>(),
-        ScalarFuncSig::ModIntSignedSigned => arithmetic_fn_meta::<IntIntMod>(),
+        ScalarFuncSig::ModIntUnsignedUnsigned => arithmetic_with_ctx_fn_meta::<UintUintMod>(),
+        ScalarFuncSig::ModIntUnsignedSigned => arithmetic_with_ctx_fn_meta::<UintIntMod>(),
+        ScalarFuncSig::ModIntSignedUnsigned => arithmetic_with_ctx_fn_meta::<IntUintMod>(),
+        ScalarFuncSig::ModIntSignedSigned => arithmetic_with_ctx_fn_meta::<IntIntMod>(),
 
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
