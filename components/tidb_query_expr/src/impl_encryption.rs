@@ -115,8 +115,12 @@ pub fn uncompress(
     }
 
     let len = LittleEndian::read_u32(&input[0..4]) as usize;
-    let mut d = ZlibDecoder::new(&input[4..]);
-    let mut vec = Vec::with_capacity(len);
+    // The declared length comes from the input and cannot be trusted, so do
+    // not reserve it up front, and stop decoding as soon as the output exceeds
+    // it. Reading one more byte than declared is enough to detect a length
+    // mismatch below.
+    let mut d = ZlibDecoder::new(&input[4..]).take(len as u64 + 1);
+    let mut vec = Vec::new();
 
     // - if the length of uncompressed string is greater than the length we read
     //   from the first four bytes, return null and generate a length corrupted
@@ -436,6 +440,60 @@ mod tests {
             assert_eq!(output, expect);
         }
         test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Uncompress);
+    }
+
+    #[test]
+    fn test_uncompress_untrusted_length() {
+        use tidb_query_datatype::{
+            FieldTypeTp,
+            codec::error::{ZLIB_DATA_CORRUPTED, ZLIB_LENGTH_CORRUPTED},
+        };
+
+        // Builds a COMPRESS() style payload whose length header is
+        // `declared_len` instead of the real length of `data`.
+        fn payload(data: &[u8], declared_len: u32) -> Bytes {
+            let mut input = vec![0; 4];
+            LittleEndian::write_u32(&mut input, declared_len);
+            ZlibEncoder::new(data, Compression::default())
+                .read_to_end(&mut input)
+                .unwrap();
+            input
+        }
+
+        let large = vec![b'a'; 1 << 20];
+        let cases = vec![
+            // A huge declared length must not be reserved up front, and the
+            // data is still valid since it is not longer than declared.
+            (
+                payload(b"hello world", u32::MAX),
+                Some(&b"hello world"[..]),
+                None,
+            ),
+            (payload(b"hello world", 11), Some(&b"hello world"[..]), None),
+            // The decoded data is longer than declared.
+            (
+                payload(b"hello world", 10),
+                None,
+                Some(ZLIB_LENGTH_CORRUPTED),
+            ),
+            (payload(&large, 16), None, Some(ZLIB_LENGTH_CORRUPTED)),
+            (payload(&large, 0), None, Some(ZLIB_LENGTH_CORRUPTED)),
+            // An empty result is treated as corrupted data.
+            (payload(b"", u32::MAX), None, Some(ZLIB_DATA_CORRUPTED)),
+        ];
+        for (arg, expect, err_code) in cases {
+            let (output, ctx) = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::Uncompress);
+            assert_eq!(output.unwrap().as_bytes(), expect);
+            match err_code {
+                Some(code) => {
+                    assert_eq!(ctx.warnings.warning_cnt, 1);
+                    assert_eq!(ctx.warnings.warnings[0].get_code(), code);
+                }
+                None => assert_eq!(ctx.warnings.warning_cnt, 0),
+            }
+        }
     }
 
     #[test]
