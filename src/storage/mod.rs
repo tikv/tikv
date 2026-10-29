@@ -2897,9 +2897,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &statistics,
                         buckets.as_ref(),
                     );
+                    // `read_keys` counts cursor operations, so observe the
+                    // returned pairs instead.
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(statistics.data.flow_stats.read_keys as f64);
+                        .observe(result.as_ref().map_or(0, Vec::len) as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -3064,9 +3066,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         key_ranges,
                         QueryKind::Scan,
                     );
+                    // `read_keys` counts cursor operations, so observe the
+                    // returned pairs instead.
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(statistics.data.flow_stats.read_keys as f64);
+                        .observe(result.len() as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC

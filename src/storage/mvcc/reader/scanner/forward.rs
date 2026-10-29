@@ -394,7 +394,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         // Only needs to check lock in SI
         let lock_cursor = cursors.lock.as_mut().unwrap();
         let lock_or_shared_locks = {
-            let lock_value = lock_cursor.value_with_stats(&mut statistics.lock);
+            let lock_value = lock_cursor.value(&mut statistics.lock);
             txn_types::parse_lock(lock_value)?
         };
         lock_cursor.next(&mut statistics.lock);
@@ -438,7 +438,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<ValueEntry> = loop {
-            let write = WriteRef::parse(cursors.write.value_with_stats(&mut statistics.write))?;
+            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
@@ -565,7 +565,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                 // There are no newer records of this key since `after_ts`.
                 break None;
             }
-            let write_value = cursors.write.value_with_stats(&mut statistics.write);
+            let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
@@ -646,7 +646,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     // Only needs to check lock in SI
     let lock_cursor = cursors.lock.as_mut().unwrap();
     let lock_or_shared_locks = {
-        let lock_value = lock_cursor.value_with_stats(&mut statistics.lock);
+        let lock_value = lock_cursor.value(&mut statistics.lock);
         txn_types::parse_lock(lock_value)?
     };
     lock_cursor.next(&mut statistics.lock);
@@ -703,7 +703,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             .lock
             .as_mut()
             .unwrap()
-            .value_with_stats(&mut statistics.lock)
+            .value(&mut statistics.lock)
             .to_owned();
         match txn_types::parse_lock(&lock_value)? {
             Either::Left(lock) => {
@@ -780,7 +780,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         loop {
-            let write_value = cursors.write.value_with_stats(&mut statistics.write);
+            let write_value = cursors.write.value(&mut statistics.write);
             let commit_ts = Key::decode_ts_from(cursors.write.key())?;
 
             // commit_ts > cfg.ts never happens since the ForwardScanner will skip those
@@ -833,10 +833,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
             let write = (
                 cursors.write.key().to_owned(),
-                cursors
-                    .write
-                    .value_with_stats(&mut statistics.write)
-                    .to_owned(),
+                cursors.write.value(&mut statistics.write).to_owned(),
             );
             // Move to the next write record early for getting the old value.
             cursors.write.next(&mut statistics.write);
@@ -1238,7 +1235,7 @@ mod latest_kv_tests {
     }
 
     #[test]
-    fn test_flow_statistics_include_skipped_mvcc_versions() {
+    fn test_flow_statistics_count_all_cursor_operations() {
         let key = b"scan-flow";
         let value = vec![b'x'; 300];
         let mut engine = TestEngineBuilder::new().build().unwrap();
@@ -1262,9 +1259,10 @@ mod latest_kv_tests {
         );
 
         let statistics = scanner.take_statistics();
-        // The scanner crosses SEEK_BOUND while skipping newer versions and
-        // falls back from `next` to `seek`. Both kinds of cursor operations
-        // must be visible even though only one row is returned.
+        // The scanner skips the newer versions with `next`, falls back to
+        // `seek` after SEEK_BOUND steps, and finally moves past the last key.
+        // Every operation is counted, including the last `next`, which lands
+        // on no key.
         assert_eq!(statistics.write.seek, 2);
         assert_eq!(statistics.write.next, SEEK_BOUND as usize);
         assert_eq!(statistics.write.over_seek_bound, 1);
@@ -1272,7 +1270,6 @@ mod latest_kv_tests {
             statistics.write.flow_stats.read_keys,
             statistics.write.total_op_count()
         );
-        assert!(statistics.write.flow_stats.read_keys > statistics.write.processed_keys);
 
         let default_key = Key::from_raw(key).append_ts(10.into());
         assert_eq!(statistics.data.flow_stats.read_keys, 1);

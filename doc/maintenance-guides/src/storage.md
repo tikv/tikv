@@ -176,38 +176,49 @@ High-risk contracts:
   apply/store write-worker activity to the request: those paths use write-only
   PerfContext metrics and may batch work from multiple requests.
 
-### Read-flow accounting
-
-`components/tikv_kv/src/cursor.rs` accounts one `read_keys` operation whenever
-the underlying iterator performs `seek`, `seek_for_prev`, `next`, or `prev`.
-This includes a movement that reaches the iterator boundary. Key bytes are
-added when the movement lands on a valid key. Value bytes are added when the
-caller accesses the value, or when a wrapper has already materialized it while
-filtering; this preserves lazy-value and key-only behavior.
-
-Direct point reads use `Statistics::record_cf_read` and account both hits and
-misses. Local statistics retain separate `lock`, `write`, and `default` CF
-flows. The PD `ReadStats` payload includes only the write and default CF flows:
-its protocol has no separate lock-CF flow, and lock records are transaction
-metadata rather than user-data flow. Lock-CF counters remain available in
-local scan details for diagnosis.
-
-RocksDB internal tombstones skipped during a movement remain in the
-`*_tombstone` diagnostic counters. They are not added to PD user flow because
-they are engine-internal entries and adding them would mix compaction and
-engine-layout effects with client-visible region traffic.
-
-`processed_keys` continues to describe logical MVCC results. It can be lower
-than `read_keys` when a request traverses versions or performs seeks without
-returning a row; the difference is expected and is the signal needed for hot
-read detection.
-
 Start triage with:
 
 - `src/storage/metrics.rs`
 - `txn/scheduler.rs`
 - `lock_manager/*`
 - `config_manager.rs`
+
+### Read-flow accounting
+
+`components/tikv_kv/src/cursor.rs` charges one `read_keys` for every underlying
+`seek`, `seek_for_prev`, `next`, or `prev`, including a movement that ends at
+the iterator boundary. A movement that lands on a key also charges the key
+bytes. Value bytes are charged the first time `Cursor::value` reads the value
+at a position. An iterator that already read the value while positioning
+reports its stored length through `Iterator::cached_value_size`, and the cursor
+charges it during the movement instead. Only `RawEncodeIterator` does this: it
+reads every value it returns to apply the RawKV TTL/delete filter, so TTL and
+API V2 scans charge returned values even when they are key-only. Records that
+the filter skips are not charged.
+
+MVCC readers charge direct point reads, hits and misses, to the CF they read
+through `Statistics::record_cf_read`. RawKV point reads are charged to the
+default-CF flow whichever CF they read, because every RawKV CF holds user data.
+RawKV scans charge the CF they scan, so scans of the lock CF are not reported
+to `ReadStats`.
+
+Consumers:
+
+- `storage/metrics.rs`, `txn/sched_pool.rs`, and `coprocessor/metrics.rs` add
+  the write and default-CF flows to `ReadStats`; lock-CF flow is not reported.
+  `ReadStats` feeds region and store heartbeats, bucket statistics, and the
+  load-split byte threshold in raftstore `split_controller.rs`.
+- `Storage::batch_get`, `Storage::buffer_batch_get`, and write commands in
+  `txn/scheduler.rs` charge the sum of lock, write, and default-CF read bytes to
+  `QuotaLimiter`, so lock-CF probes count against the foreground read quota.
+
+RocksDB internal tombstones skipped during a movement stay in the
+`*_tombstone` diagnostic counters and are not added to the flow. They are
+engine-internal entries, and counting them would mix compaction state into
+client-visible region traffic.
+
+`processed_keys` still counts logical MVCC results. It is lower than
+`read_keys` when a request skips versions or seeks without returning a row.
 
 ## Change Management Guidance
 
@@ -228,6 +239,9 @@ Start triage with:
   inspect `mvcc/*`, `txn/store.rs`, and transactional commands
 - Raw KV changes:
   inspect `raw/*`, API-version handling, and coprocessor_v2 storage adapter
+- Read-flow accounting changes:
+  inspect `components/tikv_kv/src/{cursor,stats}.rs` and the consumers listed
+  under "Read-flow accounting"
 - Lock-wait or flow-control changes:
   inspect `lock_manager/*`, `txn/flow_controller/*`, and runtime workers in
   `src/server`

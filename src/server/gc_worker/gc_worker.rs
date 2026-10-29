@@ -671,7 +671,7 @@ impl<E: Engine> GcRunnerCore<E> {
             } else {
                 remove_older = true;
 
-                let value = ApiV2::decode_raw_value(cursor.value_with_stats(&mut statistics))?;
+                let value = ApiV2::decode_raw_value(cursor.value(&mut statistics))?;
                 // It's deleted or expired.
                 if !value.is_valid(current_ts) {
                     latest_version_key = Some(Key::from_encoded_slice(current_key));

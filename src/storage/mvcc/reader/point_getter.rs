@@ -334,10 +334,7 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
-        let mut write = WriteRef::parse(
-            self.write_cursor
-                .value_with_stats(&mut self.statistics.write),
-        )?;
+        let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         // Commit ts of `write` when it is loaded by `last_change` shortcut via
         // `get_cf`. In that case write cursor still points to a newer version
         // and its ts must not be used.
@@ -429,10 +426,7 @@ impl<S: Snapshot> PointGetter<S> {
             }
             loaded_write_commit_ts = None;
             // No need to compare user key because it uses prefix seek.
-            write = WriteRef::parse(
-                self.write_cursor
-                    .value_with_stats(&mut self.statistics.write),
-            )?;
+            write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         }
     }
 
@@ -854,13 +848,11 @@ mod tests {
         assert_eq!(statistics.write.seek, 2);
         assert_eq!(statistics.write.next, SEEK_BOUND as usize);
         assert_eq!(statistics.write.over_seek_bound, 1);
+        // Every write-CF operation is counted, including the fallback seek
+        // whose landing key the getter never inspects.
         assert_eq!(
             statistics.write.flow_stats.read_keys,
             statistics.write.total_op_count()
-        );
-        assert!(
-            statistics.write.flow_stats.read_keys > statistics.write.processed_keys,
-            "MVCC versions skipped by seek/next must be visible to PD flow statistics"
         );
 
         let default_key = Key::from_raw(key).append_ts(10.into());
@@ -908,6 +900,40 @@ mod tests {
         );
         assert_eq!(statistics.data.flow_stats.read_keys, 0);
         assert_eq!(statistics.data.flow_stats.read_bytes, 0);
+    }
+
+    #[test]
+    fn test_flow_statistics_count_skipped_records_and_misses() {
+        let key = b"skip";
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, key, b"value", key, 10);
+        must_commit(&mut engine, key, 10, 20);
+        // There are too few records for the `last_change` shortcut, so the
+        // getter steps over the Lock and Rollback records with `next` and only
+        // reads their values.
+        for start_ts in [30, 50, 70] {
+            must_prewrite_lock(&mut engine, key, key, start_ts);
+            must_commit(&mut engine, key, start_ts, start_ts + 5);
+        }
+        must_rollback(&mut engine, key, 100, true);
+
+        let mut getter = new_point_getter(&mut engine, 200.into());
+        assert_eq!(
+            getter.get(&Key::from_raw(key)).unwrap(),
+            Some(b"value".to_vec())
+        );
+        let statistics = getter.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 4);
+        assert_eq!(statistics.write.flow_stats.read_keys, 5);
+
+        // A miss still costs a lock-CF probe and a write-CF seek.
+        let mut getter = new_point_getter(&mut engine, 200.into());
+        assert_eq!(getter.get(&Key::from_raw(b"absent")).unwrap(), None);
+        let statistics = getter.take_statistics();
+        assert_eq!(statistics.lock.flow_stats.read_keys, 1);
+        assert_eq!(statistics.write.flow_stats.read_keys, 1);
+        assert_eq!(statistics.write.flow_stats.read_bytes, 0);
     }
 
     #[test]

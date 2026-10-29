@@ -174,14 +174,9 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         key: &Key,
         stats: &mut Statistics,
     ) -> Result<Option<Vec<u8>>> {
-        // No scan counters are maintained for this point operation, but the
-        // flow statistics should include both hits and misses.
+        // No scan counters are maintained for this point operation.
         let value = self.snapshot.get_cf(cf, key)?;
-        stats.record_cf_read(
-            cf,
-            key.as_encoded().len(),
-            value.as_ref().map_or(0, |value| value.len()),
-        );
+        super::record_point_read(stats, key, value.as_ref());
         Ok(value)
     }
 
@@ -202,13 +197,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let iterator_key_only = option.key_only();
-        let mut cursor = Cursor::new_with_key_only(
+        let mut cursor = Cursor::new(
             self.snapshot.iter(cf, option)?,
             ScanMode::Forward,
             false,
             false,
-            iterator_key_only,
         );
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -231,7 +224,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value_with_stats(statistics).to_owned()
+                    cursor.value(statistics).to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -261,13 +254,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let iterator_key_only = option.key_only();
-        let mut cursor = Cursor::new_with_key_only(
+        let mut cursor = Cursor::new(
             self.snapshot.iter(cf, option)?,
             ScanMode::Backward,
             false,
             false,
-            iterator_key_only,
         );
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
@@ -290,7 +281,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value_with_stats(statistics).to_owned()
+                    cursor.value(statistics).to_owned()
                 },
             )));
             if pairs.len() < limit {
@@ -336,7 +327,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
                     row_count = 0;
                 }
                 // Calculate checksum on user key, as timestamp is not visible on client side.
-                let v = cursor.value_with_stats(cf_stats);
+                let v = cursor.value(cf_stats);
                 let (raw_key, _) =
                     F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key()), true)?;
                 checksum = checksum_crc64_xor(checksum, digest.clone(), &raw_key, v);
@@ -353,11 +344,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
 #[cfg(test)]
 mod tests {
     use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat, RawValue};
-    use engine_traits::CF_DEFAULT;
+    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::Context;
-    use tikv_kv::{BTreeEngine, Engine, Result as KvResult, Statistics};
-    use txn_types::{KvPair, TimeStamp};
+    use kvproto::kvrpcpb::{ApiVersion, Context};
+    use tikv_kv::{BTreeEngine, Engine, Statistics};
+    use txn_types::TimeStamp;
 
     use super::RawStore;
 
@@ -372,6 +363,7 @@ mod tests {
 
     fn put_raw<F: KvFormat>(
         engine: &BTreeEngine,
+        cf: CfName,
         user_key: &[u8],
         ts: Option<u64>,
         user_value: &[u8],
@@ -379,45 +371,68 @@ mod tests {
         let key = F::encode_raw_key_owned(user_key.to_vec(), ts.map(TimeStamp::from));
         let value = encode_raw_value::<F>(user_value);
         engine
-            .put(&Context::default(), key, value)
+            .put_cf(&Context::default(), cf, key, value)
             .expect("put raw test value");
     }
 
-    fn assert_point_get_flow<F: KvFormat>(ts: Option<u64>) {
+    fn assert_point_read_flow<F: KvFormat>(cf: CfName, ts: Option<u64>) {
         let mut engine = BTreeEngine::default();
         let user_key = b"r\0point";
         let user_value = b"point-value";
         let encoded_value = encode_raw_value::<F>(user_value);
-        put_raw::<F>(&engine, user_key, ts, user_value);
+        put_raw::<F>(&engine, cf, user_key, ts, user_value);
 
         let key = F::encode_raw_key(user_key, None);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let store = RawStore::new(snapshot, F::TAG);
-        let mut statistics = Statistics::default();
+        let mut get_statistics = Statistics::default();
         assert_eq!(
             store
-                .raw_get_key_value(CF_DEFAULT, &key, &mut statistics)
+                .raw_get_key_value(cf, &key, &mut get_statistics)
                 .unwrap(),
             Some(user_value.to_vec())
         );
-        assert_eq!(statistics.data.flow_stats.read_keys, 1);
-        assert_eq!(
-            statistics.data.flow_stats.read_bytes,
-            key.len() + encoded_value.len()
-        );
+        let mut reads = vec![get_statistics];
+        if F::IS_TTL_ENABLED {
+            let mut ttl_statistics = Statistics::default();
+            assert!(
+                store
+                    .raw_get_key_ttl(cf, &key, &mut ttl_statistics)
+                    .unwrap()
+                    .is_some()
+            );
+            reads.push(ttl_statistics);
+        }
+        for statistics in reads {
+            // Reads of every RawKV CF are charged to the default-CF flow, which
+            // `ReadStats` reports to PD.
+            assert_eq!(statistics.data.flow_stats.read_keys, 1, "cf={cf}");
+            assert_eq!(
+                statistics.data.flow_stats.read_bytes,
+                key.len() + encoded_value.len(),
+                "cf={cf}"
+            );
+            assert_eq!(statistics.lock.flow_stats.read_keys, 0, "cf={cf}");
+            assert_eq!(statistics.write.flow_stats.read_keys, 0, "cf={cf}");
+        }
     }
 
     #[test]
     fn test_raw_point_get_flow_statistics() {
-        assert_point_get_flow::<ApiV1>(None);
-        assert_point_get_flow::<ApiV1Ttl>(None);
-        assert_point_get_flow::<ApiV2>(Some(10));
+        for cf in [CF_DEFAULT, CF_LOCK, CF_WRITE] {
+            assert_point_read_flow::<ApiV1>(cf, None);
+            assert_point_read_flow::<ApiV1Ttl>(cf, None);
+        }
+        // API V2 only accepts the default CF.
+        assert_point_read_flow::<ApiV2>(CF_DEFAULT, Some(10));
     }
 
-    fn run_key_only_scan<F: KvFormat>(reverse: bool) -> (Vec<KvResult<KvPair>>, Statistics) {
+    fn assert_scan_flow<F: KvFormat>(key_only: bool, reverse: bool) {
         let mut engine = BTreeEngine::default();
-        put_raw::<F>(&engine, b"r\0a", Some(10), b"one");
-        put_raw::<F>(&engine, b"r\0b", Some(10), b"three");
+        let records: [(&[u8], &[u8]); 2] = [(b"r\0a", b"one"), (b"r\0b", b"three")];
+        for (user_key, user_value) in records {
+            put_raw::<F>(&engine, CF_DEFAULT, user_key, Some(10), user_value);
+        }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let store = RawStore::new(snapshot, F::TAG);
@@ -428,47 +443,60 @@ mod tests {
         };
         let mut statistics = Statistics::default();
         let pairs = if reverse {
-            block_on(store.reverse_raw_scan(CF_DEFAULT, &start_key, None, 2, &mut statistics, true))
-                .unwrap()
+            block_on(store.reverse_raw_scan(
+                CF_DEFAULT,
+                &start_key,
+                None,
+                2,
+                &mut statistics,
+                key_only,
+            ))
         } else {
-            block_on(store.forward_raw_scan(CF_DEFAULT, &start_key, None, 2, &mut statistics, true))
-                .unwrap()
-        };
-        (pairs, statistics)
-    }
-
-    fn assert_key_only_scan<F: KvFormat>(expect_value_bytes: bool, reverse: bool) {
-        let (pairs, statistics) = run_key_only_scan::<F>(reverse);
+            block_on(store.forward_raw_scan(
+                CF_DEFAULT,
+                &start_key,
+                None,
+                2,
+                &mut statistics,
+                key_only,
+            ))
+        }
+        .unwrap();
         assert_eq!(pairs.len(), 2);
-        assert!(pairs.iter().all(|pair| pair.as_ref().unwrap().1.is_empty()));
 
-        let returned_key_bytes: usize = pairs
+        let key_bytes: usize = pairs
             .iter()
             .map(|pair| pair.as_ref().unwrap().0.len())
             .sum();
-        let read_bytes = statistics.data.flow_stats.read_bytes;
-        assert_eq!(statistics.data.flow_stats.read_keys, 2);
-        if expect_value_bytes {
-            assert!(
-                read_bytes > returned_key_bytes,
-                "decoder-required value reads must be reflected in flow statistics: read_bytes={read_bytes}, returned_key_bytes={returned_key_bytes}"
-            );
+        let stored_value_bytes: usize = records
+            .iter()
+            .map(|(_, user_value)| encode_raw_value::<F>(user_value).len())
+            .sum();
+        // API V1 charges a value only when the scan reads it. The TTL and V2
+        // iterators read every value they return to apply the TTL/delete
+        // filter, so its stored length is charged once, even for key-only
+        // scans.
+        let value_bytes = if F::TAG == ApiVersion::V1 && key_only {
+            0
         } else {
-            assert_eq!(read_bytes, returned_key_bytes);
-        }
+            stored_value_bytes
+        };
+        assert_eq!(statistics.data.flow_stats.read_keys, 2);
+        assert_eq!(
+            statistics.data.flow_stats.read_bytes,
+            key_bytes + value_bytes,
+            "key_only={key_only} reverse={reverse}"
+        );
     }
 
     #[test]
-    fn test_raw_key_only_flow_statistics() {
-        // API V1 can pass key-only to RocksDB, so no value bytes are charged.
-        assert_key_only_scan::<ApiV1>(false, false);
-        assert_key_only_scan::<ApiV1>(false, true);
-
-        // TTL and V2 iterators must decode values to filter expired/deleted
-        // records, even though the RPC response omits the values.
-        assert_key_only_scan::<ApiV1Ttl>(true, false);
-        assert_key_only_scan::<ApiV1Ttl>(true, true);
-        assert_key_only_scan::<ApiV2>(true, false);
-        assert_key_only_scan::<ApiV2>(true, true);
+    fn test_raw_scan_flow_statistics() {
+        for key_only in [false, true] {
+            for reverse in [false, true] {
+                assert_scan_flow::<ApiV1>(key_only, reverse);
+                assert_scan_flow::<ApiV1Ttl>(key_only, reverse);
+                assert_scan_flow::<ApiV2>(key_only, reverse);
+            }
+        }
     }
 }

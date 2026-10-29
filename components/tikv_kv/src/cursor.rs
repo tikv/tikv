@@ -23,14 +23,9 @@ pub struct Cursor<I: Iterator> {
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
 
-    // Value loading is lazy for RocksDB iterators. Keep the old per-position
-    // guard so flow accounting can charge value bytes when the caller really
-    // asks for the value, without loading it just to measure its size.
+    // Use `Cell` to wrap the flag to provide interior mutability, so that
+    // `value()` doesn't need to have `&mut self`.
     cur_value_has_read: Cell<bool>,
-
-    // Key-only iterators must not account or load values, even when an
-    // in-memory iterator can expose a cached value.
-    key_only: bool,
 
     // Optional cache for repeated forward seek misses. When enabled for Mixed
     // cursors, a seek landing at `upper` records that `[lower, upper)` has no
@@ -56,18 +51,6 @@ macro_rules! near_loop {
 
 impl<I: Iterator> Cursor<I> {
     pub fn new(iter: I, mode: ScanMode, prefix_seek: bool, missing_range: bool) -> Self {
-        Self::new_with_key_only(iter, mode, prefix_seek, missing_range, false)
-    }
-
-    /// Create a cursor and preserve whether its underlying iterator is
-    /// configured for key-only reads.
-    pub fn new_with_key_only(
-        iter: I,
-        mode: ScanMode,
-        prefix_seek: bool,
-        missing_range: bool,
-        key_only: bool,
-    ) -> Self {
         Self {
             iter,
             scan_mode: mode,
@@ -76,16 +59,10 @@ impl<I: Iterator> Cursor<I> {
             max_key: None,
 
             cur_value_has_read: Cell::new(false),
-            key_only,
 
             missing_range: missing_range && mode == ScanMode::Mixed && !prefix_seek,
             missing_range_cache: None,
         }
-    }
-
-    #[inline]
-    fn mark_unread(&self) {
-        self.cur_value_has_read.set(false);
     }
 
     #[inline]
@@ -139,6 +116,19 @@ impl<I: Iterator> Cursor<I> {
 
         statistics.hit_missing_range += 1;
         Ok(true)
+    }
+
+    /// Mark value as unread. It will be invoked once cursor is moved.
+    #[inline]
+    fn mark_unread(&self) {
+        self.cur_value_has_read.set(false);
+    }
+
+    /// Mark value as read. Returns whether value was marked as read before this
+    /// call.
+    #[inline]
+    fn mark_value_read(&self) -> bool {
+        self.cur_value_has_read.replace(true)
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
@@ -253,12 +243,12 @@ impl<I: Iterator> Cursor<I> {
     pub fn get(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
             if self.near_seek(key, statistics)? && self.key() == &**key.as_encoded() {
-                return Ok(Some(self.value_with_stats(statistics)));
+                return Ok(Some(self.value(statistics)));
             }
             return Ok(None);
         }
         if self.near_seek_for_prev(key, statistics)? && self.key() == &**key.as_encoded() {
-            return Ok(Some(self.value_with_stats(statistics)));
+            return Ok(Some(self.value(statistics)));
         }
         Ok(None)
     }
@@ -371,35 +361,28 @@ impl<I: Iterator> Cursor<I> {
         self.iter.key()
     }
 
-    #[inline]
-    pub fn value(&self) -> &[u8] {
-        self.iter.value()
-    }
-
-    /// Return the current value and charge its bytes to flow statistics.
+    /// Returns the current value and charges its bytes to `statistics` the
+    /// first time it is read at this position.
     ///
-    /// Cursor movement accounts for the key and one read operation. Value
-    /// bytes are charged here because RocksDB loads values lazily; measuring a
-    /// value during movement would perform an otherwise unnecessary read.
+    /// Movements charge the key but not the value, because some engines, such
+    /// as Titan, only load a value when it is read.
     #[inline]
-    pub fn value_with_stats<'a>(&'a self, statistics: &mut CfStatistics) -> &'a [u8] {
-        let value = self.value();
-        if !self.key_only && !self.cur_value_has_read.replace(true) {
-            statistics.add_read_bytes(value.len());
+    pub fn value(&self, statistics: &mut CfStatistics) -> &[u8] {
+        let value = self.iter.value();
+        if !self.mark_value_read() {
+            statistics.flow_stats.read_bytes += value.len();
         }
         value
     }
 
+    /// Charges the key at the position a movement landed on, and the value if
+    /// the iterator has already read it.
     #[inline]
     fn record_current_size(&self, guard: &mut StatsCollector<'_, I::Collector>) {
         guard.add_read_size(self.iter.key().len());
-        if !self.key_only {
-            if let Some(value_size) = self.iter.cached_value_size() {
-                guard.add_read_size(value_size);
-                // The movement already charged this value, so a later explicit
-                // value access must not charge it a second time.
-                self.cur_value_has_read.set(true);
-            }
+        if let Some(value_size) = self.iter.cached_value_size() {
+            guard.add_read_size(value_size);
+            self.mark_value_read();
         }
     }
 
@@ -630,7 +613,6 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
-    /// Set whether the iterator should request keys without values.
     #[inline]
     #[must_use]
     pub fn key_only(mut self, key_only: bool) -> Self {
@@ -682,12 +664,11 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             iter_opt.use_prefix_seek();
             iter_opt.set_prefix_same_as_start(true);
         }
-        Ok(Cursor::new_with_key_only(
+        Ok(Cursor::new(
             self.snapshot.iter(self.cf, iter_opt)?,
             self.scan_mode,
             self.prefix_seek,
             self.missing_range,
-            self.key_only,
         ))
     }
 }
@@ -807,16 +788,16 @@ mod tests {
                 .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
                 .unwrap()
         );
-        let first_size = cursor.key().len() + cursor.value_with_stats(&mut statistics).len();
+        let first_size = cursor.key().len() + cursor.value(&mut statistics).len();
         cursor.key();
-        cursor.value_with_stats(&mut statistics);
+        cursor.value(&mut statistics);
         assert_eq!(statistics.flow_stats.read_keys, 1);
         assert_eq!(statistics.flow_stats.read_bytes, first_size);
 
         assert!(cursor.next(&mut statistics));
-        let second_size = cursor.key().len() + cursor.value_with_stats(&mut statistics).len();
+        let second_size = cursor.key().len() + cursor.value(&mut statistics).len();
         cursor.key();
-        cursor.value_with_stats(&mut statistics);
+        cursor.value(&mut statistics);
         assert_eq!(statistics.flow_stats.read_keys, 2);
         assert_eq!(statistics.flow_stats.read_bytes, first_size + second_size);
 
@@ -1327,7 +1308,7 @@ mod tests {
                                 step.key
                             );
                             assert_eq!(
-                                cursor.value(),
+                                cursor.value(&mut statistics),
                                 value,
                                 "case={} missing_range={} op={:?} key={:?}",
                                 case.name,
@@ -1399,13 +1380,13 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
                 .unwrap()
         );
-        let mut pair = (iter.key().to_vec(), iter.value().to_vec());
+        let mut pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
         assert!(
             iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
                 .unwrap()
         );
-        pair = (iter.key().to_vec(), iter.value().to_vec());
+        pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
             !iter
@@ -1420,7 +1401,7 @@ mod tests {
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            res.push((iter.key().to_vec(), iter.value(&mut statistics).to_vec()));
             if !iter.prev(&mut statistics) {
                 break;
             }
@@ -1444,7 +1425,7 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
                 .unwrap()
         );
-        let pair = (iter.key().to_vec(), iter.value().to_vec());
+        let pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
@@ -1453,14 +1434,14 @@ mod tests {
                 "{}",
                 seek_key
             );
-            let pair = (iter.key().to_vec(), iter.value().to_vec());
+            let pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            res.push((iter.key().to_vec(), iter.value(&mut statistics).to_vec()));
             if !iter.prev(&mut statistics) {
                 break;
             }

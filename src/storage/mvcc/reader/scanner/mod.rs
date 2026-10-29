@@ -396,9 +396,7 @@ where
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor
-        .value_with_stats(&mut statistics.data)
-        .to_vec())
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
 /// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
@@ -426,9 +424,7 @@ where
         ));
     }
     statistics.data.processed_keys += 1;
-    Ok(default_cursor
-        .value_with_stats(&mut statistics.data)
-        .to_vec())
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
 pub fn has_data_in_range<S: Snapshot>(
@@ -485,7 +481,7 @@ where
 {
     let mut ret = None;
     while write_cursor.valid()? && Key::is_user_key_eq(write_cursor.key(), user_key.as_encoded()) {
-        let write_ref = WriteRef::parse(write_cursor.value_with_stats(&mut statistics.write))?;
+        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
             break;
         }

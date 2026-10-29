@@ -156,7 +156,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             .lock_cursor
                             .as_mut()
                             .unwrap()
-                            .value_with_stats(&mut self.statistics.lock);
+                            .value(&mut self.statistics.lock);
                         txn_types::parse_lock(lock_value)?
                     };
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
@@ -285,11 +285,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 return self.handle_last_version(last_version, user_key, loaded_commit_ts);
             }
 
-            let write = WriteRef::parse(
-                self.write_cursor
-                    .value_with_stats(&mut self.statistics.write),
-            )
-            .map_err(Error::from)?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
+                .map_err(Error::from)?;
 
             match write.write_type {
                 WriteType::Put | WriteType::Delete => {
@@ -377,10 +374,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 return self.handle_last_version(last_version, user_key, loaded_commit_ts);
             }
 
-            let write = WriteRef::parse(
-                self.write_cursor
-                    .value_with_stats(&mut self.statistics.write),
-            )?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(self.cfg.ts) {
                 return Ok(None);

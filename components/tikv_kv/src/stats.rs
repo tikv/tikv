@@ -61,10 +61,7 @@ impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
         }
     }
 
-    /// Add bytes observed at the position reached by this cursor movement.
-    ///
-    /// Value bytes are added separately when the caller accesses the value via
-    /// `Cursor::value_with_stats`, which preserves lazy value loading.
+    /// Charges bytes read at the position this movement landed on.
     #[inline]
     pub fn add_read_size(&mut self, size: usize) {
         self.stats.add_read_bytes(size);

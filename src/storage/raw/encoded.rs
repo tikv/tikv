@@ -41,6 +41,8 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
         Ok(None)
     }
 
+    /// Reads the stored value without decoding it, so that the read is charged
+    /// with its stored length.
     fn get_encoded_value_cf(
         &self,
         cf: CfName,
@@ -48,11 +50,7 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
         stats: &mut Statistics,
     ) -> Result<Option<Value>> {
         let value = self.snap.get_cf(cf, key)?;
-        stats.record_cf_read(
-            cf,
-            key.as_encoded().len(),
-            value.as_ref().map_or(0, |value| value.len()),
-        );
+        super::record_point_read(stats, key, value.as_ref());
         Ok(value)
     }
 
@@ -153,10 +151,11 @@ impl<I: Iterator, F: KvFormat> RawEncodeIterator<I, F> {
             }
 
             if *res.as_ref().unwrap() {
-                // `find_valid_value` has to materialize the encoded value to
-                // apply the TTL/delete filter. Keep the encoded length here:
-                // it is the number of bytes read from the wrapped CF, while
-                // `value()` exposes only the decoded user value.
+                // The TTL/delete filter has to read the stored value. Cache its
+                // stored length so that `Cursor` charges the returned record
+                // with the bytes read from the CF; `value()` only exposes the
+                // decoded user value. Records filtered out here are not
+                // charged.
                 let encoded_value = self.inner.value();
                 let encoded_value_len = encoded_value.len();
                 let raw_value = F::decode_raw_value(encoded_value)?;
