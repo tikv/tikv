@@ -1240,7 +1240,7 @@ where
             cfg.inspect_network_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
-        let split_validator = SplitValidator::new();
+        let split_validator = coprocessor_host.split_validator.clone();
         if let Err(e) = stats_monitor.start(
             auto_split_controller,
             collector_reg_handle,
@@ -1986,6 +1986,7 @@ where
                     } else {
                         split_validator.disable(region_id);
                     }
+                    fail_point!("pd_after_change_split");
                 }
 
                 if resp.has_change_peer() {

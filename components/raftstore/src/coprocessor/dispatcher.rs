@@ -19,7 +19,7 @@ use super::{
     split_observer::{NoValidSplitKeyNotifier, NoValidSplitKeyNotifierRegistry, SplitObserver},
     *,
 };
-use crate::store::BucketRange;
+use crate::store::{BucketRange, SplitValidator};
 
 /// A handle for coprocessor to schedule some command back to raftstore.
 pub trait StoreHandle: Clone + Send {
@@ -547,6 +547,8 @@ where
 {
     pub registry: Registry<E>,
     pub cfg: Config,
+    // Shared by the PD worker and split-check workers through host clones.
+    pub(crate) split_validator: SplitValidator,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -557,6 +559,7 @@ where
         CoprocessorHost {
             registry: Default::default(),
             cfg: Default::default(),
+            split_validator: SplitValidator::new(),
         }
     }
 }
@@ -581,7 +584,11 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 registry.no_valid_split_key_notifier.clone(),
             )),
         );
-        CoprocessorHost { registry, cfg }
+        CoprocessorHost {
+            registry,
+            cfg,
+            split_validator: SplitValidator::new(),
+        }
     }
 
     /// Installs a best-effort notifier for split requests that have no valid
