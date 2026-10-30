@@ -111,6 +111,8 @@ use tracker::{
 use txn_types::{Key, KvPair, KvPairEntry, Lock, LockType, TimeStamp, TsSet, Value, ValueEntry};
 
 use self::kv::SnapContext;
+#[cfg(feature = "testexport")]
+pub use self::types::PessimisticLockParameters;
 pub use self::{
     errors::{Error, ErrorHeaderKind, ErrorInner, get_error_kind_from_header, get_tag_from_header},
     kv::{
