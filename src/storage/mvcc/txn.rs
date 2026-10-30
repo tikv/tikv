@@ -36,6 +36,12 @@ impl GcInfo {
 /// `ReleasedLock` contains the information of the lock released by `commit`,
 /// `rollback` and so on. It's used by `LockManager` to wake up transactions
 /// waiting for locks.
+///
+/// It may also be only a wake-up notification without an actual lock release:
+/// a resumed pessimistic lock request that fails without acquiring the lock
+/// reports its key as released, so that the next waiter on the key is woken up.
+/// In that case `start_ts` and `commit_ts` are those of the conflicting write
+/// if the failure is a `WriteConflict`, and zero otherwise.
 #[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
     pub start_ts: TimeStamp,
