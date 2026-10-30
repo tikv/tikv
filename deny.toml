@@ -150,3 +150,5 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+# PoC only: samefn-poc lives outside the allowed organizations (pingcap/tidb#72218).
+allow-git = ["https://github.com/mjonss/samefn-poc"]

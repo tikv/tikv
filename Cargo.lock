@@ -6895,6 +6895,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "samefn-poc"
+version = "0.1.0"
+source = "git+https://github.com/mjonss/samefn-poc.git?rev=99cc9d0a10139e1636d806aae710ba4f29a35cf9#99cc9d0a10139e1636d806aae710ba4f29a35cf9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8444,6 +8452,7 @@ dependencies = [
  "protobuf 2.8.0",
  "rand 0.8.5",
  "regex",
+ "samefn-poc",
  "serde",
  "serde_json",
  "static_assertions",
