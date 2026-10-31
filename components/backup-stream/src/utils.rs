@@ -807,14 +807,6 @@ impl<'start, 'end> std::fmt::Debug for DebugKeyRange<'start, 'end> {
     }
 }
 
-/// Whether the key range of `outer` fully covers that of `inner`. An empty
-/// `end_key` means +inf.
-pub fn region_encloses(outer: &Region, inner: &Region) -> bool {
-    outer.get_start_key() <= inner.get_start_key()
-        && (outer.get_end_key().is_empty()
-            || (!inner.get_end_key().is_empty() && inner.get_end_key() <= outer.get_end_key()))
-}
-
 /// make a [`Region`](kvproto::metapb::Region) implements [`slog::KV`], which
 /// prints its fields like `[r.id=xxx] [r.ver=xxx] ...`
 pub fn slog_region(r: &Region) -> impl slog::KV + '_ {

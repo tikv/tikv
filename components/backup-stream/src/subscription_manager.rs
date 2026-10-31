@@ -567,15 +567,6 @@ where
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
-            let mut tso = {
-                let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
-                checkpoint_ts
-                    .values()
-                    .filter(|cp| utils::region_encloses(&cp.region, region))
-                    .map(|cp| cp.checkpoint)
-                    .max()
-            };
-
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -583,16 +574,11 @@ where
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["region-changed"])
                         .inc();
-
                     let r = async {
-                        let tso = match tso {
-                            Some(tso) => tso,
-                            None => self.get_last_checkpoint_of(&for_task, region).await?,
-                        };
                         self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
-                            tso,
+                            self.get_last_checkpoint_of(&for_task, region).await?,
                             handle.clone(),
                         )
                         .await;
@@ -638,24 +624,8 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-
-                // If a tracked region fully encloses this one (it was split from it), start
-                // from the parent's checkpoint: this region has no checkpoint of its own.
-                let mut tso = {
-                    let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
-                    checkpoint_ts
-                        .values()
-                        .filter(|cp| utils::region_encloses(&cp.region, region))
-                        .map(|cp| cp.checkpoint)
-                        .max()
-                };
-
-                if tso.is_none() {
-                    tso = Some(self
-                        .get_last_checkpoint_of(&for_task, region)
-                        .await?);
-                }
-                self.observe_over_with_initial_data_from_checkpoint(region, tso.unwrap(), handle.clone())
+                let tso = self.get_last_checkpoint_of(&for_task, region).await?;
+                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
                     .await;
             }
         }
