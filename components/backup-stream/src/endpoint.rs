@@ -201,6 +201,8 @@ where
         let subs = SubscriptionTracer(Arc::new(DashMap::new()), txn_status_cache.clone());
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
+        let mut checkpoint_mgr = CheckpointManager::default();
+        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 range_router.clone(),
@@ -219,10 +221,9 @@ where
             (config.num_threads.div_ceil(2)).max(1),
             resolver,
             resolved_ts_config.advance_ts_interval.0,
+            Arc::clone(&checkpoint_mgr.resolved_ts),
         );
         pool.spawn(root!(op_loop));
-        let mut checkpoint_mgr = CheckpointManager::default();
-        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let ep = Endpoint {
             initial_scan_semaphore,
             meta_client,
