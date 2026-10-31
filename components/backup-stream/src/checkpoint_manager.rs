@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::HashMap, sync::Arc, sync::Mutex, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -37,7 +37,7 @@ use crate::{
 pub struct CheckpointManager {
     checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
     frozen_resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
-    resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
+    pub(crate) resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
     manager_handle: Option<Sender<SubscriptionOp>>,
 }
 
@@ -45,7 +45,7 @@ impl std::fmt::Debug for CheckpointManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CheckpointManager")
             .field("checkpoints", &self.checkpoint_ts)
-            .field("resolved-ts", &self.resolved_ts)
+            .field("resolved-ts", &self.resolved_ts.lock().unwrap())
             .finish()
     }
 }
@@ -240,11 +240,11 @@ impl CheckpointManager {
     /// about to flush.
     pub fn freeze(&mut self) {
         info!("log backup checkpoint manager freezing.";
-            "resolved_ts_len" => %self.resolved_ts.len(),
+            "resolved_ts_len" => %self.resolved_ts.lock().unwrap().len(),
             "resolved_ts" => ?self.get_resolved_ts(),
             "frozen" => self.checkpoint_ts.len(),
         );
-        self.frozen_resolved_ts = std::mem::take(&mut self.resolved_ts);
+        self.frozen_resolved_ts = std::mem::take(&mut *self.resolved_ts.lock().unwrap());
     }
 
     #[cfg(test)]
@@ -367,7 +367,7 @@ impl CheckpointManager {
     }
 
     fn do_update(&mut self, region: Region, checkpoint: TimeStamp) {
-        Self::update_ts(&mut self.resolved_ts, region, checkpoint)
+        Self::update_ts(&mut self.resolved_ts.lock().unwrap(), region, checkpoint)
     }
 
     /// get checkpoint from a region.
@@ -389,15 +389,18 @@ impl CheckpointManager {
     }
 
     pub fn get_resolved_ts(&self) -> Option<TimeStamp> {
-        self.resolved_ts.values().map(|x| x.checkpoint).min()
+        self.resolved_ts
+            .lock()
+            .unwrap()
+            .values()
+            .map(|x| x.checkpoint)
+            .min()
     }
 
     pub fn sync_with_subs_mgr<T: Send + 'static>(
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
-        use std::sync::Mutex;
-
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let t = Arc::new(Mutex::new(None));
         let tr = Arc::clone(&t);
