@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, sync::Mutex, time::Duration};
 
 use engine_traits::KvEngine;
 use futures::FutureExt;
@@ -24,6 +24,7 @@ use txn_types::TimeStamp;
 
 use crate::{
     annotate,
+    checkpoint_manager::LastFlushTsOfRegion,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -306,6 +307,9 @@ pub struct RegionSubscriptionManager<S, R> {
     scans: Arc<FutureWaitGroup>,
 
     advance_ts_interval: Duration,
+    // This belongs to the CheckpointManager and is read here to allow new regions to inherit the
+    // resolved ts from old regions.
+    resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
 }
 
 /// Create a pool for doing initial scanning.
@@ -342,6 +346,7 @@ where
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
         advance_ts_interval: Duration,
+        resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
     ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
@@ -362,6 +367,7 @@ where
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
             advance_ts_interval,
+            resolved_ts,
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -1069,6 +1075,7 @@ mod test {
                 scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: FutureWaitGroup::new(),
                 advance_ts_interval: Duration::from_secs(1),
+                resolved_ts: Default::default(),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);
