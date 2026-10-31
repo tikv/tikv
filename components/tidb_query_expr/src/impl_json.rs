@@ -73,7 +73,8 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 #[inline]
 fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
-    // Returns None if Base is None
+    // Return SQL NULL when base document is SQL NULL (matches TiDB behavior).
+    // Use as_json() so we only match SQL NULL JSON values, not NULL of other types.
     let mut base = match args[0].as_json() {
         None => return Ok(None),
         Some(json) => json.to_owned(),
