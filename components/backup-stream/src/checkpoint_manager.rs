@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc, sync::Mutex, time::Duration};
+use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -35,7 +35,7 @@ use crate::{
 /// checkpoint then advancing the global checkpoint.
 #[derive(Default)]
 pub struct CheckpointManager {
-    pub(crate) checkpoint_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
+    checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
     frozen_resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     manager_handle: Option<Sender<SubscriptionOp>>,
@@ -209,17 +209,15 @@ impl CheckpointManager {
             Self::update_ts(&mut self.frozen_resolved_ts, rr.region, rr.checkpoint);
         }
         // Replace the storage directly with the content of this run.
-        let items = {
-            let mut checkpoint_ts = self.checkpoint_ts.lock().unwrap();
-            *checkpoint_ts = std::mem::take(&mut self.frozen_resolved_ts);
-            // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
-            #[allow(clippy::needless_collect)]
-            checkpoint_ts
-                .values()
-                .cloned()
-                .map(|x| (x.region, x.checkpoint))
-                .collect::<Vec<_>>()
-        };
+        self.checkpoint_ts = std::mem::take(&mut self.frozen_resolved_ts);
+        // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
+        #[allow(clippy::needless_collect)]
+        let items = self
+            .checkpoint_ts
+            .values()
+            .cloned()
+            .map(|x| (x.region, x.checkpoint))
+            .collect::<Vec<_>>();
         self.notify(items.into_iter());
     }
 
@@ -244,7 +242,7 @@ impl CheckpointManager {
         info!("log backup checkpoint manager freezing.";
             "resolved_ts_len" => %self.resolved_ts.len(),
             "resolved_ts" => ?self.get_resolved_ts(),
-            "frozen" => self.checkpoint_ts.lock().unwrap().len(),
+            "frozen" => self.checkpoint_ts.len(),
         );
         self.frozen_resolved_ts = std::mem::take(&mut self.resolved_ts);
     }
@@ -258,7 +256,7 @@ impl CheckpointManager {
     /// update a region checkpoint in need.
     #[cfg(test)]
     fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
-        Self::update_ts(self.checkpoint_ts.lock().unwrap(), region.clone(), checkpoint)
+        Self::update_ts(&mut self.checkpoint_ts, region.clone(), checkpoint)
     }
 
     fn update_ts(
@@ -306,7 +304,7 @@ impl CheckpointManager {
     pub fn add_subscriber(&mut self, sub: Subscription) -> BoxFuture<'static, Result<()>> {
         let mgr = self.manager_handle.as_ref().cloned();
         let initial_data = self
-            .checkpoint_ts.lock().unwrap()
+            .checkpoint_ts
             .values()
             .map(|v| FlushEvent {
                 start_key: v.region.start_key.clone(),
@@ -374,8 +372,7 @@ impl CheckpointManager {
 
     /// get checkpoint from a region.
     pub fn get_from_region(&self, region: RegionIdWithVersion) -> GetCheckpointResult {
-        let checkpoint_ts = self.checkpoint_ts.lock().unwrap();
-        let checkpoint = checkpoint_ts.get(&region.region_id);
+        let checkpoint = self.checkpoint_ts.get(&region.region_id);
         if checkpoint.is_none() {
             return GetCheckpointResult::not_found(region);
         }
@@ -388,7 +385,7 @@ impl CheckpointManager {
 
     /// get all checkpoints stored.
     pub fn get_all(&self) -> Vec<LastFlushTsOfRegion> {
-        self.checkpoint_ts.lock().unwrap().values().cloned().collect()
+        self.checkpoint_ts.values().cloned().collect()
     }
 
     pub fn get_resolved_ts(&self) -> Option<TimeStamp> {
@@ -399,6 +396,8 @@ impl CheckpointManager {
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
+        use std::sync::Mutex;
+
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let t = Arc::new(Mutex::new(None));
         let tr = Arc::clone(&t);
