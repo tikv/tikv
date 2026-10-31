@@ -562,11 +562,23 @@ where
         tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
     }
 
+    /// The max resolved ts among tracked regions that fully enclose `region`.
+    fn enclosing_resolved_ts(&self, region: &Region) -> Option<TimeStamp> {
+        let resolved_ts = self.resolved_ts.lock().unwrap();
+        resolved_ts
+            .values()
+            .filter(|cp| utils::region_encloses(&cp.region, region))
+            .map(|cp| cp.checkpoint)
+            .max()
+    }
+
     #[instrument(skip_all, fields(id = region.id))]
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
+            let tso = self.enclosing_resolved_ts(region);
+
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -575,10 +587,14 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
+                        let tso = match tso {
+                            Some(tso) => tso,
+                            None => self.get_last_checkpoint_of(&for_task, region).await?,
+                        };
                         self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
-                            self.get_last_checkpoint_of(&for_task, region).await?,
+                            tso,
                             handle.clone(),
                         )
                         .await;
@@ -624,7 +640,12 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-                let tso = self.get_last_checkpoint_of(&for_task, region).await?;
+                // If a tracked region fully encloses this one (it was split from it), start
+                // from the parent's resolved ts: this region has no checkpoint of its own.
+                let tso = match self.enclosing_resolved_ts(region) {
+                    Some(tso) => tso,
+                    None => self.get_last_checkpoint_of(&for_task, region).await?,
+                };
                 self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
                     .await;
             }
