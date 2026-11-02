@@ -7,7 +7,6 @@ use std::{
 
 use chrono::{FixedOffset, NaiveTime};
 pub use online_config_derive::*;
-
 pub type ConfigChange = HashMap<String, ConfigValue>;
 pub type OffsetTime = (NaiveTime, FixedOffset);
 pub type Schedule = Vec<OffsetTime>;

@@ -1247,8 +1247,8 @@
 ##   false | "off": Output raw data to info log.
 ##   "marker": Encapsulate the raw data with "‹..›" to info log.
 ##
-## Default is false. 
-# redact-info-log = false
+## Default is true.
+# redact-info-log = true
 
 ## Configurations for encryption at rest. Experimental.
 [security.encryption]
