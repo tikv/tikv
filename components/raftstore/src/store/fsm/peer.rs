@@ -6415,6 +6415,9 @@ where
             );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
+            self.fsm
+                .peer
+                .disable_apply_unpersisted_log(self.fsm.peer.raft_group.raft.raft_log.last_index());
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
@@ -6503,6 +6506,9 @@ where
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
+            self.fsm
+                .peer
+                .disable_apply_unpersisted_log(self.fsm.peer.raft_group.raft.raft_log.last_index());
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
