@@ -13,6 +13,7 @@ use tikv_util::mpsc;
 
 #[test]
 fn test_batch() {
+    let _serial = super::serialize_tests();
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
@@ -55,6 +56,7 @@ fn test_batch() {
 
 #[test]
 fn test_priority() {
+    let _serial = super::serialize_tests();
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
@@ -106,6 +108,7 @@ fn test_priority() {
 
 #[test]
 fn test_resource_group() {
+    let _serial = super::serialize_tests();
     let (control_tx, control_fsm) = Runner::new(10);
     let resource_manager = ResourceGroupManager::default();
 
@@ -206,6 +209,7 @@ fn test_resource_group() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_thread_priority() {
+    let _serial = super::serialize_tests();
     use tikv_util::sys::thread::get_priority;
 
     // Raising the nice value doesn't require `CAP_SYS_NICE`.
@@ -253,6 +257,7 @@ fn test_thread_priority() {
 /// noisy-region demotion relies on.
 #[test]
 fn test_priority_change_migrates_fsm_between_pools() {
+    let _serial = super::serialize_tests();
     // Returns (FSM priority, handling pool). No asserts inside the poller: a
     // panic there kills the thread and hides the real failure.
     fn observe(
@@ -363,6 +368,7 @@ fn poller_busy_seconds(pool: &str) -> f64 {
 
 #[test]
 fn test_poller_busy_time_counts_time_spent_handling() {
+    let _serial = super::serialize_tests();
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
