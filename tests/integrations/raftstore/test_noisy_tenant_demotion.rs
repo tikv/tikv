@@ -24,7 +24,11 @@ fn snap_read(table_id: i64) -> Request {
 fn test_snap_read_from_blamed_group_marks_its_table() {
     let mut cluster = new_node_cluster(0, 1);
     cluster.cfg.raft_store.enable_noisy_tenant_demotion = true;
-    cluster.cfg.raft_store.store_batch_system.low_priority_pool_size = Some(1);
+    cluster
+        .cfg
+        .raft_store
+        .store_batch_system
+        .low_priority_pool_size = Some(1);
     cluster.run();
     cluster.must_put(b"k1", b"v1");
 
@@ -57,5 +61,8 @@ fn test_snap_read_from_blamed_group_marks_its_table() {
         manager.is_noisy_table(104),
         "the blamed group's Snap read marks the table its ranges name"
     );
-    assert!(!manager.is_noisy_table(105), "a group nobody blames marks nothing");
+    assert!(
+        !manager.is_noisy_table(105),
+        "a group nobody blames marks nothing"
+    );
 }
