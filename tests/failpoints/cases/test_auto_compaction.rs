@@ -538,6 +538,105 @@ fn test_large_value_region_is_prioritized_by_reclaimable_bytes() {
 }
 
 #[test]
+fn test_small_region_does_not_inherit_whole_sst_score() {
+    use tikv::server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION;
+
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+
+    let region = cluster.get_region(b"m");
+    cluster.must_split(&region, b"m");
+    let reclaimable_region = cluster.get_region(b"k10");
+    let garbage_region = cluster.get_region(b"m0000");
+
+    let make_ctx = |region: &kvproto::metapb::Region| {
+        let mut ctx = Context::new();
+        ctx.set_region_id(region.get_id());
+        ctx.set_region_epoch(region.get_region_epoch().clone());
+        ctx.set_peer(region.get_peers()[0].clone());
+        ctx
+    };
+    let put = |ctx: &Context, keys: &[Vec<u8>], value: &[u8], commit_ts: u64| {
+        let start_ts = commit_ts - 3;
+        let mutations = keys
+            .iter()
+            .map(|key| new_mutation(Op::Put, key, value))
+            .collect();
+        must_kv_prewrite(&client, ctx.clone(), mutations, keys[0].clone(), start_ts);
+        must_kv_commit(
+            &client,
+            ctx.clone(),
+            keys.to_vec(),
+            start_ts,
+            commit_ts,
+            commit_ts,
+        );
+    };
+
+    // Two stale 1 MiB values: about 2 MiB reclaimable in its own SST.
+    let reclaimable_ctx = make_ctx(&reclaimable_region);
+    for key in [b"k10".to_vec(), b"k20".to_vec()] {
+        for commit_ts in [10, 30] {
+            put(
+                &reclaimable_ctx,
+                std::slice::from_ref(&key),
+                &vec![b'x'; 1024 * 1024],
+                commit_ts,
+            );
+        }
+    }
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+
+    // Many small stale versions in a second SST, which holds 4000 discardable
+    // versions in total.
+    let garbage_ctx = make_ctx(&garbage_region);
+    let garbage_keys: Vec<Vec<u8>> = (0..2000)
+        .map(|i| format!("m{:04}", i).into_bytes())
+        .collect();
+    for commit_ts in [10, 20, 30] {
+        put(&garbage_ctx, &garbage_keys, b"small", commit_ts);
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // Carve a one-key Region out of the middle of that SST. It contains no
+    // range-properties sample, so it has no measurable bytes, but the SST-wide
+    // counters still describe all 4000 discardable versions.
+    let garbage_region = cluster.get_region(b"m1000");
+    cluster.must_split(&garbage_region, b"m1000");
+    let garbage_region = cluster.get_region(b"m1000");
+    cluster.must_split(&garbage_region, b"m1001");
+    let tiny_region = cluster.get_region(b"m1000");
+    assert_eq!(tiny_region.get_start_key(), b"m1000");
+    assert_eq!(tiny_region.get_end_key(), b"m1001");
+
+    fail::remove(fp_compaction_start);
+
+    let mut timeout = 100;
+    while FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) == 0 && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+    assert_eq!(
+        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst),
+        reclaimable_region.get_id(),
+        "a small Region inside a large SST must not outrank a Region with reclaimable bytes"
+    );
+}
+
+#[test]
 fn test_mvcc_aware_compaction_prioritization() {
     use tikv::{
         server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION,

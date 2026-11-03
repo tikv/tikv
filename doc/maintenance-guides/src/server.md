@@ -134,6 +134,11 @@ High-risk service contracts:
   or estimated reclaimable bytes, and ranks admitted candidates by estimated
   reclaimable bytes from write/default-CF range properties. This keeps
   large-value regions visible even when they contain relatively few versions.
+  SST table and MVCC properties cover whole files, so a small Region inside a
+  large SST reports the whole file's counts. A version-count score is therefore
+  used only when an SST lacks range properties or holds only tombstones; a
+  Region with range properties but no reclaimable bytes scores 0 instead of
+  outranking Regions with real reclaimable bytes.
   The default byte threshold is 384 MiB, aligned with the default
   `coprocessor.region-max-size`; it remains an independent GC setting and
   should be tuned separately for custom Region sizes. Candidates admitted through
@@ -167,6 +172,9 @@ High-risk service contracts:
 - Auto-compaction must estimate reclaimable default-CF bytes only from stale
   value-bearing MVCC versions. Tombstones and MVCC Delete records do not own
   default-CF values and must not inflate that estimate.
+- Auto-compaction must rank by range-limited reclaimable bytes whenever range
+  properties exist; SST-wide version counts include keys outside the Region and
+  are in different units.
 
 ## Observability And Operational Signals
 

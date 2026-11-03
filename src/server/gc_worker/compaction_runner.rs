@@ -441,11 +441,16 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
 
 /// Calculates compaction score based on tombstones, estimated reclaimable
 /// bytes, and MVCC read intensity.
+///
+/// `missing_range_properties` is true when an SST in the Region has no range
+/// properties or holds only tombstones, so its bytes can't be estimated. Only
+/// then does an admitted candidate fall back to a version-count score.
 fn calculate_compaction_score(
     num_tombstones: u64,
     num_discardable: u64,
     num_total_entries: u64,
     estimated_reclaimable_bytes: u64,
+    missing_range_properties: bool,
     mvcc_versions_scanned: u64,
     config: &GcConfig,
 ) -> f64 {
@@ -465,7 +470,7 @@ fn calculate_compaction_score(
             && !meets_bytes_threshold
         {
             0.0
-        } else if estimated_reclaimable_bytes > 0 {
+        } else if estimated_reclaimable_bytes > 0 || !missing_range_properties {
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
         } else {
             // Keep candidates visible when old SSTs do not have range properties.
@@ -480,9 +485,12 @@ fn calculate_compaction_score(
             && !meets_bytes_threshold
         {
             0.0
-        } else if estimated_reclaimable_bytes > 0 {
+        } else if estimated_reclaimable_bytes > 0 || !missing_range_properties {
             // Rank admitted candidates by physical impact instead of version count.
             // Use MiB-sized units so the additive MVCC-read score remains useful.
+            // A Region with range properties but no reclaimable bytes scores 0: the
+            // version-count fallback is in different units and would outrank every
+            // byte-scored Region.
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
         } else {
             // Keep candidates visible when old SSTs do not have range properties.
@@ -1012,17 +1020,26 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 box_err!("failed to get table properties: {:?}", e)
             })?;
 
+        // Whether the byte estimate is blind to part of this Region. Table and MVCC
+        // properties describe whole SSTs, so a Region's counts include keys outside
+        // it; only the range-limited byte estimate is safe to rank by.
+        let mut missing_range_properties = false;
         collection.iter_table_properties(|table_prop| {
             let num_entries = table_prop.get_num_entries();
             num_total_entries += num_entries;
             let user_properties = table_prop.get_user_collected_properties();
 
-            if let Some((size, _)) = user_properties.approximate_size_and_keys(&start_key, &end_key)
-            {
-                write_cf_bytes = write_cf_bytes.saturating_add(size as u64);
+            match user_properties.approximate_size_and_keys(&start_key, &end_key) {
+                Some((size, _)) => write_cf_bytes = write_cf_bytes.saturating_add(size as u64),
+                None => missing_range_properties = true,
             }
 
             if let Some(mvcc_properties) = user_properties.get_mvcc_properties() {
+                // Range properties size only Puts, so a tombstone-only SST has no bytes.
+                if num_entries > 0 && mvcc_properties.num_versions == 0 {
+                    missing_range_properties = true;
+                }
+
                 // Collect MVCC stats
                 num_rows += mvcc_properties.num_rows;
                 num_total_default_puts += mvcc_properties.num_default_puts;
@@ -1091,6 +1108,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             num_discardable,
             num_total_entries,
             estimated_reclaimable_bytes,
+            missing_range_properties,
             mvcc_versions_scanned,
             config,
         );
@@ -1190,6 +1208,7 @@ mod tests {
             1,                  // discardable versions
             10,                 // total entries
             1024 * 1024 * 1024, // estimated reclaimable bytes: 1 GiB
+            false,              // missing range properties
             0,                  // MVCC versions scanned per request
             &config,
         );
@@ -1198,6 +1217,7 @@ mod tests {
             30,                // discardable versions
             100,               // total entries
             100 * 1024 * 1024, // estimated reclaimable bytes: 100 MiB
+            false,             // missing range properties
             0,                 // MVCC versions scanned per request
             &config,
         );
@@ -1205,6 +1225,25 @@ mod tests {
         assert!(large_region_score > small_region_score);
         assert_eq!(large_region_score, 1024.0);
         assert_eq!(small_region_score, 100.0);
+    }
+
+    #[test]
+    fn test_version_count_fallback_requires_missing_range_properties() {
+        let config = GcConfig::default();
+
+        // 30 of 100 entries are discardable, so both candidates pass the 20%
+        // admission gate, and neither has measurable reclaimable bytes.
+        // With range properties, zero bytes means zero score; the version-count
+        // fallback would otherwise outrank every byte-scored Region.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 0, false, 0, &config),
+            0.0
+        );
+        // Without range properties, the version count keeps the Region visible.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 0, true, 0, &config),
+            9.0
+        );
     }
 
     #[test]
@@ -1259,6 +1298,7 @@ mod tests {
             discardable.write_versions,
             properties.num_versions,
             reclaimable_bytes,
+            false,
             0,
             &config,
         );
@@ -1299,6 +1339,7 @@ mod tests {
                 discardable.write_versions,
                 properties.num_versions,
                 reclaimable_bytes,
+                false,
                 0,
                 &config,
             ) > 0.0
@@ -1343,6 +1384,7 @@ mod tests {
                 discardable.write_versions,
                 properties.num_versions,
                 reclaimable_bytes,
+                false,
                 0,
                 &config,
             ) > 0.0
