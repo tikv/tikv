@@ -584,9 +584,12 @@ fn request_keys(req: &RaftCmdRequest) -> impl Iterator<Item = &[u8]> {
             CmdType::DeleteRange => r.get_delete_range().get_start_key(),
             _ => &[],
         };
-        let ranges = match r.get_cmd_type() {
-            CmdType::ReadIndex => r.get_read_index().get_key_ranges(),
-            _ => &[],
+        // `read_index` rides on `ReadIndex` and on transactional `Snap`
+        // requests alike (raftkv fills it for both), so key off the field.
+        let ranges = if r.has_read_index() {
+            r.get_read_index().get_key_ranges()
+        } else {
+            &[]
         };
         std::iter::once(key)
             .chain(ranges.iter().map(|range| range.get_start_key()))
@@ -598,7 +601,8 @@ fn request_keys(req: &RaftCmdRequest) -> impl Iterator<Item = &[u8]> {
 /// region holding them moves to the low-priority store pool.
 ///
 /// Tables come from the request's own keys, since a region can hold several
-/// small tables. A keyless request (e.g. a snapshot read) falls back to the
+/// small tables. A keyless request (e.g. a snapshot read without ranges)
+/// falls back to the
 /// region's table only when the region holds exactly one.
 pub fn mark_noisy_table_if_blamed(
     manager: Option<&Arc<ResourceGroupManager>>,
@@ -7424,6 +7428,25 @@ mod tests {
         let manager = blamed_manager(&["noisy"]);
         let mut r = Request::default();
         r.set_cmd_type(CmdType::ReadIndex);
+        let mut range = kvproto::kvrpcpb::KeyRange::default();
+        range.set_start_key(row_key(104));
+        r.mut_read_index().mut_key_ranges().push(range);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("noisy", vec![r]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(104));
+    }
+
+    #[test]
+    fn test_marks_the_table_of_a_snap_read_range() {
+        // The shape `raftkv::async_snapshot` builds for a transactional read:
+        // `Snap` with the ranges in `read_index`.
+        let manager = blamed_manager(&["noisy"]);
+        let mut r = snap();
+        r.mut_read_index().set_start_ts(10);
         let mut range = kvproto::kvrpcpb::KeyRange::default();
         range.set_start_key(row_key(104));
         r.mut_read_index().mut_key_ranges().push(range);

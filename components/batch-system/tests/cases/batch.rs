@@ -384,10 +384,14 @@ fn test_poller_busy_time_counts_time_spent_handling() {
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    // Flushed at the end of the round, after the callback acks.
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // The counter is thread-local and flushes on a later access, so keep the
+    // poller doing rounds until the flush lands.
+    let deadline = Instant::now() + Duration::from_secs(5);
     while poller_busy_seconds("normal") - before < 0.1 {
         assert!(Instant::now() < deadline, "busy time was never flushed");
+        router
+            .send(1, Message::Callback(Box::new(|_: &Handler, _: &mut Runner| {})))
+            .unwrap();
         sleep(Duration::from_millis(10));
     }
     system.shutdown();

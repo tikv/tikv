@@ -24,6 +24,11 @@ make_auto_flush_static_metric! {
         "priority" => FsmPriority,
     }
 
+    pub struct PollerBusySecondsVec: LocalCounter {
+        "type" => FsmType,
+        "priority" => FsmPriority,
+    }
+
     pub struct FsmPollDurationVec: LocalHistogram {
         "type" => FsmType,
     }
@@ -71,6 +76,8 @@ lazy_static! {
         &["type", "priority"]
     )
     .unwrap();
+    pub static ref POLLER_BUSY_SECONDS: PollerBusySecondsVec =
+        auto_flush_from!(POLLER_BUSY_SECONDS_VEC, PollerBusySecondsVec);
 
     pub static ref FSM_POLL_DURATION_VEC: HistogramVec =
     register_histogram_vec!(

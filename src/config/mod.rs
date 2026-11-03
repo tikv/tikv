@@ -7758,6 +7758,9 @@ mod tests {
         cfg.raftdb.defaultcf.max_compactions = None;
 
         cfg.rocksdb.defaultcf.titan.min_blob_size = None;
+        // The template shows the resolved store default; the struct keeps
+        // `None` until `validate`.
+        cfg.raft_store.store_batch_system.low_priority_pool_size = None;
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);

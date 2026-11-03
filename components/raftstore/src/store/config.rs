@@ -25,7 +25,6 @@ use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
 
 /// Same as the normal store pool's default size.
-const DEFAULT_STORE_LOW_PRIORITY_POOL_SIZE: usize = 2;
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -312,6 +311,16 @@ pub struct Config {
 
     /// Moves a noisy tenant's regions to the low-priority store pollers.
     /// Does not affect resource control's other throttling.
+    ///
+    /// Requires `store-low-priority-pool-size` > 0. That pool is 0 by default
+    /// and is sized at startup, so set it explicitly on stores where this may
+    /// be turned on, including online.
+    ///
+    /// Scope: a table is attributed from the proposals this store sees, so a
+    /// leader whose only traffic for a table is `MsgReadIndex` forwarded by
+    /// followers does not demote that region; the follower store does.
+    /// Table ids are decoded from API v1 keys, so API v2 keyspaces are not
+    /// covered.
     pub enable_noisy_tenant_demotion: bool,
 
     /// If it is 0, it means io tasks are handled in store threads.
@@ -987,18 +996,16 @@ impl Config {
                 limit
             ));
         }
-        // A demoted tenant's whole working set lands here, so default to more
-        // than the apply pool's one poller.
+        // Unlike the apply pool, the store low pool only exists when asked for.
         if self.store_batch_system.low_priority_pool_size.is_none() {
-            self.store_batch_system.low_priority_pool_size =
-                Some(DEFAULT_STORE_LOW_PRIORITY_POOL_SIZE);
+            self.store_batch_system.low_priority_pool_size = Some(0);
         }
         let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size();
         // With no low poller, demoted regions would never be polled again.
         if self.enable_noisy_tenant_demotion && store_low_priority_pool_size == 0 {
             return Err(box_err!(
-                "store-low-priority-pool-size must be greater than 0 while \
-                 enable-noisy-tenant-demotion is true, or demoted regions stop being polled"
+                "enable-noisy-tenant-demotion needs store-low-priority-pool-size set greater \
+                 than 0, or demoted regions stop being polled"
             ));
         }
         if store_low_priority_pool_size > limit {
@@ -1492,6 +1499,18 @@ impl ConfigManager for RaftstoreConfigManager {
                         );
                     }
                 }
+                // The pools are sized at startup, so an online enable must find
+                // the low store pool already there.
+                if let Some(ConfigValue::Bool(true)) = change.get("enable_noisy_tenant_demotion")
+                {
+                    if cfg.store_batch_system.low_priority_pool_size() == 0 {
+                        return Err(
+                            "enable-noisy-tenant-demotion needs store-low-priority-pool-size > 0, \
+                             which is sized at startup; set it and restart"
+                                .into(),
+                        );
+                    }
+                }
                 cfg.update(change)
             })?;
         }
@@ -1702,14 +1721,14 @@ mod tests {
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
-        // Unset, the store low pool gets its own default; apply keeps the
-        // shared one.
+        // Unset, the store low pool has no threads; apply keeps the shared
+        // default.
         cfg = Config::new();
         assert_eq!(cfg.store_batch_system.low_priority_pool_size, None);
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap();
-        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(2));
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(0));
         assert_eq!(
             cfg.apply_batch_system.low_priority_pool_size(),
             1,
@@ -1727,7 +1746,12 @@ mod tests {
             "a configured size is kept, not clamped"
         );
 
-        // Zero would strand demoted regions.
+        // Unset or zero would strand demoted regions.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
         cfg = Config::new();
         cfg.enable_noisy_tenant_demotion = true;
         cfg.store_batch_system.low_priority_pool_size = Some(0);

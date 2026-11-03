@@ -1150,8 +1150,12 @@ impl ResourceGroupManager {
     }
 
     /// Changes whenever [`Self::is_noisy_table`] may answer differently.
+    ///
+    /// Acquire pairs with the Release in `publish_noisy_tables` and
+    /// `clear_noisy_tables`, so a reader that sees a new generation also sees
+    /// the flag and set that generation describes.
     pub fn noisy_tables_gen(&self) -> u64 {
-        self.noisy_tables_gen.load(Ordering::Relaxed)
+        self.noisy_tables_gen.load(Ordering::Acquire)
     }
 
     /// Adds the marks since the last tick to the published set.
@@ -1169,7 +1173,7 @@ impl ResourceGroupManager {
         if current.len() != before {
             info!("noisy tables extended"; "tables" => ?*current);
             self.has_noisy_tables.store(true, Ordering::Relaxed);
-            self.noisy_tables_gen.fetch_add(1, Ordering::Relaxed);
+            self.noisy_tables_gen.fetch_add(1, Ordering::Release);
         }
     }
 
@@ -1183,7 +1187,7 @@ impl ResourceGroupManager {
             info!("releasing noisy tables"; "tables" => ?*current);
             current.clear();
             self.has_noisy_tables.store(false, Ordering::Relaxed);
-            self.noisy_tables_gen.fetch_add(1, Ordering::Relaxed);
+            self.noisy_tables_gen.fetch_add(1, Ordering::Release);
         }
     }
 
