@@ -24,8 +24,6 @@ use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
 const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
 
-/// Same as the normal store pool's default size.
-
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
