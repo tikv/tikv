@@ -518,6 +518,12 @@
 ## When the number of Raft entries exceeds the max size, TiKV rejects to propose the entry.
 # raft-entry-max-size = "8MB"
 
+## Broadcast the commit index to followers as soon as an entry is committed, instead of
+## waiting for the next append or heartbeat. Keeps a follower's stale-read safe-ts within one
+## round trip of the leader on regions that write and then go quiet, at the cost of one extra
+## small MsgAppend per follower per commit when no further write is pending.
+# raft-bcast-commit = false
+
 ## Interval to compact unnecessary Raft log.
 # raft-log-compact-sync-interval = "2s"
 

@@ -188,6 +188,7 @@ fn test_serde_custom_tikv_config() {
         capacity: ReadableSize(123),
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
+        raft_bcast_commit: true,
         raft_election_timeout_ticks: 12,
         raft_min_election_timeout_ticks: 14,
         raft_max_election_timeout_ticks: 20,
