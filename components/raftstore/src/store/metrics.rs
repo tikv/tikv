@@ -414,6 +414,8 @@ lazy_static! {
         NOISY_TABLE_MARKS_VEC.with_label_values(&["not_blamed"]);
     pub static ref NOISY_MARK_NO_TABLE: IntCounter =
         NOISY_TABLE_MARKS_VEC.with_label_values(&["no_table"]);
+    pub static ref NOISY_MARK_KEY_NOT_IN_REGION: IntCounter =
+        NOISY_TABLE_MARKS_VEC.with_label_values(&["key_not_in_region"]);
     pub static ref NOISY_MARK_MARKED: IntCounter =
         NOISY_TABLE_MARKS_VEC.with_label_values(&["marked"]);
 

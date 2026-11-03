@@ -627,6 +627,12 @@ pub fn mark_noisy_table_if_blamed(
     let mut has_key = false;
     for key in request_keys(req) {
         has_key = true;
+        // Apply rejects a key outside the region, but only after this ran, so
+        // a bad request must not leave a mark on another region's table.
+        if util::check_key_in_region(key, region).is_err() {
+            NOISY_MARK_KEY_NOT_IN_REGION.inc();
+            continue;
+        }
         if let Some(table) = util::encoded_key_table_id(key) {
             if last != Some(table) {
                 manager.mark_noisy_table(table);
@@ -7487,6 +7493,20 @@ mod tests {
         );
         manager.publish_noisy_tables_for_test(true);
         assert!(!manager.is_noisy_table(100));
+    }
+
+    #[test]
+    fn test_a_key_outside_the_region_marks_nothing() {
+        let manager = blamed_manager(&["noisy"]);
+        // Right epoch, wrong region: apply would reject the write later.
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &region(table_boundary(300), table_boundary(301)),
+            &cmd("noisy", vec![put(row_key(100)), put(row_key(300))]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(!manager.is_noisy_table(100));
+        assert!(manager.is_noisy_table(300), "the in-region key still marks");
     }
 
     #[test]
