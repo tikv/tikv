@@ -7,8 +7,10 @@ use test_raftstore::*;
 use tidb_query_datatype::codec::table;
 use txn_types::Key;
 
-/// A transactional snapshot read as `raftkv::async_snapshot` builds it: `Snap`
-/// with the ranges in `read_index`.
+/// A transactional snapshot read as `raftkv::async_snapshot` builds it for a
+/// replica read: `Snap` with the ranges in `read_index`. Storage attaches the
+/// ranges only to replica reads, so a leader read arrives keyless and falls
+/// back to the region's single table.
 fn snap_read(table_id: i64) -> Request {
     let mut req = new_snap_cmd();
     let mut range = KeyRange::default();
