@@ -1,7 +1,6 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Strict business priority, weighted group scheduling and per-group MLFQ.
-//! See doc/design/resource-control-read-pool.md for the accounting contract.
 
 use std::{
     cell::RefCell,
@@ -86,6 +85,8 @@ impl GroupPolicy {
 }
 
 pub trait GroupProvider: Send + Sync + 'static {
+    /// The default policy must keep its identity and never be retired. Policy
+    /// updates, including changes to default, are published in place.
     fn group(&self, name: &str) -> Arc<GroupPolicy>;
 }
 
@@ -188,6 +189,29 @@ impl State {
             self.reference[priority as usize] = self.reference[priority as usize].max(vt);
         }
     }
+    /// Inserts an owned entry without resolving policies, touching task
+    /// history, or invoking task destructors. The destination group must
+    /// already exist.
+    fn enqueue(&mut self, id: LaneId, level: usize, entry: Entry, continuation: bool) {
+        let mut lane = self.take_lane(id);
+        if lane.is_empty() && lane.in_flight == 0 && !continuation {
+            lane.committed = lane.committed.max(self.reference[id.0 as usize]);
+        }
+        let sequence = self.sequence;
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .expect("fair queue sequence exhausted");
+        assert!(
+            self.locations
+                .insert(entry.record.id, (id, level, sequence))
+                .is_none(),
+            "task enqueued twice"
+        );
+        lane.queues[level].insert(sequence, entry);
+        self.put_lane(id, lane);
+        self.advance_reference(id.0);
+    }
     fn remove_queued(&mut self, task_id: u64) -> Option<Entry> {
         let (id, level, seq) = self.locations.remove(&task_id)?;
         let mut lane = self.take_lane(id);
@@ -275,6 +299,7 @@ impl CpuBucket {
 
 struct Shared {
     provider: Arc<dyn GroupProvider>,
+    default_policy: Arc<GroupPolicy>,
     config: FairQueueConfig,
     state: Mutex<State>,
     cpu: Mutex<CpuBucket>,
@@ -291,27 +316,34 @@ impl FairQueue {
         assert!(config.cpu_ratio.is_finite() && config.cpu_ratio > 0.0 && config.cpu_ratio <= 1.0);
         assert!(config.max_tasks > 0 && config.max_tasks_per_group > 0);
         assert!(!config.max_time_slice.is_zero());
+        let default_policy = provider.group("default");
+        let mut state = State {
+            groups: HashMap::new(),
+            lanes: HashMap::new(),
+            ready: BTreeSet::new(),
+            committed: BTreeSet::new(),
+            reference: [0; 17],
+            records: HashMap::new(),
+            locations: HashMap::new(),
+            next_id: 1,
+            sequence: 0,
+            live: 0,
+            max_tasks: config.max_tasks,
+            parallelism: usize::MAX,
+            active_dispatches: 0,
+            evicted: 0,
+            closed: false,
+        };
+        // pop() can run under YATP's parking lock. Resolve and register default
+        // before starting workers so retirement never invokes the provider or
+        // creates/sweeps group histories from that context.
+        state.group(&default_policy);
         Arc::new(Self {
             shared: Arc::new(Shared {
                 provider,
+                default_policy,
                 config,
-                state: Mutex::new(State {
-                    groups: HashMap::new(),
-                    lanes: HashMap::new(),
-                    ready: BTreeSet::new(),
-                    committed: BTreeSet::new(),
-                    reference: [0; 17],
-                    records: HashMap::new(),
-                    locations: HashMap::new(),
-                    next_id: 1,
-                    sequence: 0,
-                    live: 0,
-                    max_tasks: config.max_tasks,
-                    parallelism: usize::MAX,
-                    active_dispatches: 0,
-                    evicted: 0,
-                    closed: false,
-                }),
+                state: Mutex::new(state),
                 cpu: Mutex::new(CpuBucket::new(config.cpu_cores * config.cpu_ratio)),
                 metrics: super::metrics::FairQueueMetrics::default(),
             }),
@@ -702,7 +734,7 @@ impl TaskQueue<TaskCell> for FairQueue {
         drop(record.waker.take());
         // Never call the provider under the queue lock.
         let policy = if record.group.is_retired() {
-            self.shared.provider.group("default")
+            self.shared.default_policy.clone()
         } else {
             record.group.clone()
         };
@@ -729,27 +761,13 @@ impl TaskQueue<TaskCell> for FairQueue {
             return;
         }
         s.group(&policy);
-        let mut lane = s.take_lane(lane_id);
-        if lane.is_empty() && lane.in_flight == 0 && !continuation {
-            lane.committed = lane.committed.max(s.reference[lane_id.0 as usize]);
-        }
-        let sequence = s.sequence;
-        s.sequence = s
-            .sequence
-            .checked_add(1)
-            .expect("fair queue sequence exhausted");
-        assert!(
-            s.locations
-                .insert(record.id, (lane_id, level, sequence))
-                .is_none(),
-            "task enqueued twice"
-        );
-        lane.queues[level].insert(sequence, Entry { task, record });
-        s.put_lane(lane_id, lane);
-        s.advance_reference(lane_id.0);
+        s.enqueue(lane_id, level, Entry { task, record }, continuation);
     }
 
     fn pop(&self) -> PopResult<TaskCell> {
+        // YATP may call pop() from park.validate while holding a parking_lot
+        // bucket lock. Do not call the provider, task-history helpers, cancel,
+        // or task/waker destructors here, even after releasing our state lock.
         loop {
             // Gate and scheduler locks are never nested. A positive balance is
             // permission to start; actual CPU is charged by checkpoints/tail.
@@ -789,9 +807,19 @@ impl TaskQueue<TaskCell> for FairQueue {
             if entry.record.group.is_retired() && group == entry.record.group.id() {
                 s.put_lane(lane_id, lane);
                 s.advance_reference(priority);
-                drop(s);
-                // Re-resolve a deleted identity without charging its old ledger.
-                self.push(entry.task);
+                let policy = &self.shared.default_policy;
+                let target = (
+                    effective_priority(policy, entry.record.override_priority),
+                    policy.id(),
+                );
+                // Transfer ownership without calling push(): cancellation there
+                // can drop a future and wake this same pool. Keep its original
+                // record, history and queued MLFQ level; only its scheduling
+                // domain changes. A canceled task is cleaned up outside park
+                // by its cancellation owner or by the runner.
+                s.enqueue(target, level, entry, false);
+                // Default may have a lower business priority or greater VT.
+                // Re-select instead of dispatching the migrated task directly.
                 continue;
             }
             let policy = s.groups[&group].policy.clone();
@@ -862,13 +890,14 @@ impl TaskQueue<TaskCell> for FairQueue {
         // This is also FutureRunner's preemption hint. The current dispatch
         // may occupy the last parallelism slot, but queued work must still be
         // allowed to preempt it. Only pop() enforces the dispatch limit.
-        self.shared
+        let has_cpu_budget = self
+            .shared
             .cpu
             .lock()
             .unwrap()
             .retry_at(Instant::now())
-            .is_none()
-            && !self.shared.state.lock().unwrap().ready.is_empty()
+            .is_none();
+        has_cpu_budget && !self.shared.state.lock().unwrap().ready.is_empty()
     }
 }
 
@@ -1292,6 +1321,280 @@ mod tests {
         let state = q.shared.state.lock().unwrap();
         assert!(!state.groups.contains_key(&1));
         assert_eq!(state.live, 0);
+    }
+
+    #[test]
+    fn retired_cancelled_task_does_not_call_out_from_park_validation() {
+        struct CheckedProvider {
+            policies: [Arc<GroupPolicy>; 2],
+            validating: Arc<AtomicBool>,
+            calls_in_validation: Arc<AtomicUsize>,
+        }
+        impl GroupProvider for CheckedProvider {
+            fn group(&self, name: &str) -> Arc<GroupPolicy> {
+                if self.validating.load(Ordering::Relaxed) {
+                    self.calls_in_validation.fetch_add(1, Ordering::Relaxed);
+                }
+                if name == "g1" {
+                    self.policies[1].clone()
+                } else {
+                    self.policies[0].clone()
+                }
+            }
+        }
+        struct WakeOnDrop {
+            address: usize,
+            validating: Arc<AtomicBool>,
+            drops: Arc<AtomicUsize>,
+            drops_in_validation: Arc<AtomicUsize>,
+        }
+        impl Drop for WakeOnDrop {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+                if self.validating.load(Ordering::Relaxed) {
+                    // Record the violation instead of really reentering park:
+                    // a regression must fail this test, not deadlock its process.
+                    self.drops_in_validation.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    // A future destructor may wake another task in the same
+                    // pool, which unparks this very parking address.
+                    unsafe {
+                        parking_lot_core::unpark_all(
+                            self.address,
+                            parking_lot_core::UnparkToken(0),
+                        );
+                    }
+                }
+            }
+        }
+
+        let validating = Arc::new(AtomicBool::new(false));
+        let calls_in_validation = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let drops_in_validation = Arc::new(AtomicUsize::new(0));
+        let policies = [
+            Arc::new(GroupPolicy::new(0, "default".into(), 8, 20_000)),
+            Arc::new(GroupPolicy::new(1, "g1".into(), 16, 1_000)),
+        ];
+        let q = FairQueue::new(
+            Arc::new(CheckedProvider {
+                policies: policies.clone(),
+                validating: validating.clone(),
+                calls_in_validation: calls_in_validation.clone(),
+            }),
+            FairQueueConfig {
+                max_tasks: 100,
+                max_tasks_per_group: 100,
+                cpu_cores: 128.0,
+                cpu_ratio: 1.0,
+                slice_precharge: Duration::from_micros(500),
+                max_time_slice: Duration::from_millis(1),
+            },
+        );
+        let ctx = ResourceControlContext {
+            resource_group_name: "g1".into(),
+            ..Default::default()
+        };
+        let metadata = TaskMetadata::from_ctx(&ctx);
+        let permit = q.try_acquire(&metadata).unwrap();
+        let record = permit.record.upgrade().unwrap();
+        let mut extras = Extras::multilevel_default();
+        extras.set_metadata(permit.metadata(metadata.to_vec()));
+        // The address stays alive for the entire park/unpark operation.
+        let address = Arc::as_ptr(&validating) as usize;
+        let on_drop = WakeOnDrop {
+            address,
+            validating: validating.clone(),
+            drops: drops.clone(),
+            drops_in_validation: drops_in_validation.clone(),
+        };
+        q.push(TaskCell::new(
+            permit.wrap(async move {
+                let _on_drop = on_drop;
+                futures::future::pending::<()>().await;
+            }),
+            extras,
+        ));
+        policies[1].retire();
+        // This is the legal interleaving after FairCancellation has set its
+        // flag but before it acquires the scheduler lock to remove the entry.
+        record.cancelled.store(true, Ordering::Release);
+
+        let mut popped = None;
+        unsafe {
+            parking_lot_core::park(
+                address,
+                || {
+                    validating.store(true, Ordering::Relaxed);
+                    popped = Some(q.pop());
+                    validating.store(false, Ordering::Relaxed);
+                    // Like YATP finding work in validate, abort the park and
+                    // pass ownership back to the runner outside the bucket lock.
+                    false
+                },
+                || {},
+                |_, _| {},
+                parking_lot_core::ParkToken(1),
+                None,
+            );
+        }
+        let was_ready = matches!(popped.as_ref(), Some(PopResult::Ready(_)));
+        // Consume PREPARED and drop the task outside validation. Even when
+        // cancelled, its dispatch reservation must be settled exactly once.
+        let guard = DispatchGuard::install();
+        drop(popped);
+        drop(guard);
+        q.drain();
+
+        assert_eq!(calls_in_validation.load(Ordering::Relaxed), 0);
+        assert_eq!(drops_in_validation.load(Ordering::Relaxed), 0);
+        assert!(was_ready);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let stats = q.snapshot();
+        assert_eq!(stats.live_tasks, 0);
+        assert_eq!(stats.queued, 0);
+        assert_eq!(stats.active_dispatches, 0);
+        assert_eq!(stats.reserved_vt, 0);
+    }
+
+    #[test]
+    fn retired_group_reselects_priority_and_uses_current_default_weight() {
+        let q = queue(&[20_000, 1_000, 10_000]);
+        let default = q.shared.provider.group("g0");
+        let retired = q.shared.provider.group("g1");
+        // These updates happen after queue construction: caching the default
+        // identity must not freeze its policy values.
+        default.update(4, 20_000);
+        retired.update(16, 1_000);
+        q.push(task(&q, 1, 0, Some(2)).0);
+        q.push(task(&q, 2, 0, Some(0)).0);
+        retired.retire();
+
+        // The retired priority-16 entry is initially first. Moving it into
+        // default's priority-4 lane must allow priority 8 to run before it.
+        assert_eq!(dispatch(&q, Duration::from_millis(1), false), (2, 0));
+        {
+            let state = q.shared.state.lock().unwrap();
+            assert_eq!(state.live, 1);
+            assert_eq!(state.groups[&1].live, 1);
+            assert_eq!(state.groups[&0].live, 0);
+        }
+        default.update(4, 40_000);
+        let PopResult::Ready(mut pop) = q.pop() else {
+            panic!("the migrated task should remain ready");
+        };
+        let guard = DispatchGuard::install();
+        assert_eq!(pop.task_cell.mut_extras().current_level(), 2);
+        let lane_id = (4, 0);
+        let expected_reservation = weighted(q.shared.config.slice_precharge, 40_000);
+        let expected_charge = weighted(Duration::from_millis(3), 40_000);
+        let before = q.shared.state.lock().unwrap().lanes[&lane_id].committed;
+        ACTIVE.with(|active| {
+            let active = active.borrow();
+            let mut d = active.as_ref().unwrap().borrow_mut();
+            assert_eq!(d.lane, lane_id);
+            assert_eq!(d.weight, 40_000);
+            assert_eq!(d.reserved, expected_reservation);
+            assert_eq!(d.record.group.id(), 1);
+            assert!(Arc::ptr_eq(&d.policy, &default));
+            d.shared.settle(d.lane, d.reserved, expected_charge);
+            d.reserved = 0;
+            d.poll_active = false;
+        });
+        assert_eq!(
+            q.shared.state.lock().unwrap().lanes[&lane_id].committed,
+            before + expected_charge
+        );
+        drop(pop.task_cell);
+        drop(guard);
+        {
+            let state = q.shared.state.lock().unwrap();
+            assert!(!state.groups.contains_key(&1));
+            assert_eq!(state.groups[&0].live, 0);
+        }
+        let stats = q.snapshot();
+        assert_eq!(stats.live_tasks, 0);
+        assert_eq!(stats.active_dispatches, 0);
+        assert_eq!(stats.reserved_vt, 0);
+
+        // A per-request override is independent of either group's priority.
+        let q = queue(&[20_000, 1_000, 10_000]);
+        q.shared.provider.group("g0").update(4, 40_000);
+        q.push(task(&q, 1, 12, Some(1)).0);
+        q.push(task(&q, 2, 0, Some(0)).0);
+        q.shared.provider.group("g1").retire();
+        assert_eq!(dispatch(&q, Duration::from_millis(1), false), (0, 1));
+        assert_eq!(dispatch(&q, Duration::from_millis(1), false), (2, 0));
+        assert_eq!(q.snapshot().live_tasks, 0);
+    }
+
+    #[test]
+    fn retired_group_cancellation_wakes_waiter_in_same_pool() {
+        use super::super::{DefaultTicker, YatpPoolBuilder};
+
+        let q = queue(&[10_000, 10_000]);
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .thread_count(4, 4, 4)
+            .build_fair_pool(q.clone());
+        let (senders, receivers): (Vec<_>, Vec<_>) = (0..128)
+            .map(|_| futures::channel::oneshot::channel::<()>())
+            .unzip();
+        let permit = q.try_acquire(&TaskMetadata::default()).unwrap();
+        let mut extras = Extras::multilevel_default();
+        extras.set_metadata(permit.metadata(vec![]));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        pool.spawn(TaskCell::new(
+            permit.wrap(async move {
+                let mut waiting = Box::pin(futures::future::join_all(receivers));
+                let mut started = Some(started_tx);
+                futures::future::poll_fn(move |cx| {
+                    let result = waiting.as_mut().poll(cx);
+                    if let Some(started) = started.take() {
+                        // The receivers now hold real wakers for this pool.
+                        started.send(()).unwrap();
+                    }
+                    result
+                })
+                .await;
+                done_tx.send(()).unwrap();
+            }),
+            extras,
+        ));
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Keep the sender tasks queued until their group has been retired.
+        q.shared.cpu.lock().unwrap().balance_ns = -1e15;
+        let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
+            resource_group_name: "g1".into(),
+            ..Default::default()
+        });
+        let mut cancellations = Vec::new();
+        for sender in senders {
+            let permit = q.try_acquire(&metadata).unwrap();
+            cancellations.push(permit.cancellation());
+            let mut extras = Extras::multilevel_default();
+            extras.set_metadata(permit.metadata(metadata.clone().to_vec()));
+            pool.spawn(TaskCell::new(
+                permit.wrap(async move { drop(sender) }),
+                extras,
+            ));
+        }
+        q.shared.provider.group("g1").retire();
+        let cancelling = thread::spawn(move || {
+            for cancellation in cancellations {
+                cancellation.cancel();
+                thread::yield_now();
+            }
+        });
+        q.shared.cpu.lock().unwrap().balance_ns = 1e10;
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        cancelling.join().unwrap();
+        pool.shutdown();
+        let stats = q.snapshot();
+        assert_eq!(stats.queued, 0);
+        assert_eq!(stats.live_tasks, 0);
+        assert_eq!(stats.active_dispatches, 0);
+        assert_eq!(stats.reserved_vt, 0);
     }
 
     #[test]
