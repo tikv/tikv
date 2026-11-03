@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::{max, min},
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     sync::{
         Arc, LockResult, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
@@ -498,8 +498,9 @@ pub struct ResourceGroupManager {
     // low-priority store pool. Tables rather than regions so demotion survives
     // split and merge. Marks land in `noisy_tables_pending` and the control
     // tick publishes them.
-    noisy_tables: RwLock<HashSet<i64>>,
-    noisy_tables_pending: RwLock<HashSet<i64>>,
+    // Ordered so a region's table span is answered by a range lookup.
+    noisy_tables: RwLock<BTreeSet<i64>>,
+    noisy_tables_pending: RwLock<BTreeSet<i64>>,
     // `!noisy_tables.is_empty()`, readable without the lock.
     has_noisy_tables: AtomicBool,
     // Bumped when the set changes, so readers can cache their verdict.
@@ -633,8 +634,8 @@ impl ResourceGroupManager {
             noisy_groups: RwLock::new(HashSet::new()),
             has_noisy_groups: AtomicBool::new(false),
             overloaded: AtomicBool::new(false),
-            noisy_tables: RwLock::new(HashSet::new()),
-            noisy_tables_pending: RwLock::new(HashSet::new()),
+            noisy_tables: RwLock::new(BTreeSet::new()),
+            noisy_tables_pending: RwLock::new(BTreeSet::new()),
             has_noisy_tables: AtomicBool::new(false),
             noisy_tables_gen: AtomicU64::new(0),
         };
@@ -1094,7 +1095,8 @@ impl ResourceGroupManager {
         }
     }
 
-    /// The only writer, so `has_noisy_groups` cannot drift from the set.
+    /// Stores the set and the flag together, so `has_noisy_groups` cannot
+    /// drift from it; `clear_noisy_groups` is the other writer.
     ///
     /// The flag is stored while the set's write lock is held, with release
     /// ordering: the detection tick and the read pool's reset run on different
@@ -1140,13 +1142,17 @@ impl ResourceGroupManager {
         self.noisy_tables.read().contains(&table_id)
     }
 
-    /// Whether `f` holds for any table in the published set. Lock-free when
-    /// empty.
-    pub fn any_noisy_table(&self, mut f: impl FnMut(i64) -> bool) -> bool {
+    /// Whether any published table lies in `first..=last`. Lock-free when
+    /// empty, a logarithmic lookup otherwise.
+    pub fn any_noisy_table_in(&self, first: i64, last: i64) -> bool {
         if !self.has_noisy_tables.load(Ordering::Relaxed) {
             return false;
         }
-        self.noisy_tables.read().iter().any(|&table| f(table))
+        self.noisy_tables
+            .read()
+            .range(first..=last)
+            .next()
+            .is_some()
     }
 
     /// Changes whenever [`Self::is_noisy_table`] may answer differently.
@@ -1165,13 +1171,21 @@ impl ResourceGroupManager {
     /// oscillate. [`Self::clear_noisy_tables`] is the only release.
     fn publish_noisy_tables(&self) {
         let pending = std::mem::take(&mut *self.noisy_tables_pending.write());
-        // Held across the merge; both control clocks call this.
+        if pending.is_empty() {
+            return;
+        }
+        // Held across the merge; the control tick is the only caller.
         let mut current = self.noisy_tables.write();
         let before = current.len();
+        let added: Vec<i64> = pending
+            .iter()
+            .copied()
+            .filter(|table| !current.contains(table))
+            .collect();
         current.extend(pending);
         metrics::NOISY_TABLES_GAUGE.set(current.len() as i64);
         if current.len() != before {
-            info!("noisy tables extended"; "tables" => ?*current);
+            info!("noisy tables extended"; "added" => ?added, "total" => current.len());
             self.has_noisy_tables.store(true, Ordering::Relaxed);
             self.noisy_tables_gen.fetch_add(1, Ordering::Release);
         }
@@ -1184,7 +1198,7 @@ impl ResourceGroupManager {
         let mut current = self.noisy_tables.write();
         metrics::NOISY_TABLES_GAUGE.set(0);
         if !current.is_empty() {
-            info!("releasing noisy tables"; "tables" => ?*current);
+            info!("releasing noisy tables"; "count" => current.len());
             current.clear();
             self.has_noisy_tables.store(false, Ordering::Relaxed);
             self.noisy_tables_gen.fetch_add(1, Ordering::Release);

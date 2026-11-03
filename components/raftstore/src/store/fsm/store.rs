@@ -1275,9 +1275,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
 
-        match self.priority {
-            Priority::Normal => STORE_POOL_MSGS_NORMAL.inc_by(self.peer_msg_buf.len() as u64),
-            Priority::Low => STORE_POOL_MSGS_LOW.inc_by(self.peer_msg_buf.len() as u64),
+        if !self.peer_msg_buf.is_empty() {
+            // Thread-local and auto-flushed, like the other per-poller counters.
+            let msgs = self.peer_msg_buf.len() as u64;
+            match self.priority {
+                Priority::Normal => STORE_POOL_MSGS.normal.inc_by(msgs),
+                Priority::Low => STORE_POOL_MSGS.low.inc_by(msgs),
+            }
         }
 
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);

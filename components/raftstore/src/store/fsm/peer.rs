@@ -772,6 +772,11 @@ where
         {
             return;
         }
+        // An uninitialized peer has no keys yet, so its range would cover
+        // every table and any mark would demote it. Its snapshot flow stays
+        // on the normal pool; the verdict is re-evaluated once it has a range,
+        // because applying the snapshot bumps the region version.
+        let initialized = self.peer.is_initialized();
         // Decoded only when split or merge moved the region's bounds.
         if self.noisy_region_version != version {
             self.noisy_region_tables = util::region_table_range(region);
@@ -780,7 +785,7 @@ where
         // Evaluated even when disabled, so turning it off promotes regions back.
         let next = match self.noisy_region_tables {
             Some((first, last))
-                if enabled && mgr.any_noisy_table(|table| (first..=last).contains(&table)) =>
+                if enabled && initialized && mgr.any_noisy_table_in(first, last) =>
             {
                 Priority::Low
             }

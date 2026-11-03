@@ -318,7 +318,8 @@ pub struct Config {
     /// leader whose only traffic for a table is `MsgReadIndex` forwarded by
     /// followers does not demote that region; the follower store does.
     /// Table ids are decoded from API v1 keys, so API v2 keyspaces are not
-    /// covered.
+    /// covered. Not supported with raftstore-v2 (`storage.engine =
+    /// "raft-kv2"`), which `validate` rejects.
     pub enable_noisy_tenant_demotion: bool,
 
     /// If it is 0, it means io tasks are handled in store threads.
@@ -624,7 +625,12 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
-            store_batch_system: BatchSystemConfig::default(),
+            // Unlike the apply pool, the store low pool only exists when asked
+            // for: it is only used by `enable_noisy_tenant_demotion`.
+            store_batch_system: BatchSystemConfig {
+                low_priority_pool_size: 0,
+                ..BatchSystemConfig::default()
+            },
             enable_noisy_tenant_demotion: false,
             store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
@@ -994,11 +1000,14 @@ impl Config {
                 limit
             ));
         }
-        // Unlike the apply pool, the store low pool only exists when asked for.
-        if self.store_batch_system.low_priority_pool_size.is_none() {
-            self.store_batch_system.low_priority_pool_size = Some(0);
+        let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size;
+        // raftstore-v2 has neither the attribution nor the priority routing, so
+        // the flag would silently do nothing there.
+        if self.enable_noisy_tenant_demotion && raft_kv_v2 {
+            return Err(box_err!(
+                "enable-noisy-tenant-demotion is not supported with storage.engine = \"raft-kv2\""
+            ));
         }
-        let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size();
         // With no low poller, demoted regions would never be polled again.
         if self.enable_noisy_tenant_demotion && store_low_priority_pool_size == 0 {
             return Err(box_err!(
@@ -1320,7 +1329,7 @@ impl Config {
             .set(self.apply_batch_system.reschedule_duration.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_priority_pool_size"])
-            .set(self.apply_batch_system.low_priority_pool_size() as f64);
+            .set(self.apply_batch_system.low_priority_pool_size as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
@@ -1333,7 +1342,7 @@ impl Config {
             .set(self.store_batch_system.reschedule_duration.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_priority_pool_size"])
-            .set(self.store_batch_system.low_priority_pool_size() as f64);
+            .set(self.store_batch_system.low_priority_pool_size as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
@@ -1501,7 +1510,7 @@ impl ConfigManager for RaftstoreConfigManager {
                 // the low store pool already there.
                 if let Some(ConfigValue::Bool(true)) = change.get("enable_noisy_tenant_demotion")
                 {
-                    if cfg.store_batch_system.low_priority_pool_size() == 0 {
+                    if cfg.store_batch_system.low_priority_pool_size == 0 {
                         return Err(
                             "enable-noisy-tenant-demotion needs store-low-priority-pool-size > 0, \
                              which is sized at startup; set it and restart"
@@ -1719,52 +1728,53 @@ mod tests {
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
-        // Unset, the store low pool has no threads; apply keeps the shared
-        // default.
+        // By default the store low pool has no threads; apply keeps the
+        // shared default.
         cfg = Config::new();
-        assert_eq!(cfg.store_batch_system.low_priority_pool_size, None);
-        cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0), false)
-            .unwrap();
-        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(0));
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
         assert_eq!(
-            cfg.apply_batch_system.low_priority_pool_size(),
-            1,
+            cfg.apply_batch_system.low_priority_pool_size, 1,
             "the apply pool keeps the shared default"
         );
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
 
         cfg = Config::new();
-        cfg.store_batch_system.low_priority_pool_size = Some(4);
+        cfg.store_batch_system.low_priority_pool_size = 4;
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap();
         assert_eq!(
-            cfg.store_batch_system.low_priority_pool_size,
-            Some(4),
+            cfg.store_batch_system.low_priority_pool_size, 4,
             "a configured size is kept, not clamped"
         );
 
-        // Unset or zero would strand demoted regions.
+        // A zero pool would strand demoted regions.
         cfg = Config::new();
         cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = 0;
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        // raftstore-v2 has no demotion path.
         cfg = Config::new();
         cfg.enable_noisy_tenant_demotion = true;
-        cfg.store_batch_system.low_priority_pool_size = Some(0);
-        cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0), false)
+        cfg.store_batch_system.low_priority_pool_size = 1;
+        cfg.optimize_for(true);
+        cfg.validate(split_size, false, ReadableSize(0), true)
             .unwrap_err();
 
         // ...unless demotion is off.
         cfg = Config::new();
         cfg.enable_noisy_tenant_demotion = false;
-        cfg.store_batch_system.low_priority_pool_size = Some(0);
+        cfg.store_batch_system.low_priority_pool_size = 0;
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap();
-        assert_eq!(cfg.store_batch_system.low_priority_pool_size, Some(0));
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(10241);

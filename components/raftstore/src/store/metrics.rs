@@ -57,6 +57,15 @@ make_auto_flush_static_metric! {
         compute,
     }
 
+    pub label_enum StorePoolType {
+        normal,
+        low,
+    }
+
+    pub struct StorePoolMsgsVec: LocalIntCounter {
+        "pool" => StorePoolType,
+    }
+
     pub label_enum RegionHashResult {
         miss,
         matched,
@@ -414,10 +423,8 @@ lazy_static! {
         &["pool"]
     )
     .unwrap();
-    pub static ref STORE_POOL_MSGS_NORMAL: IntCounter =
-        STORE_POOL_MSGS_VEC.with_label_values(&["normal"]);
-    pub static ref STORE_POOL_MSGS_LOW: IntCounter =
-        STORE_POOL_MSGS_VEC.with_label_values(&["low"]);
+    pub static ref STORE_POOL_MSGS: StorePoolMsgsVec =
+        auto_flush_from!(STORE_POOL_MSGS_VEC, StorePoolMsgsVec);
 
     pub static ref NOISY_REGION_DEMOTIONS_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_noisy_region_demotions_total",

@@ -597,7 +597,8 @@
 ## low-priority store pollers, so its raft work no longer delays other tenants' regions.
 ## Requires `store-low-priority-pool-size` > 0. Online-configurable.
 ## Attribution is per store and reads proposals, so a leader whose only traffic for a table is
-## read-index messages forwarded by followers is not demoted for it. API v1 table keys only.
+## read-index messages forwarded by followers is not demoted for it. API v1 table keys only;
+## not supported with `storage.engine = "raft-kv2"`.
 # enable-noisy-tenant-demotion = false
 
 ## Use how many threads to handle raft io tasks

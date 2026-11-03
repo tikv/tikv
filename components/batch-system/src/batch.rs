@@ -800,7 +800,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         workers: Arc::new(Mutex::new(Vec::new())),
         joinable_workers: Arc::new(Mutex::new(Vec::new())),
         reschedule_duration: cfg.reschedule_duration.0,
-        low_priority_pool_size: cfg.low_priority_pool_size(),
+        low_priority_pool_size: cfg.low_priority_pool_size,
         thread_priority: None,
         pool_state_builder: Some(pool_state_builder),
     };

@@ -7472,7 +7472,7 @@ mod tests {
         manager.publish_noisy_tables_for_test(true);
         assert!(manager.is_noisy_table(100));
         assert!(
-            !manager.any_noisy_table(|t| (200..205).contains(&t)),
+            !manager.any_noisy_table_in(200, 204),
             "a multi-table region cannot tell which table a keyless read was for"
         );
     }
@@ -7517,7 +7517,7 @@ mod tests {
             &cmd("noisy", vec![put(Key::from_raw(b"m_meta").into_encoded())]),
         );
         manager.publish_noisy_tables_for_test(true);
-        assert!(!manager.any_noisy_table(|_| true));
+        assert!(!manager.any_noisy_table_in(i64::MIN, i64::MAX));
     }
 
     #[test]
