@@ -252,6 +252,20 @@ impl Write {
         WriteType::from_u8(write_type_bytes).ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))
     }
 
+    /// Reports whether a write record contains a short value.
+    ///
+    /// Short value is always the first optional field in the encoded write
+    /// record, so callers that only need its presence do not need to parse the
+    /// remaining optional fields.
+    #[inline]
+    pub fn has_short_value(mut b: &[u8]) -> Result<bool> {
+        b.read_u8()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        b.read_var_u64()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        Ok(b.first() == Some(&SHORT_VALUE_PREFIX))
+    }
+
     #[inline]
     pub fn as_ref(&self) -> WriteRef<'_> {
         WriteRef {
@@ -532,14 +546,17 @@ mod tests {
                 .to_owned();
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
             assert_eq!(Write::parse_type(&v).unwrap(), w.write_type);
+            assert_eq!(Write::has_short_value(&v).unwrap(), w.short_value.is_some());
         }
 
         // Test `Write::parse()` handles incorrect input.
         assert!(WriteRef::parse(b"").is_err());
+        Write::has_short_value(b"").unwrap_err();
 
         let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
         let mut v = lock.as_ref().to_bytes();
         assert!(WriteRef::parse(&v[..1]).is_err());
+        Write::has_short_value(&v[..1]).unwrap_err();
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
         // Test `Write::parse()` ignores unknown bytes.
         v.extend(b"unknown");

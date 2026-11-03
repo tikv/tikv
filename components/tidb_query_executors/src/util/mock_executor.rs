@@ -37,6 +37,10 @@ pub struct MockExecutor {
     pub intermediate_results: std::vec::IntoIter<Vec<BatchExecuteResult>>,
     pub child: Option<Box<MockExecutor>>,
     pub scanned_range: Option<IntervalRange>,
+    /// Rows produced since the last `collect_exec_stats` call; drained on
+    /// collection so that `scanned_rows_per_range` reflects physical key
+    /// counts in tests that exercise `max_keys_read`.
+    pending_scanned_rows: usize,
 }
 
 impl MockExecutor {
@@ -49,6 +53,7 @@ impl MockExecutor {
             intermediate_results: std::vec::IntoIter::default(),
             child: None,
             scanned_range: None,
+            pending_scanned_rows: 0,
         }
     }
 
@@ -60,6 +65,7 @@ impl MockExecutor {
             intermediate_results: std::vec::IntoIter::default(),
             child: Some(Box::new(child)),
             scanned_range: None,
+            pending_scanned_rows: 0,
         }
     }
 
@@ -119,12 +125,27 @@ impl BatchExecutor for MockExecutor {
     async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         match &mut self.child {
             Some(child) => child.next_batch(_scan_rows).await,
-            None => self.results.next().unwrap(),
+            None => {
+                let result = self.results.next().unwrap();
+                self.pending_scanned_rows += result.logical_rows.len();
+                result
+            }
         }
     }
 
-    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
-        // Do nothing
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        if self.pending_scanned_rows > 0 {
+            dest.scanned_rows_per_range.push(self.pending_scanned_rows);
+            self.pending_scanned_rows = 0;
+        }
+        if let Some(child) = &mut self.child {
+            child.collect_exec_stats(dest);
+        }
+    }
+
+    fn peek_scanned_rows_sum(&self) -> usize {
+        let child_sum = self.child.as_ref().map_or(0, |c| c.peek_scanned_rows_sum());
+        self.pending_scanned_rows + child_sum
     }
 
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
@@ -206,6 +227,10 @@ impl BatchExecutor for MockScanExecutor {
 
     fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
         // Do nothing
+    }
+
+    fn peek_scanned_rows_sum(&self) -> usize {
+        0
     }
 
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {

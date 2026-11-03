@@ -90,7 +90,7 @@ use raftstore::{
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{ResourceGroupManager, config::ResourceContrlCfgMgr};
-use security::SecurityManager;
+use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -158,6 +158,8 @@ use crate::{
     utils,
 };
 
+/// Builds and runs a TiKV server, then blocks until a service event asks it
+/// to exit and stops it.
 #[inline]
 fn run_impl<CER, F>(
     config: TikvConfig,
@@ -194,7 +196,9 @@ fn run_impl<CER, F>(
 
     // Build a background worker for handling signals.
     {
-        let engines = tikv.engines.take().unwrap().engines;
+        // Clone rather than take the engines: `prepare_stop` still needs them
+        // to disable manual compactions before the workers are stopped.
+        let engines = tikv.engines.as_ref().unwrap().engines.clone();
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
         std::thread::spawn(move || {
@@ -576,7 +580,10 @@ where
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
-
+        cfg_controller.register(
+            tikv::config::Module::Security,
+            Box::new(SecurityConfigManager),
+        );
         // Create cdc.
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
@@ -1654,12 +1661,18 @@ where
         }
     }
 
+    /// Runs before any component is stopped. Disables manual compactions on
+    /// the KV engine so that in-flight ones are cancelled and the workers
+    /// running them can be joined promptly.
     fn prepare_stop(&self) {
         if let Some(engines) = self.engines.as_ref() {
-            // Disable manul compaction jobs before shutting down the engines. And it
+            // Disable manual compaction jobs before shutting down the engines. And it
             // will stop the compaction thread in advance, so it won't block the
             // cleanup thread when exiting.
-            let _ = engines.engines.kv.disable_manual_compaction();
+            match engines.engines.kv.disable_manual_compaction() {
+                Ok(()) => info!("manual compaction disabled before shutdown"),
+                Err(e) => warn!("failed to disable manual compaction"; "err" => ?e),
+            }
         }
     }
 

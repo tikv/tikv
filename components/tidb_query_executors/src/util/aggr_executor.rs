@@ -363,6 +363,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.entities.src.peek_scanned_rows_sum()
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.entities.src.collect_storage_stats(dest);
     }

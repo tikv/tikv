@@ -696,6 +696,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     &bypass_locks,
                     &concurrency_manager,
                     CMD,
+                    deadline,
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -897,6 +898,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &bypass_locks,
                         &concurrency_manager,
                         CMD,
+                        deadline,
                     ) {
                         Ok(mut snap_ctx) => {
                             snap_ctx.read_id = if ctx.get_stale_read() {
@@ -1104,6 +1106,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     &TsSet::Empty,
                     &concurrency_manager,
                     CMD,
+                    deadline,
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -1312,6 +1315,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     &bypass_locks,
                     &concurrency_manager,
                     CMD,
+                    deadline,
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -3446,6 +3450,7 @@ fn prepare_snap_ctx<'a>(
     bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
+    deadline: Deadline,
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
@@ -3489,6 +3494,7 @@ fn prepare_snap_ctx<'a>(
     let mut snap_ctx = SnapContext {
         pb_ctx,
         start_ts: Some(start_ts),
+        deadline: Some(deadline),
         ..Default::default()
     };
     if need_check_locks_in_replica_read(pb_ctx) {
