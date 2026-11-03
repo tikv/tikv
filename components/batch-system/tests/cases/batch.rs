@@ -390,7 +390,10 @@ fn test_poller_busy_time_counts_time_spent_handling() {
     while poller_busy_seconds("normal") - before < 0.1 {
         assert!(Instant::now() < deadline, "busy time was never flushed");
         router
-            .send(1, Message::Callback(Box::new(|_: &Handler, _: &mut Runner| {})))
+            .send(
+                1,
+                Message::Callback(Box::new(|_: &Handler, _: &mut Runner| {})),
+            )
             .unwrap();
         sleep(Duration::from_millis(10));
     }
