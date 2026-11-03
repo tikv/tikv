@@ -218,13 +218,17 @@ impl ResourceTagFactory {
         }
     }
 
-    // create a new tag with key ranges for a read request.
+    /// Creates a tag with raw key ranges for a read request.
+    ///
+    /// Transactional storage and coprocessor pass forward raw `[start, end)`
+    /// ranges. RawKV callers may pass request bytes as-is and are not a
+    /// reliable CPU hottest-range input.
     pub fn new_tag_with_key_ranges(
         &self,
         context: &kvproto::kvrpcpb::Context,
-        key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+        raw_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> ResourceMeteringTag {
-        let tag_infos = TagInfos::from_rpc_context_with_key_ranges(context, key_ranges);
+        let tag_infos = TagInfos::from_rpc_context_with_key_ranges(context, raw_key_ranges);
         ResourceMeteringTag {
             infos: Arc::new(tag_infos),
             resource_tag_factory: self.clone(),
@@ -323,8 +327,11 @@ pub struct TagInfos {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
-    // Only a read request contains the key ranges.
-    pub key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Forward `[start, end)` ranges in raw key form. An empty end is
+    /// unbounded. Transactional storage and coprocessor producers guarantee
+    /// this contract; RawKV producers are best-effort and are not a reliable
+    /// input for CPU hottest-range split. Only read requests contain ranges.
+    pub raw_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     pub extra_attachment: Arc<Vec<u8>>,
 }
 
@@ -335,22 +342,22 @@ impl TagInfos {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
-            key_ranges: vec![],
+            raw_key_ranges: vec![],
             extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
 
-    // create a TagInfos with start and end keys for a read request.
+    /// Creates tag information with raw key ranges for a read request.
     pub fn from_rpc_context_with_key_ranges(
         context: &kvproto::kvrpcpb::Context,
-        key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+        raw_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Self {
         let peer = context.get_peer();
         Self {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
-            key_ranges,
+            raw_key_ranges,
             extra_attachment: Arc::new(Vec::from(context.get_resource_group_tag())),
         }
     }
@@ -358,7 +365,7 @@ impl TagInfos {
 
 impl HeapSize for TagInfos {
     fn approximate_heap_size(&self) -> usize {
-        self.key_ranges.approximate_heap_size() + self.extra_attachment.approximate_heap_size()
+        self.raw_key_ranges.approximate_heap_size() + self.extra_attachment.approximate_heap_size()
     }
 }
 
@@ -377,7 +384,7 @@ mod tests {
                     store_id: 1,
                     region_id: 2,
                     peer_id: 3,
-                    key_ranges: vec![],
+                    raw_key_ranges: vec![],
                     extra_attachment: Arc::new(b"12345".to_vec()),
                 }),
                 resource_tag_factory,
@@ -415,7 +422,7 @@ mod tests {
                     store_id: 1,
                     region_id: 2,
                     peer_id: 3,
-                    key_ranges: vec![],
+                    raw_key_ranges: vec![],
                     extra_attachment: Arc::new(b"block-read-only".to_vec()),
                 }),
                 resource_tag_factory,

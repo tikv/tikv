@@ -382,7 +382,7 @@ mod tests {
                 store_id: 0,
                 region_id: 0,
                 peer_id: 0,
-                key_ranges: vec![],
+                raw_key_ranges: vec![],
                 extra_attachment: [1].to_vec().into(),
             });
             records.records.entry(tag).or_default().cpu_time = 2;
