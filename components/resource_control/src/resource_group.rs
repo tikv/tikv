@@ -1170,12 +1170,17 @@ impl ResourceGroupManager {
     /// `propose`, so it stops being marked, and replacing made demotion
     /// oscillate. [`Self::clear_noisy_tables`] is the only release.
     fn publish_noisy_tables(&self) {
-        let pending = std::mem::take(&mut *self.noisy_tables_pending.write());
+        // The pending lock is held until the merge is done, in the same
+        // pending-then-current order as `clear_noisy_tables`, so a clear from
+        // the read pool's reset cannot slip in between the take and the merge
+        // and have the taken marks republished after the episode ended.
+        let mut pending = self.noisy_tables_pending.write();
         if pending.is_empty() {
             return;
         }
-        // Held across the merge; the control tick is the only caller.
+        fail_point!("noisy_tables_publish_before_merge");
         let mut current = self.noisy_tables.write();
+        let pending = std::mem::take(&mut *pending);
         let before = current.len();
         let added: Vec<i64> = pending
             .iter()
@@ -2939,6 +2944,38 @@ pub(crate) mod tests {
 
         mgr.reset_group_priorities();
         assert!(!mgr.is_noisy_table(7));
+    }
+
+    /// A clear that lands between the take and the merge of a publish must
+    /// not have the taken marks republished after the episode ended.
+    #[test]
+    fn test_clear_during_publish_does_not_republish_stale_marks() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config::default()));
+        mgr.mark_noisy_table(7);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mgr2 = mgr.clone();
+        fail::cfg_callback("noisy_tables_publish_before_merge", move || {
+            let mgr = mgr2.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                mgr.clear_noisy_tables();
+                tx.send(()).unwrap();
+            });
+            // Long enough for the clear to run if nothing serializes it.
+            std::thread::sleep(Duration::from_millis(100));
+        })
+        .unwrap();
+        mgr.publish_noisy_tables();
+        fail::remove("noisy_tables_publish_before_merge");
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("the clear finishes once the publish releases its locks");
+
+        assert!(
+            !mgr.is_noisy_table(7),
+            "the clear ran after the publish, so nothing is left demoted"
+        );
+        assert!(mgr.noisy_tables_pending.read().is_empty());
     }
 
     #[test]
