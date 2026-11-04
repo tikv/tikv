@@ -637,7 +637,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     /// Refresh statistics without scanning for split keys. Keep retrying checks
     /// for potentially large Regions or table-boundary splits so expiry or
     /// re-enabling automatic splits can take effect even without further
-    /// writes. Returns the refreshed approximate size, if available.
+    /// writes. Low estimates must not clear split hints established by a full
+    /// scan. Returns the refreshed approximate size, if available.
     fn refresh_disabled_region_stats(&self, region: &Region, engine: &EK) -> Option<u64> {
         let cfg = &self.coprocessor.cfg;
         let region_id = region.get_id();
@@ -654,7 +655,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                     // Size/key estimates cannot rule out a table-boundary
                     // split. Keep idle ticks eligible until the table checker
                     // can run after automatic splitting is re-enabled.
-                    Some(cfg.split_region_on_table || size >= cfg.region_max_size().0),
+                    (cfg.split_region_on_table || size >= cfg.region_max_size().0).then_some(true),
                 );
                 Some(size)
             }
@@ -675,7 +676,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 self.router.update_approximate_keys(
                     region_id,
                     Some(keys),
-                    Some(keys >= cfg.region_max_keys()),
+                    (keys >= cfg.region_max_keys()).then_some(true),
                 );
             }
             Err(e) => {
@@ -1421,7 +1422,10 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::KvTestEngine,
     };
-    use engine_traits::{ALL_CFS, MiscExt, Range, RangePropertiesExt, SyncMutable};
+    use engine_traits::{
+        ALL_CFS, CompactExt, ManualCompactionOptions, MiscExt, Range, RangePropertiesExt,
+        SyncMutable,
+    };
     use tempfile::TempDir;
     use tikv_util::config::ReadableSize;
 
@@ -1474,6 +1478,7 @@ mod tests {
         // Model a scheduled tick and its responses. Oversized Regions must keep
         // checking even without writes, so enabling or expiry can resume splits.
         trigger.post_triggered();
+        let was_skippable = trigger.should_skip(u64::MAX);
         for task in rx.try_iter() {
             match task {
                 SchedTask::UpdateApproximateSize {
@@ -1481,7 +1486,7 @@ mod tests {
                     splitable: flag,
                     ..
                 } => {
-                    assert_eq!(flag, Some(splitable[0]));
+                    assert_eq!(flag, splitable[0].then_some(true));
                     trigger.on_approximate_region_size(value, flag);
                     size = value;
                 }
@@ -1490,7 +1495,7 @@ mod tests {
                     splitable: flag,
                     ..
                 } => {
-                    assert_eq!(flag, Some(splitable[1]));
+                    assert_eq!(flag, splitable[1].then_some(true));
                     trigger.on_approximate_region_keys(value, flag);
                     keys = value;
                 }
@@ -1506,8 +1511,137 @@ mod tests {
         }
         assert_eq!(buckets, buckets_enabled);
         trigger.post_triggered();
-        assert_eq!(trigger.should_skip(u64::MAX), !splitable.contains(&true));
+        assert_eq!(
+            trigger.should_skip(u64::MAX),
+            was_skippable && !splitable.contains(&true)
+        );
         (size.unwrap(), keys.unwrap())
+    }
+
+    #[test]
+    fn test_disabled_split_check_preserves_split_hints() {
+        for expire in [false, true] {
+            let path = TempDir::new().unwrap();
+            let engine =
+                engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+            let cfg = Config {
+                region_max_size: Some(ReadableSize(64 * 1024)),
+                region_split_size: Some(ReadableSize(32 * 1024)),
+                region_max_keys: Some(1_000_000),
+                region_split_keys: Some(500_000),
+                batch_split_limit: 64,
+                enable_region_bucket: Some(false),
+                ..Default::default()
+            };
+            let max_size = cfg.region_max_size().0;
+            let (tx, rx) = mpsc::sync_channel(100);
+            let host = CoprocessorHost::new(tx.clone(), cfg);
+            let validator = host.split_validator.clone();
+            let mut runner = Runner::new(engine.clone(), tx, host, None);
+            let mut region = Region::default();
+            region.set_id(1);
+            region.set_start_key(b"a".to_vec());
+            region.set_end_key(b"b".to_vec());
+            region.mut_peers().push(Default::default());
+            for i in 0..64 {
+                engine
+                    .put_cf(
+                        CF_WRITE,
+                        &keys::data_key(format!("a{i:04}").as_bytes()),
+                        &[1; 4096],
+                    )
+                    .unwrap();
+            }
+            let mut trigger = SplitCheckTrigger::default();
+            let mut check_tick = |trigger: &mut SplitCheckTrigger| {
+                assert!(!trigger.should_skip(u64::MAX));
+                let task = Task::split_check(region.clone(), true, CheckPolicy::Scan, None);
+                trigger.post_triggered();
+                runner.run(task);
+                let results: Vec<_> = rx.try_iter().collect();
+                for task in &results {
+                    match task {
+                        SchedTask::UpdateApproximateSize {
+                            size, splitable, ..
+                        } => trigger.on_approximate_region_size(*size, *splitable),
+                        SchedTask::UpdateApproximateKeys {
+                            keys, splitable, ..
+                        } => trigger.on_approximate_region_keys(*keys, *splitable),
+                        SchedTask::AskSplit { .. } => {}
+                        task => panic!("unexpected split check result: {task:?}"),
+                    }
+                }
+                results
+            };
+
+            // A full scan establishes both retry hints before disabling splits.
+            let results = check_tick(&mut trigger);
+            assert!(
+                results
+                    .iter()
+                    .any(|task| matches!(task, SchedTask::AskSplit { .. }))
+            );
+            assert!(trigger.approximate_size.unwrap() > max_size);
+            assert!(!trigger.should_skip(u64::MAX));
+
+            // The final SST sample is outside the Region, underestimating its
+            // unchanged data. Disabled refreshes must not erase the scan hints.
+            validator.disable(region.get_id());
+            let outside_key = keys::data_key(b"z");
+            engine.put_cf(CF_WRITE, &outside_key, b"v").unwrap();
+            engine.flush_cf(CF_WRITE, true).unwrap();
+            let estimate = get_region_approximate_size(&engine, &region, 0).unwrap();
+            assert!(estimate < max_size);
+            for _ in 0..2 {
+                let results = check_tick(&mut trigger);
+                assert!(results.iter().any(|task| matches!(
+                    task,
+                    SchedTask::UpdateApproximateSize {
+                        size: Some(size), splitable: None, ..
+                    } if *size == estimate
+                )));
+                assert!(results.iter().any(|task| matches!(
+                    task,
+                    SchedTask::UpdateApproximateKeys {
+                        keys: Some(_),
+                        splitable: None,
+                        ..
+                    }
+                )));
+                assert!(
+                    !results
+                        .iter()
+                        .any(|task| matches!(task, SchedTask::AskSplit { .. }))
+                );
+                assert!(!trigger.should_skip(u64::MAX));
+            }
+
+            // Rebuild SST properties without changing the Region's data or
+            // delivering a compaction notification to the trigger.
+            engine.delete_cf(CF_WRITE, &outside_key).unwrap();
+            engine.flush_cf(CF_WRITE, true).unwrap();
+            engine
+                .compact_range_cf(
+                    CF_WRITE,
+                    None,
+                    None,
+                    ManualCompactionOptions::new(true, 1, true),
+                )
+                .unwrap();
+            assert!(get_region_approximate_size(&engine, &region, 0).unwrap() >= max_size);
+            if expire {
+                validator.expire_for_test(region.get_id());
+            } else {
+                validator.enable(region.get_id());
+            }
+            // Accurate estimates install the ordinary checker on the next idle tick.
+            let results = check_tick(&mut trigger);
+            assert!(
+                results
+                    .iter()
+                    .any(|task| matches!(task, SchedTask::AskSplit { .. }))
+            );
+        }
     }
 
     #[test]
@@ -1595,7 +1729,7 @@ mod tests {
             validator.expire_for_test(region.get_id());
             expect_split(&region, true);
 
-            // Small Regions can stop retrying, and an empty bucket
+            // Low estimates preserve earlier hints, and an empty bucket
             // range list must not publish an empty bucket refresh.
             validator.disable(region.get_id());
             runner.coprocessor.cfg.region_max_size = Some(ReadableSize(u64::MAX / 10));
@@ -1607,6 +1741,7 @@ mod tests {
                 Some(vec![]),
             ));
             check_disabled_result(&rx, &mut trigger, [false; 2], false);
+            assert!(!trigger.should_skip(u64::MAX));
         }
     }
 

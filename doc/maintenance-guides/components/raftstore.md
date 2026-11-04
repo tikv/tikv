@@ -189,7 +189,8 @@ High-risk contracts:
   properties. For empty approximate results, retain retry hints if either
   estimate is missing or at or above its threshold, so a later flush can resume
   splitting without new writes. A partial key-range check cannot establish that
-  the entire Region is unsplittable.
+  the entire Region is unsplittable. During disabled refreshes, low estimates
+  must not clear split hints established by earlier full scans.
 - Approximate checks selected for buckets must still honor table-boundary
   splits. The table checker returns an already known boundary or requests a
   scan fallback when the boundary requires examining keys; disabled automatic
