@@ -4421,11 +4421,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#2856107f60d3f554f021672e71888c3e8bbb355f"
-=======
-source = "git+https://github.com/pingcap/kvproto.git?rev=f8ad079c8e9812ed5900b0c12b5f1d97171464c4#f8ad079c8e9812ed5900b0c12b5f1d97171464c4"
->>>>>>> 134cdb2ce9 (cloud: support S3 SSE-KMS encryption context (#20193))
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#1bf153fd02d4f8b642802ab6bebd30a4bacccecb"
 dependencies = [
  "bytes",
  "futures 0.3.15",

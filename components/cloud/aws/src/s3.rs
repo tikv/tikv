@@ -1122,8 +1122,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
-<<<<<<< HEAD
-=======
         let _guard = crate::AWS_TEST_LOCK.lock().await;
         for context in ["", SSE_KMS_CONTEXT] {
             check_s3_storage_multi_part(context).await;
@@ -1152,7 +1150,6 @@ mod tests {
     }
 
     async fn check_s3_storage_multi_part(context: &str) {
->>>>>>> 134cdb2ce9 (cloud: support S3 SSE-KMS encryption context (#20193))
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1279,10 +1276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part_abort() {
-<<<<<<< HEAD
-=======
         let _guard = crate::AWS_TEST_LOCK.lock().await;
->>>>>>> 134cdb2ce9 (cloud: support S3 SSE-KMS encryption context (#20193))
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();

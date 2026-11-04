@@ -436,13 +436,8 @@ grpcio = { version = "0.10.4", default-features = false, features = [
 grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
-<<<<<<< HEAD
 tipb = { git = "https://github.com/pingcap/tipb.git", branch = "release-8.5" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-8.5" }
-=======
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", rev = "f8ad079c8e9812ed5900b0c12b5f1d97171464c4" }
->>>>>>> 134cdb2ce9 (cloud: support S3 SSE-KMS encryption context (#20193))
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
