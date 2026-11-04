@@ -25,6 +25,9 @@ pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
     split_reason: SplitReason,
     cfg: &'a Config,
+    // Collected by the size and keys observers; None means unavailable.
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
 }
 
 impl<'a, E> Host<'a, E> {
@@ -33,6 +36,8 @@ impl<'a, E> Host<'a, E> {
             split_reason,
             checkers: vec![],
             cfg,
+            approximate_size: None,
+            approximate_keys: None,
         }
     }
 
@@ -44,6 +49,14 @@ impl<'a, E> Host<'a, E> {
     #[inline]
     pub fn skip(&self) -> bool {
         self.checkers.is_empty()
+    }
+
+    pub(crate) fn is_below_split_thresholds(&self) -> bool {
+        self.approximate_size
+            .is_some_and(|size| size < self.cfg.region_max_size().0)
+            && self
+                .approximate_keys
+                .is_some_and(|keys| keys < self.cfg.region_max_keys())
     }
 
     pub fn policy(&self) -> CheckPolicy {
