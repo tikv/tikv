@@ -8263,7 +8263,7 @@ mod tests {
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(fsm.get_priority(), Priority::Normal);
 
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(
@@ -8283,7 +8283,7 @@ mod tests {
         let manager = Arc::new(ResourceGroupManager::default());
         let (_dir, mut fsm) = test_peer_fsm(7, 100);
 
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         fsm.refresh_noisy_priority(Some(&manager), false);
@@ -8307,7 +8307,7 @@ mod tests {
     #[test]
     fn test_only_regions_of_the_marked_table_are_demoted() {
         let manager = Arc::new(ResourceGroupManager::default());
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         let (_dir, mut other) = test_peer_fsm(8, 101);
@@ -8319,7 +8319,7 @@ mod tests {
     fn test_a_region_the_group_never_proposed_to_is_still_demoted() {
         // E.g. a freshly split child: demoted without being attributed first.
         let manager = Arc::new(ResourceGroupManager::default());
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         let (_dir, mut sibling) = test_peer_fsm(9, 100);
@@ -8330,7 +8330,7 @@ mod tests {
     #[test]
     fn test_a_region_outside_table_data_is_never_demoted() {
         let manager = Arc::new(ResourceGroupManager::default());
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         // Holds only keys before table data, e.g. meta.
@@ -8354,7 +8354,7 @@ mod tests {
     #[test]
     fn test_an_unchanged_generation_is_not_re_queried() {
         let manager = Arc::new(ResourceGroupManager::default());
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         let (_dir, mut fsm) = test_peer_fsm(7, 100);
@@ -8371,13 +8371,13 @@ mod tests {
         );
 
         // Republishing the same set does not bump the generation.
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(fsm.get_priority(), Priority::Normal);
 
         manager.publish_noisy_tables_for_test(false);
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(
@@ -8391,7 +8391,7 @@ mod tests {
     fn test_a_split_into_another_table_invalidates_the_cached_verdict() {
         // Split and merge do not bump the generation.
         let manager = Arc::new(ResourceGroupManager::default());
-        manager.mark_noisy_table(100);
+        manager.mark_noisy_table_for_test(100);
         manager.publish_noisy_tables_for_test(true);
 
         let (_dir, mut fsm) = test_peer_fsm(7, 100);
@@ -8418,7 +8418,7 @@ mod tests {
         // Small tables 100..=104 merged into one region.
         move_region(&mut fsm, table_boundary(100), table_boundary(105));
 
-        manager.mark_noisy_table(105);
+        manager.mark_noisy_table_for_test(105);
         manager.publish_noisy_tables_for_test(true);
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(
@@ -8427,7 +8427,7 @@ mod tests {
             "the end key is exclusive"
         );
 
-        manager.mark_noisy_table(103);
+        manager.mark_noisy_table_for_test(103);
         manager.publish_noisy_tables_for_test(true);
         fsm.refresh_noisy_priority(Some(&manager), true);
         assert_eq!(

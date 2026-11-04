@@ -1124,13 +1124,30 @@ impl ResourceGroupManager {
         self.clear_noisy_tables();
     }
 
-    /// Records that a noisy group proposed to `table_id`. Takes effect at the
-    /// next publish.
-    pub fn mark_noisy_table(&self, table_id: i64) {
-        // Hot path: keep the already-marked case off the write lock.
-        if self.noisy_tables_pending.read().contains(&table_id) {
+    /// Records that `group`, which the caller found blamed, proposed to
+    /// `table_id`. Takes effect at the next publish.
+    pub fn mark_noisy_table(&self, group: &str, table_id: i64) {
+        // Hot path: an already-demoted table has nothing to add, and marking
+        // it again would have every tick re-merge it; the pending case stays
+        // off the write lock.
+        if self.is_noisy_table(table_id) || self.noisy_tables_pending.read().contains(&table_id) {
             return;
         }
+        fail_point!("noisy_tables_mark_before_insert");
+        let mut pending = self.noisy_tables_pending.write();
+        // Re-checked under the pending lock. `clear_noisy_groups` empties the
+        // groups before it takes this lock, so a proposal that saw the group
+        // blamed before the episode ended cannot carry its table into the
+        // next one.
+        if !self.is_noisy_group(group) {
+            return;
+        }
+        pending.insert(table_id);
+    }
+
+    /// Marks without a blamed group, for tests of the publish path.
+    #[cfg(feature = "testexport")]
+    pub fn mark_noisy_table_for_test(&self, table_id: i64) {
         self.noisy_tables_pending.write().insert(table_id);
     }
 
@@ -1180,19 +1197,25 @@ impl ResourceGroupManager {
         }
         fail_point!("noisy_tables_publish_before_merge");
         let mut current = self.noisy_tables.write();
-        let pending = std::mem::take(&mut *pending);
+        // `mark_noisy_table` skips published tables, so pending is new work;
+        // the merge is the only thing done under both locks.
+        let added = std::mem::take(&mut *pending);
         let before = current.len();
-        let added: Vec<i64> = pending
-            .iter()
-            .copied()
-            .filter(|table| !current.contains(table))
-            .collect();
-        current.extend(pending);
-        metrics::NOISY_TABLES_GAUGE.set(current.len() as i64);
-        if current.len() != before {
-            info!("noisy tables extended"; "added" => ?added, "total" => current.len());
+        current.extend(added.iter().copied());
+        let total = current.len();
+        drop(current);
+        drop(pending);
+        metrics::NOISY_TABLES_GAUGE.set(total as i64);
+        if total != before {
             self.has_noisy_tables.store(true, Ordering::Relaxed);
             self.noisy_tables_gen.fetch_add(1, Ordering::Release);
+            const LOGGED: usize = 32;
+            info!(
+                "noisy tables extended";
+                "added" => added.len(),
+                "first" => ?added.iter().take(LOGGED).collect::<Vec<_>>(),
+                "total" => total,
+            );
         }
     }
 
@@ -2843,7 +2866,7 @@ pub(crate) mod tests {
     #[test]
     fn test_noisy_table_is_only_visible_after_a_publish() {
         let mgr = ResourceGroupManager::new(Config::default());
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         assert!(!mgr.is_noisy_table(7), "a mark is not live until published");
 
         mgr.publish_noisy_tables();
@@ -2867,7 +2890,7 @@ pub(crate) mod tests {
             .0
             .set_scheduler_backpressure(true);
 
-        mgr.mark_noisy_table(127);
+        mgr.mark_noisy_table_for_test(127);
         // Loaded but `under_pressure` is false, while the group stays blamed.
         mgr.set_bg_cpu_at_floor(false);
         mgr.online_adjust_resource_quota_at(80.0, t0);
@@ -2881,7 +2904,7 @@ pub(crate) mod tests {
     #[test]
     fn test_noisy_tables_are_released_when_pressure_clears() {
         let mgr = ResourceGroupManager::new(Config::default());
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         mgr.publish_noisy_tables();
         assert!(mgr.is_noisy_table(7));
 
@@ -2892,7 +2915,7 @@ pub(crate) mod tests {
     #[test]
     fn test_a_table_stays_demoted_across_ticks_that_mark_nothing() {
         let mgr = ResourceGroupManager::new(Config::default());
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         mgr.publish_noisy_tables();
         assert!(mgr.is_noisy_table(7));
 
@@ -2918,13 +2941,13 @@ pub(crate) mod tests {
         mgr.clear_noisy_tables();
         assert_eq!(mgr.noisy_tables_gen(), start);
 
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         mgr.publish_noisy_tables();
         let after_add = mgr.noisy_tables_gen();
         assert!(after_add > start, "adding a region must invalidate readers");
 
         // Re-publishing the identical set is not a change.
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         mgr.publish_noisy_tables();
         assert_eq!(mgr.noisy_tables_gen(), after_add);
 
@@ -2938,7 +2961,7 @@ pub(crate) mod tests {
     #[test]
     fn test_reset_group_priorities_releases_noisy_tables() {
         let mgr = ResourceGroupManager::new(Config::default());
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
         mgr.publish_noisy_tables();
         assert!(mgr.is_noisy_table(7));
 
@@ -2951,7 +2974,7 @@ pub(crate) mod tests {
     #[test]
     fn test_clear_during_publish_does_not_republish_stale_marks() {
         let mgr = Arc::new(ResourceGroupManager::new(Config::default()));
-        mgr.mark_noisy_table(7);
+        mgr.mark_noisy_table_for_test(7);
 
         let (tx, rx) = std::sync::mpsc::channel();
         let mgr2 = mgr.clone();
@@ -2975,6 +2998,36 @@ pub(crate) mod tests {
             !mgr.is_noisy_table(7),
             "the clear ran after the publish, so nothing is left demoted"
         );
+        assert!(mgr.noisy_tables_pending.read().is_empty());
+    }
+
+    /// A proposal that saw its group blamed, then paused while the episode
+    /// ended, must not mark its table into a clean pending set.
+    #[test]
+    fn test_mark_after_the_episode_cleared_is_dropped() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config::default()));
+        mgr.set_noisy_groups_for_test(HashSet::from(["a".to_string()]));
+        assert!(mgr.is_noisy_group("a"), "the caller's check passes");
+
+        let mgr2 = mgr.clone();
+        fail::cfg_callback("noisy_tables_mark_before_insert", move || {
+            mgr2.clear_noisy_groups();
+        })
+        .unwrap();
+        mgr.mark_noisy_table("a", 7);
+        fail::remove("noisy_tables_mark_before_insert");
+
+        assert!(mgr.noisy_tables_pending.read().is_empty());
+        mgr.publish_noisy_tables();
+        assert!(!mgr.is_noisy_table(7));
+
+        // Marked while blamed, the table is pending once and, once published,
+        // is not re-marked.
+        mgr.set_noisy_groups_for_test(HashSet::from(["a".to_string()]));
+        mgr.mark_noisy_table("a", 7);
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+        mgr.mark_noisy_table("a", 7);
         assert!(mgr.noisy_tables_pending.read().is_empty());
     }
 

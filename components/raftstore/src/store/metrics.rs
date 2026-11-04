@@ -62,6 +62,19 @@ make_auto_flush_static_metric! {
         low,
     }
 
+    pub label_enum NoisyMarkReason {
+        no_manager,
+        no_group,
+        not_blamed,
+        no_table,
+        key_not_in_region,
+        marked,
+    }
+
+    pub struct NoisyMarkVec: LocalIntCounter {
+        "reason" => NoisyMarkReason,
+    }
+
     pub struct StorePoolMsgsVec: LocalIntCounter {
         "pool" => StorePoolType,
     }
@@ -405,19 +418,9 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
-    // Resolved once: every proposal hits one.
-    pub static ref NOISY_MARK_NO_MANAGER: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_manager"]);
-    pub static ref NOISY_MARK_NO_GROUP: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_group"]);
-    pub static ref NOISY_MARK_NOT_BLAMED: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["not_blamed"]);
-    pub static ref NOISY_MARK_NO_TABLE: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["no_table"]);
-    pub static ref NOISY_MARK_KEY_NOT_IN_REGION: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["key_not_in_region"]);
-    pub static ref NOISY_MARK_MARKED: IntCounter =
-        NOISY_TABLE_MARKS_VEC.with_label_values(&["marked"]);
+    // Thread-local: every proposal hits one, so a shared atomic would be
+    // contended across pollers.
+    pub static ref NOISY_MARK: NoisyMarkVec = auto_flush_from!(NOISY_TABLE_MARKS_VEC, NoisyMarkVec);
 
     pub static ref STORE_POOL_MSGS_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_store_pool_msgs_total",

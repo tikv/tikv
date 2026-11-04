@@ -610,17 +610,17 @@ pub fn mark_noisy_table_if_blamed(
     req: &RaftCmdRequest,
 ) {
     let Some(manager) = manager else {
-        NOISY_MARK_NO_MANAGER.inc();
+        NOISY_MARK.no_manager.inc();
         return;
     };
     let group = req.get_header().get_resource_group_name();
     // Cheapest check first. Every exit is counted.
     if group.is_empty() {
-        NOISY_MARK_NO_GROUP.inc();
+        NOISY_MARK.no_group.inc();
         return;
     }
     if !manager.is_noisy_group(group) {
-        NOISY_MARK_NOT_BLAMED.inc();
+        NOISY_MARK.not_blamed.inc();
         return;
     }
     let mut last = None;
@@ -630,12 +630,12 @@ pub fn mark_noisy_table_if_blamed(
         // Apply rejects a key outside the region, but only after this ran, so
         // a bad request must not leave a mark on another region's table.
         if util::check_key_in_region(key, region).is_err() {
-            NOISY_MARK_KEY_NOT_IN_REGION.inc();
+            NOISY_MARK.key_not_in_region.inc();
             continue;
         }
         if let Some(table) = util::encoded_key_table_id(key) {
             if last != Some(table) {
-                manager.mark_noisy_table(table);
+                manager.mark_noisy_table(group, table);
                 last = Some(table);
             }
         }
@@ -645,12 +645,12 @@ pub fn mark_noisy_table_if_blamed(
             .filter(|(first, last)| first == last)
             .map(|(table, _)| table);
         if let Some(table) = last {
-            manager.mark_noisy_table(table);
+            manager.mark_noisy_table(group, table);
         }
     }
     match last {
-        Some(_) => NOISY_MARK_MARKED.inc(),
-        None => NOISY_MARK_NO_TABLE.inc(),
+        Some(_) => NOISY_MARK.marked.inc(),
+        None => NOISY_MARK.no_table.inc(),
     }
 }
 
