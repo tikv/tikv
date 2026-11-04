@@ -43,7 +43,67 @@ const DEFAULT_SNAP_WAIT_SPLIT_DURATION: ReadableDuration =
     ReadableDuration::secs(RAFTSTORE_V2_SPLIT_SIZE.0 / DEFAULT_SNAP_MAX_BYTES_PER_SEC / 3);
 
 with_prefix!(prefix_apply "apply-");
-with_prefix!(prefix_store "store-");
+with_prefix!(prefix_store_keys "store-");
+
+/// Reads the `store-` batch-system keys. The store and apply sections share
+/// `BatchSystemConfig`, whose serde default gives one low-priority poller, but
+/// the store pool must stay at zero unless asked for, so a missing
+/// `store-low-priority-pool-size` is filled in here instead.
+mod prefix_store {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use tikv_util::config::ReadableDuration;
+
+    use super::{BatchSystemConfig, prefix_store_keys};
+
+    // Every field of `BatchSystemConfig`, so a new one fails to compile here
+    // rather than being dropped on the store section.
+    #[derive(Deserialize)]
+    #[serde(default, rename_all = "kebab-case")]
+    struct StoreSection {
+        max_batch_size: Option<usize>,
+        pool_size: usize,
+        reschedule_duration: ReadableDuration,
+        low_priority_pool_size: usize,
+    }
+
+    impl Default for StoreSection {
+        fn default() -> Self {
+            let BatchSystemConfig {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: _,
+            } = BatchSystemConfig::default();
+            StoreSection {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: 0,
+            }
+        }
+    }
+
+    // Generic: the `OnlineConfig` derive serializes its own encoder type
+    // through this module too.
+    pub fn serialize<T: Serialize, S: Serializer>(cfg: &T, s: S) -> Result<S::Ok, S::Error> {
+        prefix_store_keys::serialize(cfg, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BatchSystemConfig, D::Error> {
+        let StoreSection {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        } = prefix_store_keys::deserialize(d)?;
+        Ok(BatchSystemConfig {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -626,7 +686,8 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             // Unlike the apply pool, the store low pool only exists when asked
-            // for: it is only used by `enable_noisy_tenant_demotion`.
+            // for: it is only used by `enable_noisy_tenant_demotion`. The
+            // `prefix_store` serde module keeps a config file in step.
             store_batch_system: BatchSystemConfig {
                 low_priority_pool_size: 0,
                 ..BatchSystemConfig::default()
@@ -1729,9 +1790,15 @@ mod tests {
             .unwrap_err();
 
         // By default the store low pool has no threads; apply keeps the
-        // shared default.
+        // shared default. The same holds for a file that leaves them out.
         cfg = Config::new();
         assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
+        let from_file: Config = toml::from_str("").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 0);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
+        let from_file: Config = toml::from_str("store-low-priority-pool-size = 2").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 2);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
         assert_eq!(
             cfg.apply_batch_system.low_priority_pool_size, 1,
             "the apply pool keeps the shared default"
