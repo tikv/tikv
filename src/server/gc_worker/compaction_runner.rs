@@ -452,7 +452,9 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
 /// properties or holds only tombstones, or the default-CF size is unavailable,
 /// so its bytes can't be estimated. Only then does an admitted candidate with
 /// no measured bytes fall back to a version-count score; otherwise it gets
-/// `UNMEASURED_RECLAIMABLE_SCORE`.
+/// `UNMEASURED_RECLAIMABLE_SCORE`. A positive estimate is used even when it
+/// misses some SSTs: it is a lower bound in the same units as other Regions,
+/// while the version count is SST-wide and would outrank them.
 fn calculate_compaction_score(
     num_tombstones: u64,
     num_discardable: u64,
@@ -1264,6 +1266,11 @@ mod tests {
         assert_eq!(
             calculate_compaction_score(0, 30, 100, 0, true, 0, &config),
             9.0
+        );
+        // A positive estimate that misses some SSTs still ranks by bytes.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 2 * 1024 * 1024, true, 0, &config),
+            2.0
         );
 
         // Same with the compaction filter disabled, where 40 of 100 tombstones pass
