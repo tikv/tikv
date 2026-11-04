@@ -83,7 +83,7 @@ pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
 
-    /// Concurrency limiter shared by ordinary coprocessor requests.
+    /// Whole-request concurrency limiter for the legacy Yatp read pool.
     shared_semaphore: Option<Arc<Semaphore>>,
     /// Dedicated limiter for requests that intentionally use the background
     /// quota limiter.
@@ -137,8 +137,9 @@ impl<Snap> ParseCopRequestResult<Snap> {
 }
 
 /// Maps a request type to its heavy-task admission lane before the payload is
-/// decoded. Analyze requests (every variant) are throttled by the
-/// background-limited semaphore; all other types contend on the shared one.
+/// decoded. Analyze requests (every variant) use the background-limited policy;
+/// all other types use the shared policy. The pool mode and configuration
+/// decide whether each lane has a semaphore.
 /// Request parsing and the batch-merge finalizer's parse-failure fallback must
 /// agree on this mapping.
 fn semaphore_group_for_req_tp(tp: i64) -> SemaphoreGroup {
@@ -159,16 +160,19 @@ impl<E: Engine> Endpoint<E> {
     ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
         match read_pool {
             ReadPoolHandle::Yatp { .. } => {
-                // Keep the legacy shared behavior unless the operator explicitly
-                // enables a positive background-limited Analyze cap.
-                let shared = Arc::new(Semaphore::new(max_concurrency));
+                // A whole-request permit held across yields would prevent the
+                // fair queue from scheduling other groups. It already controls
+                // CPU concurrency; only legacy pools need the shared semaphore.
+                let shared = (!read_pool.uses_group_fair_queue())
+                    .then(|| Arc::new(Semaphore::new(max_concurrency)));
+                // Preserve an explicitly configured Analyze limit in both modes.
                 let background = match max_bg_concurrency {
                     Some(max_bg_concurrency) if max_bg_concurrency > 0 => {
-                        Arc::new(Semaphore::new(max_bg_concurrency))
+                        Some(Arc::new(Semaphore::new(max_bg_concurrency)))
                     }
                     _ => shared.clone(),
                 };
-                (Some(shared), Some(background))
+                (shared, background)
             }
             _ => (None, None),
         }
@@ -1914,12 +1918,19 @@ mod tests {
     }
 
     fn build_yatp_copr(config: Config) -> (Endpoint<RocksEngine>, ReadPool) {
+        build_yatp_copr_with_resource_control(config, None)
+    }
+
+    fn build_yatp_copr_with_resource_control(
+        config: Config,
+        resource_ctl: Option<Arc<ResourceGroupManager>>,
+    ) -> (Endpoint<RocksEngine>, ReadPool) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_yatp_read_pool(
             &UnifiedReadPoolConfig::default(),
             DummyReporter,
             engine,
-            None,
+            resource_ctl.clone(),
             CleanupMethod::InPlace,
             false,
         );
@@ -1930,7 +1941,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
-            None,
+            resource_ctl,
         );
         (endpoint, read_pool)
     }
@@ -2493,6 +2504,157 @@ mod tests {
                 copr.background_limited_semaphore.as_ref().unwrap(),
             ));
         }
+    }
+
+    #[test]
+    fn test_fair_pool_request_and_finalizer_semaphores() {
+        for background_limit in [None, Some(0), Some(3)] {
+            let config = Config {
+                end_point_max_concurrency: 1,
+                end_point_max_bg_concurrency: background_limit,
+                ..Default::default()
+            };
+            let (copr, _read_pool) = build_yatp_copr_with_resource_control(
+                config,
+                Some(Arc::new(ResourceGroupManager::default())),
+            );
+            assert!(copr.read_pool.uses_group_fair_queue());
+            for group in [SemaphoreGroup::Shared, SemaphoreGroup::BackgroundLimited] {
+                let semaphore = copr.request_semaphore(group);
+                let finalizer =
+                    copr.build_batch_merge_finalizer(kvrpcpb::Context::default(), 0, group);
+                if group == SemaphoreGroup::BackgroundLimited && background_limit == Some(3) {
+                    let semaphore = semaphore.unwrap();
+                    assert_eq!(semaphore.available_permits(), 3);
+                    assert!(Arc::ptr_eq(
+                        &semaphore,
+                        finalizer.semaphore.as_ref().unwrap()
+                    ));
+                } else {
+                    assert!(semaphore.is_none());
+                    assert!(finalizer.semaphore.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_fair_pool_request_and_merge_progress_while_heavy_request_waits() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        struct WaitingHeavyFixture {
+            started: Option<oneshot::Sender<()>>,
+            release: oneshot::Receiver<()>,
+        }
+
+        #[async_trait]
+        impl RequestHandler for WaitingHeavyFixture {
+            async fn handle_request(&mut self) -> Result<HandlerOutput> {
+                let output = HeavyYieldingUnaryFixture::new(
+                    Ok(coppb::Response::default()),
+                    1,
+                    LIGHT_TASK_THRESHOLD + Duration::from_millis(1),
+                )
+                .handle_request()
+                .await?;
+                // After the heavy poll and yield, a legacy request would hold
+                // its whole-request permit until `release` completes.
+                let _ = self.started.take().unwrap().send(());
+                let _ = (&mut self.release).await;
+                Ok(output)
+            }
+        }
+
+        let manager = Arc::new(ResourceGroupManager::default());
+        for name in ["busy", "other"] {
+            let mut group = ResourceGroup::new();
+            group.set_name(name.to_owned());
+            group.set_mode(GroupMode::RuMode);
+            group.set_priority(8);
+            let mut ru_setting = GroupRequestUnitSettings::new();
+            ru_setting.mut_r_u().mut_settings().set_fill_rate(1000);
+            group.set_r_u_settings(ru_setting);
+            manager.add_resource_group(group);
+        }
+        let (copr, _read_pool) = build_yatp_copr_with_resource_control(
+            Config {
+                end_point_max_concurrency: 1,
+                ..Default::default()
+            },
+            Some(manager),
+        );
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let mut long_request =
+            ParseCopRequestResult::default_for_test(Box::new(move |_, _: &_| {
+                Ok(WaitingHeavyFixture {
+                    started: Some(started_tx),
+                    release: release_rx,
+                }
+                .into_boxed())
+            }));
+        let mut long_context = ReqContextInner::default_for_test();
+        long_context
+            .context
+            .mut_resource_control_context()
+            .set_resource_group_name("busy".to_owned());
+        long_request.req_ctx = long_context.into();
+        let mut short_request = ParseCopRequestResult::default_for_test(Box::new(|_, _: &_| {
+            let mut response = coppb::Response::default();
+            response.set_data(vec![1]);
+            Ok(HeavyYieldingUnaryFixture::new(
+                Ok(response),
+                1,
+                LIGHT_TASK_THRESHOLD + Duration::from_millis(1),
+            )
+            .into_boxed())
+        }));
+        let mut short_context = ReqContextInner::default_for_test();
+        short_context
+            .context
+            .mut_resource_control_context()
+            .set_resource_group_name("other".to_owned());
+        short_request.req_ctx = short_context.into();
+        let context = short_request.req_ctx.context.clone();
+        let competing_copr = copr.clone();
+
+        let (long_response, merged_response) = block_on(async {
+            let competing_request = async {
+                let response = async_timeout(
+                    async move {
+                        started_rx.await.unwrap();
+                        let output = competing_copr
+                            .schedule_unary_request(
+                                short_request,
+                                UnaryOutputMode::PreserveMergeable,
+                                true,
+                            )
+                            .await
+                            .unwrap();
+                        let batch_output = BatchTaskOutput {
+                            response: coppb::StoreBatchTaskResponse::default().into(),
+                            mergeable_result: Some(Box::new(ConcatMergeable::new(vec![2]))),
+                        };
+                        competing_copr
+                            .build_batch_merge_finalizer(context, 0, SemaphoreGroup::Shared)
+                            .finalize(output, vec![batch_output], ::tracker::INVALID_TRACKER_TOKEN)
+                            .await
+                    },
+                    Duration::from_secs(5),
+                )
+                .await;
+                // Also release on timeout so a regression cannot strand the
+                // long request or hang pool shutdown.
+                let _ = release_tx.send(());
+                response
+            };
+            futures::future::join(copr.handle_unary_request(long_request), competing_request).await
+        });
+        assert!(long_response.unwrap().get_other_error().is_empty());
+        let response = merged_response.expect("another RG and its merge must make progress");
+        assert!(response.get_other_error().is_empty());
+        assert_eq!(response.get_data(), &[1]);
+        assert_eq!(response.get_batch_responses()[0].get_data(), &[2]);
     }
 
     #[test]

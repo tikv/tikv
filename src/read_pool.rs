@@ -571,10 +571,8 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
-    /// Whole-pool FIFO wait cannot estimate a request's wait in a weighted
-    /// group queue with MLFQ. Keep the capacity/CPU gates, but do not redirect
-    /// one group's reads based on another group's backlog.
-    fn uses_group_fair_queue(&self) -> bool {
+    /// Whether this pool schedules through the resource-group fair queue.
+    pub(crate) fn uses_group_fair_queue(&self) -> bool {
         matches!(
             self,
             Self::Yatp {
@@ -593,7 +591,9 @@ impl ReadPoolHandle {
         if busy_threshold.is_zero() {
             return Ok(());
         }
-        // The advisory estimate is valid only for the legacy pool.
+        // Whole-pool FIFO wait cannot estimate a request's wait in a weighted
+        // group queue with MLFQ. Keep the capacity/CPU gates, but do not redirect
+        // one group's reads based on another group's backlog.
         if self.uses_group_fair_queue() {
             let group = std::str::from_utf8(resource_group).unwrap_or_default();
             UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED

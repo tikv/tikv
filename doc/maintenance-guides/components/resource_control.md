@@ -146,7 +146,8 @@ Identity and update rules:
   new identity. In-flight work retains its original handle for settlement;
   the queue redirects retired queued work to default.
 - Default remains available. Deleting its customized definition restores its
-  default policy without retiring its identity.
+  default policy without retiring its identity. The queue caches this handle
+  and registers its scheduling group before workers start.
 - Normal finite weights equal read quota (RU fill rate in RU mode, CPU fill
   rate in raw mode). Zero quota and default's unlimited sentinel use
   `min(10 * max(10000, largest normal quota), MAX_RU_QUOTA)` instead.
@@ -201,6 +202,15 @@ per-task mutex. Cancel uses `try_lock`, never waits for a running poll, and
 drops extracted futures outside locks to break IO-waker retention cycles.
 Do not replace this with a strong Record-to-future ownership cycle or run
 future destructors under the scheduler lock.
+
+YATP may call `FairQueue::pop` inside `park.validate` while holding a
+`parking_lot` bucket lock. Releasing the scheduler lock does not release that
+outer lock. `pop` must not invoke the provider, task-history helpers, cancellation,
+or task/waker destructors. Retired queued entries move directly to the cached
+default group's lane, retaining their Record, original live-capacity ownership,
+MLFQ level/history, and schedule time. They rejoin priority/VT selection before
+dispatch. A canceled entry is cleaned up by its cancellation owner or runner
+outside the parking callback.
 
 Implementation and validation details are in
 [`resource-control-read-pool.md`](../../design/resource-control-read-pool.md).

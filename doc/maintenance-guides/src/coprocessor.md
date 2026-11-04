@@ -60,7 +60,9 @@ It is a read-heavy hot path and directly impacts query latency.
   non-mergeable tasks keep normal per-task responses.
 - Final merging and serialization run in the read pool under the request's
   selected semaphore group and tracker, but without an execution deadline or
-  background-limiter admission. Fair-pool live-task limits and the global CPU
+  background-limiter admission. Semaphore selection matches execution: fair
+  pools bypass the legacy shared semaphore, while an explicitly configured
+  Analyze semaphore still applies. Fair-pool live-task limits and the global CPU
   gate still apply. Completed work is not discarded merely because the
   execution budget expires while waiting for the pool, acquiring a permit,
   merging, or serializing. Every result was already admitted and charged when
@@ -105,18 +107,20 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
   `src/server/service/kv.rs` as the RPC entry path.
-- On the Yatp path, unary and streaming heavy tasks are admitted through
-  semaphores created in `Endpoint::new`: a shared semaphore for ordinary
-  coprocessor work and a dedicated semaphore for Analyze requests that are
-  intentionally throttled by the background quota limiter.
-- The shared semaphore is controlled by
-  `server.end-point-max-concurrency`. The dedicated background-limited
-  semaphore is enabled only when
+- `Endpoint::new` selects semaphores from the actual read-pool mode. Legacy
+  Yatp pools use a shared semaphore controlled by
+  `server.end-point-max-concurrency`. Resource-group fair pools omit it:
+  whole-request permits held across yields would prevent other groups from
+  reaching the fair scheduler. Fair-pool CPU and live-task limits still apply.
+- In both Yatp modes, the dedicated background-limited Analyze semaphore is
+  enabled only when
   `server.end-point-max-bg-concurrency` is explicitly set to a positive value;
   its capacity is then controlled by that value.
-- When the dedicated setting is absent or `0`, Analyze and ordinary Cop
-  requests share the legacy semaphore. When it is positive, the two semaphores
-  are independent and both lanes can make progress concurrently.
+- When the dedicated setting is absent or `0`, Analyze follows the ordinary
+  request policy: shared semaphore in legacy pools, no semaphore in fair pools.
+  A positive setting is independent of the ordinary request policy. Unary,
+  streaming, and batch finalization all use the same selection. FuturePools
+  retain their existing behavior without these semaphores.
 - The dedicated cap does not automatically track unified read-pool worker
   autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
@@ -257,13 +261,13 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Request parsing and admission must stay aligned: when the dedicated setting
   is enabled, a request class that reports quota samples to the background
   quota limiter should use the dedicated background-limited semaphore instead
-  of bypassing heavy-task admission. With the setting disabled, it intentionally
-  shares the ordinary semaphore.
+  of bypassing heavy-task admission. With the setting disabled, it follows the
+  ordinary request policy for the pool mode.
 - When enabled, the dedicated background-limited semaphore protects all
   Analyze variants, including index, common-handle, column, mixed, and
   full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
-  shared heavy-task budget; when disabled, these requests intentionally use the
-  shared semaphore.
+  shared heavy-task budget; when disabled, these requests use the shared
+  semaphore only in legacy Yatp pools.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 - Batched unary result merging must preserve task identity, retry semantics,
@@ -305,7 +309,8 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   distinguish ordinary Cop request pressure from Analyze background-limited
   throttling. Dashboard queries should preserve this label when diagnosing an
   individual lane and aggregate it only when displaying total semaphore
-  pressure.
+  pressure. Fair-pool requests that bypass the semaphore do not contribute to
+  these metrics; explicitly capped Analyze requests still do.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
@@ -394,8 +399,8 @@ Companion docs:
   runtime request context shared through execution; immutable once the request
   is scheduled (a serial batch overrides its deadline before that)
 - Light task threshold:
-  the execution-time budget before a coprocessor future must acquire a
-  semaphore permit in the Yatp path
+  the execution-time budget before a unary coprocessor future must acquire a
+  permit, when its selected pool/request policy enables a semaphore
 - Snapshot wait:
   request time spent between scheduling and obtaining the storage snapshot
 

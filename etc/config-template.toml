@@ -359,7 +359,9 @@
 # end-point-memory-quota = "0B"
 
 ## Maximum number of concurrently running background-limited Analyze tasks.
-## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
+## A positive limit applies to both legacy and resource-group fair Yatp pools.
+## Leave unset (or set to 0) to use the ordinary request policy: a shared
+## semaphore in legacy pools, or no semaphore in resource-group fair pools.
 # end-point-max-bg-concurrency = 0
 
 ## Max bytes that snapshot can interact with disk in one second. It should be
