@@ -22,6 +22,7 @@ mod test_in_memory_engine;
 mod test_kv_service;
 mod test_life;
 mod test_local_read;
+mod test_lock_wait_queue;
 mod test_memory_usage_limit;
 mod test_merge;
 mod test_metrics_overflow;
