@@ -36,7 +36,7 @@ use super::{
 // TODO: The value is chosen according to some very subjective experience, which
 // is not tuned carefully. We need to benchmark to find a best value. Also we
 // may consider accepting this value from TiDB side.
-const BATCH_INITIAL_SIZE: usize = 32;
+const BATCH_INITIAL_SIZE: usize = 128;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own
 // benchmarks.
