@@ -118,6 +118,8 @@ pub enum Task {
         cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
         start_waiting_time: Instant,
+        // Whether this wait registered a detector edge (false => Detect was/will be sent).
+        is_first_lock: bool,
     },
     RemoveLockWait {
         token: LockWaitToken,
@@ -158,12 +160,17 @@ impl Display for Task {
                 token,
                 start_ts,
                 wait_info,
+                is_first_lock,
                 ..
             } => {
                 write!(
                     f,
-                    "txn:{} waiting for {}:{}, token {:?}",
-                    start_ts, wait_info.lock_digest.ts, wait_info.lock_digest.hash, token
+                    "txn:{} waiting for {}:{}, token {:?}, first_lock {}",
+                    start_ts,
+                    wait_info.lock_digest.ts,
+                    wait_info.lock_digest.hash,
+                    token,
+                    is_first_lock
                 )
             }
             Task::RemoveLockWait { token } => {
@@ -204,6 +211,10 @@ pub(crate) struct Waiter {
     delay: Delay,
     start_waiting_time: Instant,
     last_updated_time: Option<Instant>,
+    /// The wait-for edge last sent to DetectTable (or queued to send).
+    /// `None` if this waiter never registered (first lock) or the edge was
+    /// already cleaned up after an owner change.
+    registered_edge: Option<KeyLockWaitInfo>,
 }
 
 impl Waiter {
@@ -217,7 +228,13 @@ impl Waiter {
         deadline: Instant,
         diag_ctx: DiagnosticContext,
         start_waiting_time: Instant,
+        is_first_lock: bool,
     ) -> Self {
+        let registered_edge = if is_first_lock {
+            None
+        } else {
+            Some(wait_info.clone())
+        };
         Self {
             start_ts,
             wait_info,
@@ -226,6 +243,7 @@ impl Waiter {
             diag_ctx,
             start_waiting_time,
             last_updated_time: None,
+            registered_edge,
         }
     }
 
@@ -347,6 +365,10 @@ impl WaitTable {
         Some(waiter)
     }
 
+    fn take_registered_edge(&mut self, token: LockWaitToken) -> Option<KeyLockWaitInfo> {
+        self.waiter_pool.get_mut(&token)?.registered_edge.take()
+    }
+
     fn update_waiter(
         &mut self,
         update_event: &UpdateWaitForEvent,
@@ -426,6 +448,7 @@ impl Scheduler {
         timeout: WaitTimeout,
         cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
+        is_first_lock: bool,
     ) {
         self.notify_scheduler(Task::WaitFor {
             token,
@@ -438,6 +461,7 @@ impl Scheduler {
             cancel_callback,
             diag_ctx,
             start_waiting_time: Instant::now(),
+            is_first_lock,
         });
     }
 
@@ -520,8 +544,11 @@ impl WaiterManager {
             let mut wait_table = wait_table.borrow_mut();
             if let Some(waiter) = wait_table.take_waiter(token) {
                 let start_ts = waiter.start_ts;
-                let wait_info = waiter.cancel_for_timeout();
-                detector_scheduler.clean_up_wait_for(start_ts, wait_info);
+                let edge = waiter.registered_edge.clone();
+                let _wait_info = waiter.cancel_for_timeout();
+                if let Some(edge) = edge {
+                    detector_scheduler.clean_up_wait_for(start_ts, edge);
+                }
             }
         });
         self.wait_table.borrow_mut().add_waiter(token, waiter);
@@ -539,9 +566,11 @@ impl WaiterManager {
             return;
         };
         let start_ts = waiter.start_ts;
-        let wait_info = waiter.cancel_for_finished();
-        self.detector_scheduler
-            .clean_up_wait_for(start_ts, wait_info);
+        let edge = waiter.registered_edge.clone();
+        let _wait_info = waiter.cancel_for_finished();
+        if let Some(edge) = edge {
+            self.detector_scheduler.clean_up_wait_for(start_ts, edge);
+        }
     }
 
     fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
@@ -554,12 +583,17 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+            if let Some((previous_wait_info, _diag_ctx)) = previous_wait_info {
                 if previous_wait_info.allow_lock_with_conflict {
-                    self.detector_scheduler
-                        .clean_up_wait_for(event.start_ts, previous_wait_info);
-                    self.detector_scheduler
-                        .detect(event.start_ts, event.wait_info, diag_ctx);
+                    // First owner change: clean up the registered edge and do
+                    // not Detect the new owner. Later changes are no-ops.
+                    // A cycle that needs the new edge is invisible until this
+                    // wait ends (capped by wait-for-lock-timeout) and retries.
+                    if let Some(edge) = wait_table.take_registered_edge(event.token) {
+                        self.detector_scheduler
+                            .clean_up_wait_for(event.start_ts, edge);
+                        TASK_COUNTER_METRICS.drop_registered_edge.inc();
+                    }
                 }
             }
         }
@@ -582,6 +616,17 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
+<<<<<<< HEAD
+=======
+            if waiter.wait_info.lock_info.is_shared_lock() {
+                // When deadlock detected on a shared lock, some wait-for entries might have
+                // been registered to the detect table. So do clean up here to avoid those
+                // entries causing false-positive deadlock errors.
+                if let Some(edge) = waiter.registered_edge.clone() {
+                    self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
+                }
+            }
+>>>>>>> 1ef0a1961c (lock_manager: skip detect on fair waiter owner change (#20002))
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
     }
@@ -611,6 +656,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 cancel_callback,
                 diag_ctx,
                 start_waiting_time,
+                is_first_lock,
             } => {
                 let waiter = Waiter::new(
                     region_id,
@@ -622,6 +668,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     self.normalize_deadline(timeout),
                     diag_ctx,
                     start_waiting_time,
+                    is_first_lock,
                 );
                 self.handle_wait_for(token, waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -659,7 +706,11 @@ impl FutureRunnable<Task> for WaiterManager {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{sync::mpsc, thread::sleep, time::Duration};
+    use std::{
+        sync::{Mutex, mpsc},
+        thread::sleep,
+        time::Duration,
+    };
 
     use futures::{executor::block_on, future::FutureExt};
     use kvproto::kvrpcpb::LockInfo;
@@ -687,6 +738,7 @@ pub mod tests {
             delay: Delay::new(Instant::now()),
             start_waiting_time: Instant::now(),
             last_updated_time: None,
+            registered_edge: None,
         }
     }
 
@@ -807,6 +859,7 @@ pub mod tests {
             Instant::now() + Duration::from_millis(3000),
             DiagnosticContext::default(),
             Instant::now(),
+            false,
         );
         (waiter, info, f)
     }
@@ -1077,6 +1130,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
             waiter.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap(), lock_info),
@@ -1096,6 +1150,7 @@ pub mod tests {
             WaitTimeout::Millis(100),
             waiter.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap(), lock_info),
@@ -1115,6 +1170,7 @@ pub mod tests {
             WaitTimeout::Millis(3000),
             waiter.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap(), lock_info),
@@ -1146,6 +1202,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
             waiter.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
         scheduler.deadlock(waiter_ts, b"foo".to_vec(), lock, 30, vec![]);
         assert_elapsed(
@@ -1180,6 +1237,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
             waiter1.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
         scheduler.wait_for(
             LockWaitToken(Some(2)),
@@ -1191,6 +1249,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
             waiter2.cancel_callback,
             DiagnosticContext::default(),
+            false,
         );
 
         // then update waiter
@@ -1225,5 +1284,322 @@ pub mod tests {
         );
 
         worker.stop().unwrap();
+    }
+
+    /// Counts Detect / CleanUpWaitFor tasks scheduled to the deadlock detector.
+    /// Used to reproduce tikv#19846 (unbounded 2N fan-out per owner change)
+    /// and to check that owner-change updates no longer grow with waiter count.
+    struct CountingDetector {
+        detect: Arc<AtomicUsize>,
+        cleanup_wait_for: Arc<AtomicUsize>,
+        detect_lock_ts: Arc<Mutex<Vec<u64>>>,
+        cleanup_lock_ts: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl FutureRunnable<crate::server::lock_manager::deadlock::Task> for CountingDetector {
+        fn run(&mut self, task: crate::server::lock_manager::deadlock::Task) {
+            use crate::server::lock_manager::deadlock::{DetectType, Task as DetectorTask};
+            if let DetectorTask::Detect { tp, wait_info, .. } = task {
+                let ts = wait_info
+                    .as_ref()
+                    .map(|w| w.lock_digest.ts.into_inner())
+                    .unwrap_or(0);
+                match tp {
+                    DetectType::Detect => {
+                        self.detect.fetch_add(1, Ordering::SeqCst);
+                        self.detect_lock_ts.lock().unwrap().push(ts);
+                    }
+                    DetectType::CleanUpWaitFor => {
+                        self.cleanup_wait_for.fetch_add(1, Ordering::SeqCst);
+                        self.cleanup_lock_ts.lock().unwrap().push(ts);
+                    }
+                    DetectType::CleanUp => {}
+                }
+            }
+        }
+    }
+
+    struct DetectorCounters {
+        detect: Arc<AtomicUsize>,
+        cleanup_wait_for: Arc<AtomicUsize>,
+        #[allow(dead_code)]
+        detect_lock_ts: Arc<Mutex<Vec<u64>>>,
+        cleanup_lock_ts: Arc<Mutex<Vec<u64>>>,
+        detect_worker: FutureWorker<crate::server::lock_manager::deadlock::Task>,
+    }
+
+    fn start_waiter_manager_counting(
+        wait_for_lock_timeout: u64,
+    ) -> (FutureWorker<Task>, Scheduler, DetectorCounters) {
+        let detect = Arc::new(AtomicUsize::new(0));
+        let cleanup_wait_for = Arc::new(AtomicUsize::new(0));
+        let detect_lock_ts = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_lock_ts = Arc::new(Mutex::new(Vec::new()));
+        let mut detect_worker = FutureWorker::new("counting-deadlock");
+        let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
+        detect_worker
+            .start(CountingDetector {
+                detect: detect.clone(),
+                cleanup_wait_for: cleanup_wait_for.clone(),
+                detect_lock_ts: detect_lock_ts.clone(),
+                cleanup_lock_ts: cleanup_lock_ts.clone(),
+            })
+            .unwrap();
+
+        let cfg = Config {
+            wait_for_lock_timeout: ReadableDuration::millis(wait_for_lock_timeout),
+            ..Default::default()
+        };
+        let mut waiter_mgr_worker = FutureWorker::new("test-waiter-manager");
+        let waiter_mgr_runner =
+            WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);
+        let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
+        waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
+        (
+            waiter_mgr_worker,
+            waiter_mgr_scheduler,
+            DetectorCounters {
+                detect,
+                cleanup_wait_for,
+                detect_lock_ts,
+                cleanup_lock_ts,
+                detect_worker,
+            },
+        )
+    }
+
+    fn wait_for_counts(counters: &DetectorCounters, expect_detect: usize, expect_cleanup: usize) {
+        for _ in 0..100 {
+            if counters.detect.load(Ordering::SeqCst) == expect_detect
+                && counters.cleanup_wait_for.load(Ordering::SeqCst) == expect_cleanup
+            {
+                return;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "timeout waiting for detect={}, cleanup={}; got detect={}, cleanup={}",
+            expect_detect,
+            expect_cleanup,
+            counters.detect.load(Ordering::SeqCst),
+            counters.cleanup_wait_for.load(Ordering::SeqCst)
+        );
+    }
+
+    fn flush_waiter_mgr(scheduler: &Scheduler) {
+        let (tx, rx) = mpsc::channel();
+        scheduler.validate(Box::new(move |_| {
+            tx.send(()).unwrap();
+        }));
+        rx.recv().unwrap();
+    }
+
+    fn new_fair_test_waiter(waiter_ts: TimeStamp, lock_ts: TimeStamp, key: &[u8]) -> WaiterCtx {
+        let (mut waiter, info, f) = new_test_waiter_with_key(waiter_ts, lock_ts, key);
+        waiter.wait_info.allow_lock_with_conflict = true;
+        (waiter, info, f)
+    }
+
+    fn owner_update_event(
+        token: u64,
+        start_ts: TimeStamp,
+        key: &Key,
+        new_lock_ts: TimeStamp,
+        fair: bool,
+        is_first_lock: bool,
+    ) -> UpdateWaitForEvent {
+        let raw = key.to_raw().unwrap();
+        UpdateWaitForEvent {
+            token: LockWaitToken(Some(token)),
+            start_ts,
+            is_first_lock,
+            wait_info: KeyLockWaitInfo {
+                key: key.clone(),
+                lock_digest: LockDigest {
+                    ts: new_lock_ts,
+                    hash: key.gen_hash(),
+                },
+                lock_info: LockInfo {
+                    key: raw,
+                    lock_version: new_lock_ts.into_inner(),
+                    ..Default::default()
+                },
+                allow_lock_with_conflict: fair,
+            },
+        }
+    }
+
+    /// N fair waiters × many owner changes produces N Cleanups of the
+    /// original edge and zero Detects from update_wait_for. Message count
+    /// does not grow with owner-change count (tikv#19846).
+    #[test]
+    fn test_fair_waiter_detector_rpc_bounded_across_owner_changes() {
+        let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
+        let raw_key = b"hot";
+        let key = Key::from_raw(raw_key);
+        let n = 20usize;
+        let initial_lock_ts = 100u64;
+        let owner_changes = 5usize;
+
+        for i in 0..n {
+            let waiter_ts = TimeStamp::new(1000 + i as u64);
+            let (waiter, ..) = new_fair_test_waiter(waiter_ts, initial_lock_ts.into(), raw_key);
+            scheduler.wait_for(
+                LockWaitToken(Some(i as u64 + 1)),
+                1,
+                RegionEpoch::default(),
+                1,
+                waiter.start_ts,
+                waiter.wait_info,
+                WaitTimeout::Millis(10_000),
+                waiter.cancel_callback,
+                DiagnosticContext::default(),
+                false,
+            );
+        }
+        flush_waiter_mgr(&scheduler);
+        // WaiterManager itself does not Detect on wait_for; LockManager does.
+        wait_for_counts(&counters, 0, 0);
+
+        for step in 1..=owner_changes {
+            let new_ts = TimeStamp::new(initial_lock_ts + step as u64);
+            let events: Vec<_> = (0..n)
+                .map(|i| {
+                    owner_update_event(
+                        i as u64 + 1,
+                        TimeStamp::new(1000 + i as u64),
+                        &key,
+                        new_ts,
+                        true,
+                        false,
+                    )
+                })
+                .collect();
+            scheduler.update_wait_for(events);
+            flush_waiter_mgr(&scheduler);
+            // First owner change: one Cleanup of the registered edge per waiter.
+            // Later changes: no more detector RPC.
+            wait_for_counts(&counters, 0, n);
+        }
+
+        assert_eq!(counters.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.cleanup_wait_for.load(Ordering::SeqCst), n);
+        let cleaned = counters.cleanup_lock_ts.lock().unwrap().clone();
+        assert_eq!(cleaned.len(), n);
+        assert!(
+            cleaned.iter().all(|ts| *ts == initial_lock_ts),
+            "cleanup must use the registered edge, got {:?}",
+            cleaned
+        );
+
+        // Edge already cleaned on the first owner change: leaving must not
+        // emit another Cleanup of the updated owner.
+        for i in 0..n {
+            scheduler.remove_lock_wait(LockWaitToken(Some(i as u64 + 1)));
+        }
+        flush_waiter_mgr(&scheduler);
+        wait_for_counts(&counters, 0, n);
+
+        worker.stop().unwrap();
+        counters.detect_worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_non_fair_waiter_skips_detector_on_owner_change() {
+        let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
+        let raw_key = b"hot";
+        let key = Key::from_raw(raw_key);
+        let (waiter, ..) = new_test_waiter_with_key(10.into(), 100.into(), raw_key);
+        scheduler.wait_for(
+            LockWaitToken(Some(1)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter.start_ts,
+            waiter.wait_info,
+            WaitTimeout::Millis(10_000),
+            waiter.cancel_callback,
+            DiagnosticContext::default(),
+            false,
+        );
+        flush_waiter_mgr(&scheduler);
+        scheduler.update_wait_for(vec![owner_update_event(
+            1,
+            10.into(),
+            &key,
+            200.into(),
+            false,
+            false,
+        )]);
+        flush_waiter_mgr(&scheduler);
+        wait_for_counts(&counters, 0, 0);
+        // Leave must Cleanup the registered owner (100), not the updated 200.
+        scheduler.remove_lock_wait(LockWaitToken(Some(1)));
+        flush_waiter_mgr(&scheduler);
+        wait_for_counts(&counters, 0, 1);
+        assert_eq!(counters.cleanup_lock_ts.lock().unwrap().as_slice(), &[100]);
+        worker.stop().unwrap();
+        counters.detect_worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_fair_waiter_cleanup_registered_edge_if_owner_never_changed() {
+        let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
+        let raw_key = b"hot";
+        let (waiter, ..) = new_fair_test_waiter(10.into(), 100.into(), raw_key);
+        scheduler.wait_for(
+            LockWaitToken(Some(1)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter.start_ts,
+            waiter.wait_info,
+            WaitTimeout::Millis(10_000),
+            waiter.cancel_callback,
+            DiagnosticContext::default(),
+            false,
+        );
+        flush_waiter_mgr(&scheduler);
+        scheduler.remove_lock_wait(LockWaitToken(Some(1)));
+        flush_waiter_mgr(&scheduler);
+        wait_for_counts(&counters, 0, 1);
+        assert_eq!(counters.cleanup_lock_ts.lock().unwrap().as_slice(), &[100]);
+        worker.stop().unwrap();
+        counters.detect_worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_first_lock_does_not_register_or_drop_edge() {
+        let (mut worker, scheduler, mut counters) = start_waiter_manager_counting(10_000);
+        let raw_key = b"hot";
+        let key = Key::from_raw(raw_key);
+        let (waiter, ..) = new_fair_test_waiter(10.into(), 100.into(), raw_key);
+        scheduler.wait_for(
+            LockWaitToken(Some(1)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter.start_ts,
+            waiter.wait_info,
+            WaitTimeout::Millis(10_000),
+            waiter.cancel_callback,
+            DiagnosticContext::default(),
+            true,
+        );
+        flush_waiter_mgr(&scheduler);
+        scheduler.update_wait_for(vec![owner_update_event(
+            1,
+            10.into(),
+            &key,
+            200.into(),
+            true,
+            true,
+        )]);
+        flush_waiter_mgr(&scheduler);
+        scheduler.remove_lock_wait(LockWaitToken(Some(1)));
+        flush_waiter_mgr(&scheduler);
+        wait_for_counts(&counters, 0, 0);
+        worker.stop().unwrap();
+        counters.detect_worker.stop().unwrap();
     }
 }
