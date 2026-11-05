@@ -13,7 +13,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
 use tikv_util::{
-    config::{self, ReadableDuration, ReadableSize},
+    config::{self, ReadableDuration, ReadableSize, ReadableSizeOrPercent},
     sys::SysQuota,
 };
 
@@ -62,7 +62,7 @@ const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 
 // Block cache capacity used when TikvConfig isn't validated. It should only
 // occur in tests.
-const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
+const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSizeOrPercent = ReadableSizeOrPercent::mb(128);
 
 pub const DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE: &str = "error";
 
@@ -287,7 +287,7 @@ impl Default for FlowControlConfig {
 pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub shared: Option<bool>,
-    pub capacity: Option<ReadableSize>,
+    pub capacity: Option<ReadableSizeOrPercent>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
     #[online_config(skip)]
