@@ -871,6 +871,7 @@ where
             } => {
                 let peer_id = peer.get_id();
                 let region_id = region.get_id();
+                fail_point!("before_clear_peer_meta");
                 match self.handle_clear_peer_meta(
                     peer,
                     region,

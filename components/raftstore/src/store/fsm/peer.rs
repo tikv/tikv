@@ -238,9 +238,12 @@ where
 
     trace: PeerMemoryTrace,
 
-    /// Destroy is delayed because of some unpersisted readies in Peer.
-    /// Should call `destroy_peer` again after persisting all readies.
+    /// Destroy is waiting for persisted readies or flushed log GC. Resume it
+    /// when the corresponding completion message arrives.
     delayed_destroy: Option<DelayDestroy>,
+    /// Metadata cleanup has started. The FSM stays alive until its completion
+    /// message arrives, but must not schedule another cleanup in the meantime.
+    destroy_scheduled: bool,
     /// Before actually destroying a peer, ensure all log gc tasks are finished,
     /// so we can start destroying without seeking.
     logs_gc_flushed: bool,
@@ -372,6 +375,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                destroy_scheduled: false,
                 logs_gc_flushed: false,
             }),
         ))
@@ -434,6 +438,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                destroy_scheduled: false,
                 logs_gc_flushed: false,
             }),
         ))
@@ -4175,6 +4180,9 @@ where
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return self.fsm.destroy_scheduled;
+        }
         // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
             // Destroy the apply fsm first, wait for the reply msg from apply fsm
@@ -4217,6 +4225,13 @@ where
             self.fsm.logs_gc_flushed = true;
         }
         if !self.fsm.logs_gc_flushed {
+            if self
+                .fsm
+                .delayed_destroy
+                .is_some_and(|delay| delay.reason == DelayReason::UnFlushLogGc)
+            {
+                return Some(DelayReason::UnFlushLogGc);
+            }
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
             if end_index == 0 {
@@ -4277,6 +4292,9 @@ where
     }
 
     fn on_raft_log_gc_flushed(&mut self) {
+        if self.fsm.destroy_scheduled {
+            return;
+        }
         self.fsm.logs_gc_flushed = true;
         let delay = match self.fsm.delayed_destroy {
             Some(delay) => delay,
@@ -4286,7 +4304,17 @@ where
     }
 
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
-        self.ctx.coprocessor_host.on_destroy_peer(self.region());
+        if self.fsm.destroy_scheduled {
+            return true;
+        }
+        // Keep the original data-cleanup decision across delayed retries.
+        let merged_by_target = self
+            .fsm
+            .delayed_destroy
+            .map_or(merged_by_target, |delay| delay.merged_by_target);
+        if self.fsm.peer.pending_remove != Some(PendingRemoveReason::ReadyToDestroy) {
+            self.ctx.coprocessor_host.on_destroy_peer(self.region());
+        }
         fail_point!("destroy_peer");
         // Mark itself `PendingRemoveReason::ReadyToDestroy` to represent that this peer
         // is ready to be removed.
@@ -4303,17 +4331,12 @@ where
                 .delayed_destroy
                 .is_some_and(|delay| delay.reason == reason)
             {
-                panic!(
-                    "{} destroy peer twice with same delay reason, original {:?}, now {}",
-                    self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
-                );
+                return false;
             }
             self.fsm.delayed_destroy = Some(DelayDestroy {
                 merged_by_target,
                 reason,
             });
-            // TODO: The destroy process can also be asynchronous as snapshot process,
-            // if so, all write db operations are removed in store thread.
             info!(
                 "delays destroy";
                 "region_id" => self.fsm.region_id(),
@@ -4368,6 +4391,9 @@ where
             );
             return false;
         }
+
+        self.fsm.destroy_scheduled = true;
+        self.fsm.delayed_destroy = None;
 
         info!(
             "starts destroy";
@@ -4481,28 +4507,16 @@ where
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        // Clear merge related structures.
-        if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
-            if need_atomic {
-                panic!(
-                    "{} should destroy with target region atomically",
-                    self.fsm.peer.tag
-                );
-            } else {
-                // Remove itself from atomic_snap_regions as it has cleaned both
-                // data and metadata.
-                let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                meta.atomic_snap_regions
-                    .get_mut(&target_region_id)
-                    .unwrap()
-                    .remove(&region_id);
-                meta.destroyed_region_for_snap.remove(&region_id);
-                info!("peer has destroyed, clean up for incoming overlapped snapshot";
-                    "region_id" => region_id,
-                    "peer_id" => self.fsm.peer_id(),
-                    "target_region_id" => target_region_id,
-                );
-            }
+        // Reconcile with snapshot registration under the same StoreMeta lock.
+        // Completion may precede Step1, which would otherwise clear need_atomic.
+        if let Some(target_region_id) =
+            meta.remove_destroyed_region_from_snapshot(region_id, merged_by_target)
+        {
+            info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => target_region_id,
+            );
         }
 
         meta.pending_merge_targets.remove(&region_id);
@@ -5334,6 +5348,9 @@ where
         }
 
         self.fsm.peer.pending_merge_state = Some(state);
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return;
+        }
         let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
 
         if let Some(ref catch_up_logs) = self.fsm.peer.catch_up_logs {
@@ -5356,6 +5373,9 @@ where
     }
 
     fn on_catch_up_logs_for_merge(&mut self, mut catch_up_logs: CatchUpLogs) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return;
+        }
         let region_id = self.fsm.region_id();
         assert_eq!(region_id, catch_up_logs.merge.get_source().get_id());
 
@@ -5559,6 +5579,21 @@ where
         target: metapb::Peer,
         result: MergeResultKind,
     ) {
+        // Cleanup may still be running on the region worker. Late merge messages
+        // must not replace ReadyToDestroy or start another destruction.
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            if let MergeResultKind::FromTargetSnapshotStep1 = result {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                if let Some(need_atomic) = meta.destroyed_region_for_snap.get_mut(&self.region_id())
+                {
+                    // This source is already being cleaned independently. The target
+                    // must wait for that cleanup; on_ready_destroy_peer will remove
+                    // it from atomic_snap_regions when cleanup finishes.
+                    *need_atomic = false;
+                }
+            }
+            return;
+        }
         let exists = self.fsm.peer.pending_merge_state.as_ref().is_none_or(|s| {
             s.get_target()
                 .get_peers()
