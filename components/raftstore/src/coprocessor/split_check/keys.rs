@@ -156,6 +156,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for KeysCheckObserver<C>
             }
         };
 
+        host.approximate_keys = Some(region_keys);
         self.router
             .update_approximate_keys(region_id, Some(region_keys), None);
 
