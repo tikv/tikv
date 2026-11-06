@@ -57,7 +57,7 @@ use crate::{
     annotate,
     checkpoint_manager::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion, Subscription,
+        GetCheckpointResult, RegionIdWithVersion, Subscription, remove_flush_safe_point,
     },
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -77,6 +77,34 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
+#[allow(dead_code)]
+#[derive(Debug)]
+enum SampleCheckpoint {
+    NotFound {
+        region_id: u64,
+        region_epoch_version: u64,
+    },
+    EpochNotMatch {
+        region_id: u64,
+        region_epoch_version: u64,
+    },
+}
+
+impl SampleCheckpoint {
+    fn from_checkpoint_result(checkpoint: &GetCheckpointResult) -> Option<Self> {
+        match checkpoint {
+            GetCheckpointResult::EpochNotMatch { region, .. } => Some(Self::EpochNotMatch {
+                region_id: region.id,
+                region_epoch_version: region.get_region_epoch().get_version(),
+            }),
+            GetCheckpointResult::NotFound { id, .. } => Some(Self::NotFound {
+                region_id: id.region_id,
+                region_epoch_version: id.region_epoch_version,
+            }),
+            _ => None,
+        }
+    }
+}
 pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
@@ -144,7 +172,7 @@ where
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
-        let conf = router::Config::from(config.clone());
+        let conf = router::Config::from_backup_stream_config(config.clone());
         let range_router = Router::new(scheduler.clone(), conf, backup_encryption_manager.clone());
 
         // spawn a worker to watch task changes from etcd periodically.
@@ -640,12 +668,10 @@ where
     /// initialize a range: it simply scan the regions with leader role and send
     /// them to [`initialize_region`].
     pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        // Generally we will be very very fast to consume.
-        // Directly clone the initial data loader to the background thread looks a
-        // little heavier than creating a new channel. TODO: Perhaps we need a
-        // handle to the `InitialDataLoader`. Making it a `Runnable` worker might be a
-        // good idea.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        // Generally we will be very very fast to consume. However `region-collector`
+        // might be blocked then deadlocking happens, see #19615. Making it unbounded to
+        // avoid that.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         self.regions
             .seek_region(
                 &start_key,
@@ -656,7 +682,7 @@ where
                         .filter(|r| r.role == StateRole::Leader)
                         .take_while(|r| r.region.start_key < end_key)
                         .try_for_each(|r| {
-                            tx.blocking_send(ObserveOp::Start {
+                            tx.send(ObserveOp::Start {
                                 region: r.region.clone(),
                             })
                         });
@@ -809,6 +835,11 @@ where
     pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
         let info = self.unload_task(task_name);
         self.clean_pause_guard_id_for_task(task_name);
+        self.pool.block_on(remove_flush_safe_point(
+            self.pd_client.clone(),
+            self.store_id,
+            task_name,
+        ));
         self.remove_metrics_after_unregister(task_name);
         info
     }
@@ -887,6 +918,7 @@ where
         flush_ts: TimeStamp,
     ) -> future![Result<()>] {
         let router = self.range_router.clone();
+        let sched = self.scheduler.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
@@ -913,7 +945,19 @@ where
                     // We cannot advance the resolved ts for now.
                     return Ok(());
                 }
-                flush_ob.after(&task, rts).await?
+                fail::fail_point!("before_flush_observer_after");
+                flush_ob.after(&task, rts).await?;
+                if !router.has_task(&task) {
+                    // `router.do_flush` releases the task's flushing flag before this observer
+                    // tail runs. An unregister, or another trailing flush for the same removed
+                    // task, can race with `flush_ob.after` and recreate the safe point. The task
+                    // map is the liveness boundary, so ask the endpoint actor to clean up the
+                    // just-updated safe point when no task with this name is still registered.
+                    // The actor re-checks liveness so same-name re-registration is ordered with
+                    // this cleanup.
+                    fail::fail_point!("before_schedule_cleanup_flush_safe_point");
+                    try_send!(sched, Task::CleanupFlushSafePoint(task.clone()));
+                }
             }
             Ok(())
         }
@@ -1173,10 +1217,22 @@ where
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
             Task::ExecFlush(task, min_ts, flush_ts) => self.on_exec_flush(task, min_ts, flush_ts),
+            Task::CleanupFlushSafePoint(task) => self.on_cleanup_flush_safe_point(&task),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
             Task::Flushed(result) => self.on_flushed(result),
         }
+    }
+
+    fn on_cleanup_flush_safe_point(&self, task: &str) {
+        if self.range_router.has_task(task) {
+            return;
+        }
+        self.pool.block_on(remove_flush_safe_point(
+            self.pd_client.clone(),
+            self.store_id,
+            task,
+        ));
     }
 
     fn on_flushed(&mut self, result: FlushResult) {
@@ -1232,13 +1288,34 @@ where
                         .into_iter()
                         .map(|c| GetCheckpointResult::ok(c.region.clone(), c.checkpoint))
                         .collect()),
-                    RegionSet::Regions(rs) => cb(rs
-                        .iter()
-                        .map(|(id, version)| {
-                            self.checkpoint_mgr
-                                .get_from_region(RegionIdWithVersion::new(*id, *version))
-                        })
-                        .collect()),
+                    RegionSet::Regions(rs) => {
+                        const SAMPLE_COUNT: usize = 3;
+                        let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+                        let checkpoints = rs
+                            .iter()
+                            .map(|(id, version)| {
+                                let checkpoint = self
+                                    .checkpoint_mgr
+                                    .get_from_region(RegionIdWithVersion::new(*id, *version));
+                                if samples.len() < SAMPLE_COUNT {
+                                    if let Some(sample) =
+                                        SampleCheckpoint::from_checkpoint_result(&checkpoint)
+                                    {
+                                        samples.push(sample);
+                                    }
+                                }
+                                checkpoint
+                            })
+                            .collect::<Vec<_>>();
+                        if !samples.is_empty() {
+                            warn!("log backup get region checkpoints has failed regions";
+                                "requested" => rs.len(),
+                                "checkpoint_count" => self.checkpoint_mgr.checkpoint_count(),
+                                "samples" => ?samples,
+                            );
+                        }
+                        cb(checkpoints);
+                    }
                 }
             }
             RegionCheckpointOperation::Subscribe(sub) => {
@@ -1433,6 +1510,9 @@ pub enum Task {
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
     ExecFlush(String, ResolvedRegions, TimeStamp),
+    /// Remove the flush safe point if the task is still absent in the endpoint
+    /// actor.
+    CleanupFlushSafePoint(String),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1552,6 +1632,9 @@ impl fmt::Debug for Task {
                 .field(&arg1.global_checkpoint())
                 .field(&arg2)
                 .finish(),
+            Self::CleanupFlushSafePoint(task) => {
+                f.debug_tuple("CleanupFlushSafePoint").field(task).finish()
+            }
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
             Self::UpdateGlobalCheckpoint(task) => {
                 f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
@@ -1593,6 +1676,7 @@ impl Task {
             Task::Sync(..) => "sync",
             Task::MarkFailover(_) => "mark_failover",
             Task::ExecFlush(..) => "flush_with_min_ts",
+            Task::CleanupFlushSafePoint(_) => "cleanup_flush_safe_point",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
             Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
         }

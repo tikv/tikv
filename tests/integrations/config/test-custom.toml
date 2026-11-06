@@ -74,6 +74,7 @@ end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
+end-point-max-bg-concurrency = 3
 end-point-perf-level = 5
 snap-io-max-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
@@ -154,6 +155,7 @@ raftdb-path = "/var"
 capacity = 123
 raft-base-tick-interval = "12s"
 raft-heartbeat-ticks = 1
+raft-bcast-commit = true
 raft-election-timeout-ticks = 12
 raft-min-election-timeout-ticks = 14
 raft-max-election-timeout-ticks = 20
@@ -639,6 +641,7 @@ linux-user = "hadoop"
 num-threads = 123
 stream-channel-window = 123
 import-mode-timeout = "1453s"
+use-direct-io-for-ingest = true
 
 [gc]
 ratio-threshold = 1.2
@@ -649,6 +652,7 @@ compaction-filter-skip-version-check = true
 num-threads = 2
 
 [gc.auto-compaction]
+redundant-bytes-threshold = "129MB"
 mvcc-read-aware-enabled = true
 mvcc-scan-threshold = 10000
 
@@ -694,3 +698,19 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+noisy-detection = "current-usage"
+bg-cpu-throttle-threshold = 60.0
+fg-cpu-throttle-threshold = 70.0
+bg-compaction-pressure-threshold = 70.0
+bg-write-io-ceiling = "100GB"
+bg-write-io-floor = "10MB"
+bg-egress-limit = "50MB"
+enable-fair-scheduling = false
+enable-read-admission-control = false
+enable-write-admission-control = false
+historical-usage-window-mins = 15
+baseline-burst-pct = 20.0
+admission-max-delayed-count = 10000
+request-base-cost-micros = 40
+normal-control-interval = "20s"
+overloaded-control-interval = "3s"

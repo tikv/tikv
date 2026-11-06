@@ -96,10 +96,8 @@ impl TimestampOracle {
                     count,
                 })
                 .await
-                .map_err(|_| -> Error { box_err!("TimestampRequest channel is closed") })?;
-            response
-                .await
-                .map_err(|_| box_err!("Timestamp channel is dropped"))
+                .map_err(|_| Error::TsoStreamDisconnected)?;
+            response.await.map_err(|_| Error::TsoStreamDisconnected)
         }
     }
 
@@ -253,4 +251,45 @@ fn allocate_timestamps(
         return Err(box_err!("PD gives more TsoResponse than expected"));
     };
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_closed_tso_request_channel_is_retryable() {
+        let (request_tx, request_rx) = mpsc::channel(1);
+        let (_close_tx, close_rx) = watch::channel(());
+        let oracle = TimestampOracle {
+            request_tx,
+            close_rx,
+        };
+        drop(request_rx);
+
+        let err = block_on(oracle.get_timestamp(1)).unwrap_err();
+        assert!(matches!(&err, Error::TsoStreamDisconnected));
+        assert!(err.retryable(), "{err:?}");
+    }
+
+    #[test]
+    fn test_dropped_tso_response_channel_is_retryable() {
+        let (request_tx, mut request_rx) = mpsc::channel(1);
+        let (_close_tx, close_rx) = watch::channel(());
+        let oracle = TimestampOracle {
+            request_tx,
+            close_rx,
+        };
+
+        let result = block_on(async move {
+            let get_timestamp = oracle.get_timestamp(1);
+            let drop_response = async move {
+                drop(request_rx.recv().await.unwrap());
+            };
+            join!(get_timestamp, drop_response).0
+        });
+        let err = result.unwrap_err();
+        assert!(matches!(&err, Error::TsoStreamDisconnected));
+        assert!(err.retryable(), "{err:?}");
+    }
 }

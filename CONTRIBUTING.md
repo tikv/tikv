@@ -122,6 +122,8 @@ RUSTFLAGS=-Cdebuginfo=1 cargo build
 
 When building with make, cargo will automatically use [pipelined][p] compilation to increase the parallelism of the build. To turn on pipelining while using cargo directly, set `CARGO_BUILD_PIPELINING=true`.
 
+If you build TiKV with `ENABLE_FIPS=1` on macOS, TiKV will still enable the `gcp_v2` FIPS path. In that case, you must provide the matching `aws_lc_*` FIPS `.dylib` to the TiKV process yourself, for example through `DYLD_LIBRARY_PATH` or another standard macOS dynamic library search path.
+
 [p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
 
 ## Running TiKV
@@ -160,6 +162,20 @@ This is a rough outline of what a contributor's workflow looks like:
 See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
 
 Thanks for your contributions!
+
+### Maintenance guides
+
+TiKV now maintains a maintainer-oriented guide set under
+[`doc/maintenance-guides/`](./doc/maintenance-guides/README.md).
+
+- For non-trivial changes in a covered subsystem, read the relevant guide set
+  first.
+- If your change modifies ownership boundaries, startup or shutdown sequencing,
+  data or metadata contracts, invariants, observability, or the recommended
+  reading map for a covered subsystem, update the matching guide in the same
+  pull request.
+- The repository overview guide is the right starting point for
+  cross-component changes.
 
 ### Finding something to work on
 

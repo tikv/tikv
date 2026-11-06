@@ -52,7 +52,10 @@ use tikv_util::{
     worker::{LazyWorker, Worker},
 };
 
-use crate::{raft_engine_switch::*, setup::validate_and_persist_config};
+use crate::{
+    raft_engine_switch::*,
+    setup::{report_advertise_addr_probe_failures, validate_and_persist_config},
+};
 
 // minimum number of core kept for background requests
 const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
@@ -101,6 +104,7 @@ impl TikvServerCore {
     ///   the main database and the raft database.
     pub fn init_config(mut config: TikvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
+        report_advertise_addr_probe_failures(&config);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         if !config.rocksdb.wal_dir.is_empty() {
@@ -480,6 +484,8 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
+    // Shared compaction pressure (0-100+) read by GroupQuotaAdjustWorker.
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
 }
 
 impl EnginesResourceInfo {
@@ -490,6 +496,7 @@ impl EnginesResourceInfo {
         tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
+        compaction_pending_bytes_ratio: Arc<AtomicU32>,
     ) -> Self {
         // Match DATA_CFS.
         let base_max_compactions = [
@@ -503,6 +510,7 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            compaction_pending_bytes_ratio,
         }
     }
 
@@ -639,10 +647,11 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
+        let effective_pressure = std::cmp::max(normalized_pending_bytes, avg);
+        self.latest_normalized_pending_bytes
+            .store(effective_pressure, Ordering::Relaxed);
+        self.compaction_pending_bytes_ratio
+            .store(effective_pressure, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -775,8 +784,13 @@ impl ConfiguredRaftEngine for RocksEngine {
         let statistics = Arc::new(RocksStatistics::new_titan());
         let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-            .expect("failed to open raftdb");
+        let raftdb = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            raft_db_path,
+            raft_db_opts,
+            raft_cf_opts,
+            config_raftdb.enable_snapshot_sequence_number_check,
+        )
+        .expect("failed to open raftdb");
 
         if should_dump {
             let raft_engine =
@@ -829,10 +843,11 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             let config_raftdb = &config.raftdb;
             let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::util::new_engine_opt(
+            let raftdb = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
                 &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
+                config_raftdb.enable_snapshot_sequence_number_check,
             )
             .expect("failed to open raftdb for migration");
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);

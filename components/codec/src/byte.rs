@@ -128,8 +128,13 @@ impl MemComparableByteCodec {
         let padding_marker = !(padding_size as u8);
 
         unsafe {
-            let mut src_ptr = src.as_ptr().add(src_len - last_group_size);
-            let mut dest_ptr = src.as_mut_ptr().add(dest_len - (MEMCMP_GROUP_SIZE + 1));
+            // Derive both pointers from the same unique mutable reborrow so that
+            // Stacked/Tree Borrows provenance stays valid when src and dest alias
+            // (in-place encode). Calling as_ptr() then as_mut_ptr() invalidates the
+            // shared-derived pointer under Stacked Borrows; using it later is UB.
+            let base = src.as_mut_ptr();
+            let mut src_ptr = base.add(src_len - last_group_size);
+            let mut dest_ptr = base.add(dest_len - (MEMCMP_GROUP_SIZE + 1));
 
             std::ptr::copy(src_ptr, dest_ptr, last_group_size);
             std::ptr::write_bytes(dest_ptr.add(last_group_size), MEMCMP_PAD_BYTE, padding_size);
@@ -293,12 +298,13 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal::<Ascending>(
-            buffer.as_ptr(),
-            buffer.len(),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-        )
+        // Derive both pointers from the same unique mutable reborrow so that
+        // Stacked/Tree Borrows provenance stays valid when src and dest alias
+        // (in-place decode). Calling as_ptr() then as_mut_ptr() invalidates the
+        // shared-derived pointer under Stacked Borrows; using it later is UB.
+        let ptr = buffer.as_mut_ptr();
+        let len = buffer.len();
+        Self::try_decode_first_internal::<Ascending>(ptr, len, ptr, len)
     }
 
     /// Decodes bytes in descending memory-comparable format in place, i.e.
@@ -321,12 +327,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place_desc(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        let (read_bytes, written_bytes) = Self::try_decode_first_internal::<Descending>(
-            buffer.as_ptr(),
-            buffer.len(),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-        )?;
+        // Same provenance fix as try_decode_first_in_place (see comment there).
+        let ptr = buffer.as_mut_ptr();
+        let len = buffer.len();
+        let (read_bytes, written_bytes) =
+            Self::try_decode_first_internal::<Descending>(ptr, len, ptr, len)?;
         Self::flip_bytes_in_place(buffer, written_bytes);
         Ok((read_bytes, written_bytes))
     }
@@ -962,6 +967,86 @@ mod tests {
         }
     }
 
+    /// Miri soundness regression for in-place encode aliasing UB.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// `encode_all_in_place` is a **safe** API. Pre-fix it did:
+    ///
+    /// ```ignore
+    /// let mut src_ptr = src.as_ptr().add(...);
+    /// let mut dest_ptr = src.as_mut_ptr().add(...);
+    /// std::ptr::copy(src_ptr, dest_ptr, ...);
+    /// ```
+    ///
+    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag
+    /// from `as_ptr()`. The following `ptr::copy` reads via the invalidated
+    /// pointer → UB. Any safe caller with a valid buffer can trigger it
+    /// (library unsoundness). `encode_all_in_place_desc` is affected
+    /// transitively.
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with the pre-fix code this test fails with:
+    /// `Undefined Behavior: ... tag does not exist in the borrow stack`
+    /// at `ptr::copy` in `encode_all_in_place`, with help tags created at
+    /// `as_ptr()` and invalidated at `as_mut_ptr()`.
+    ///
+    /// With the fix (both pointers from one `as_mut_ptr()` base), Miri accepts
+    /// the test and we assert bitwise equality with non-in-place
+    /// `encode_all`.
+    ///
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_encode_all_in_place`
+    #[test]
+    fn miri_soundness_encode_all_in_place() {
+        let payloads: &[&[u8]] = &[
+            b"",
+            b"\x00",
+            b"abc",
+            b"\x01\x02\x03\x04\x05\x06\x07",
+            b"\x00\x00\x00\x00\x00\x00\x00\x00",
+            b"\x01\x02\x03\x04\x05\x06\x07\x08",
+            b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+            &[0xA5; 64],
+            &[0x3C; 100],
+        ];
+
+        for &payload in payloads {
+            let enc_len = MemComparableByteCodec::encoded_len(payload.len());
+
+            // ascending in-place vs non-in-place
+            {
+                let mut expected = vec![0; enc_len];
+                let n_exp = MemComparableByteCodec::encode_all(payload, expected.as_mut_slice());
+                assert_eq!(n_exp, enc_len);
+
+                let mut buf = vec![0; enc_len];
+                buf[..payload.len()].copy_from_slice(payload);
+                let n =
+                    MemComparableByteCodec::encode_all_in_place(buf.as_mut_slice(), payload.len());
+                assert_eq!(n, enc_len);
+                assert_eq!(&buf[..n], &expected[..n_exp]);
+            }
+            // descending in-place vs non-in-place
+            {
+                let mut expected = vec![0; enc_len];
+                let n_exp =
+                    MemComparableByteCodec::encode_all_desc(payload, expected.as_mut_slice());
+                assert_eq!(n_exp, enc_len);
+
+                let mut buf = vec![0; enc_len];
+                buf[..payload.len()].copy_from_slice(payload);
+                let n = MemComparableByteCodec::encode_all_in_place_desc(
+                    buf.as_mut_slice(),
+                    payload.len(),
+                );
+                assert_eq!(n, enc_len);
+                assert_eq!(&buf[..n], &expected[..n_exp]);
+            }
+        }
+    }
+
     #[test]
     fn test_memcmp_encode_all_panic() {
         let cases = vec![(0, 0), (0, 7), (0, 8), (7, 8), (8, 9), (8, 17)];
@@ -1172,6 +1257,80 @@ mod tests {
         }
     }
 
+    /// Miri soundness regression for in-place decode aliasing UB.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// `try_decode_first_in_place` / `_desc` are **safe** APIs. Pre-fix they
+    /// did:
+    ///
+    /// ```ignore
+    /// try_decode_first_internal(buffer.as_ptr(), len, buffer.as_mut_ptr(), len)
+    /// ```
+    ///
+    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag
+    /// from `as_ptr()`. The internal `ptr::copy` then reads via the
+    /// invalidated pointer → UB. Any safe caller of this public API could
+    /// trigger it (library unsoundness).
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with the pre-fix code this test fails with:
+    /// `Undefined Behavior: ... tag does not exist in the borrow stack`
+    /// pointing at `ptr::copy` in `try_decode_first_internal`, with help tags
+    /// created at `as_ptr()` and invalidated at `as_mut_ptr()`.
+    ///
+    /// With the fix (both pointers from one `as_mut_ptr()`), Miri accepts the
+    /// test.
+    ///
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_try_decode_first_in_place`
+    #[test]
+    fn miri_soundness_try_decode_first_in_place() {
+        // Cover empty, partial group, full group(s), multi-group — all in-place.
+        let payloads: &[&[u8]] = &[
+            b"",
+            b"\x00",
+            b"abc",
+            b"\x01\x02\x03\x04\x05\x06\x07",
+            b"\x00\x00\x00\x00\x00\x00\x00\x00", // exactly one group of data
+            b"\x01\x02\x03\x04\x05\x06\x07\x08",
+            b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+            &[0xA5; 64],
+            &[0x3C; 100],
+        ];
+
+        for &payload in payloads {
+            // ascending in-place
+            {
+                let mut encoded = vec![0; MemComparableByteCodec::encoded_len(payload.len())];
+                let n = MemComparableByteCodec::encode_all(payload, encoded.as_mut_slice());
+                assert_eq!(n, encoded.len());
+
+                let mut buf = encoded.clone();
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first_in_place(buf.as_mut_slice()).unwrap();
+                assert_eq!(read, encoded.len());
+                assert_eq!(written, payload.len());
+                assert_eq!(&buf[..written], payload);
+            }
+            // descending in-place
+            {
+                let mut encoded = vec![0; MemComparableByteCodec::encoded_len(payload.len())];
+                let n = MemComparableByteCodec::encode_all_desc(payload, encoded.as_mut_slice());
+                assert_eq!(n, encoded.len());
+
+                let mut buf = encoded.clone();
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first_in_place_desc(buf.as_mut_slice())
+                        .unwrap();
+                assert_eq!(read, encoded.len());
+                assert_eq!(written, payload.len());
+                assert_eq!(&buf[..written], payload);
+            }
+        }
+    }
+
     #[test]
     fn test_memcmp_compare() {
         use std::cmp::Ordering;
@@ -1246,7 +1405,10 @@ mod benches {
             let src_ptr_end = src_ptr.add(src.len());
             let dest_ptr_end = dest_ptr.add(dest.len());
 
-            while src_ptr <= src_ptr_end {
+            // Same group loop as before, but never advance src after the empty
+            // terminator group (remaining==0). That advance was past one-past-the-end
+            // and is UB (same class as tikv#7751). See break conditions below.
+            loop {
                 // We needs to write GROUP_SIZE + 1 bytes then, so we assert a bound.
                 assert!(
                     dest_ptr.add(super::MEMCMP_GROUP_SIZE + 1) <= dest_ptr_end,
@@ -1266,15 +1428,89 @@ mod benches {
                         padding_size,
                     );
                 }
-                src_ptr = src_ptr.add(super::MEMCMP_GROUP_SIZE);
                 dest_ptr = dest_ptr.add(super::MEMCMP_GROUP_SIZE);
 
                 let padding_marker = !(padding_size as u8);
                 dest_ptr.write(padding_marker);
                 dest_ptr = dest_ptr.add(1);
+
+                // Termination rules for mem-comparable groups:
+                // - remaining == 0: we just wrote the empty all-padding terminator → done
+                // - remaining < GROUP_SIZE: last data group had padding > 0 → done
+                // - remaining == GROUP_SIZE: last data group had padding 0 (marker 0xFF); still
+                //   need one more iteration for the empty terminator. Advance to end
+                //   (one-past-the-end is allowed); do NOT advance again after remaining==0.
+                // - remaining > GROUP_SIZE: more full groups remain
+                //
+                // Pre-fix always did src_ptr.add(GROUP_SIZE) after every group, including
+                // after remaining==0, which steps past one-past-the-end → UB under Miri.
+                if remaining_size == 0 || remaining_size < super::MEMCMP_GROUP_SIZE {
+                    break;
+                }
+                src_ptr = src_ptr.add(super::MEMCMP_GROUP_SIZE);
             }
 
             dest_ptr.offset_from(dest.as_mut_ptr()) as usize
+        }
+    }
+
+    /// Miri soundness regression for OOB `ptr::add` in the naive encode helper.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// The naive loop always advanced `src_ptr` by `MEMCMP_GROUP_SIZE` after
+    /// every group, including the final padded group:
+    ///
+    /// ```ignore
+    /// while src_ptr <= src_ptr_end {
+    ///     // encode group ...
+    ///     src_ptr = src_ptr.add(MEMCMP_GROUP_SIZE); // can go past one-past-the-end
+    /// }
+    /// ```
+    ///
+    /// The unconditional advance is UB for **every** input length: after the
+    /// final group (empty terminator or padded partial group) `add(8)` steps
+    /// past one-past-the-end of the source allocation, and for the empty input
+    /// it offsets a dangling pointer. Both violate Rust's in-bounds pointer
+    /// arithmetic rules (same class as historical codec Miri bugs / #7751).
+    /// Intermediate OOB pointers are UB even without a later load/store.
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with the pre-fix code this test fails at
+    /// `src_ptr.add(MEMCMP_GROUP_SIZE)` with
+    /// `Undefined Behavior: in-bounds pointer arithmetic failed`
+    /// (a dangling-pointer offset for the empty input, or a pointer
+    /// "at or beyond the end of the allocation" for non-empty inputs).
+    ///
+    /// Multiples of `MEMCMP_GROUP_SIZE` (8) additionally exercise the empty
+    /// terminator group that follows a full final data group; every case
+    /// asserts equality with production `encode_all`.
+    ///
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_mem_comparable_encode_all_naive`
+    #[test]
+    fn miri_soundness_mem_comparable_encode_all_naive() {
+        // Every length triggers the pre-fix OOB advance (0 via a dangling
+        // pointer, the rest by stepping past one-past-the-end). Multiples of 8
+        // also exercise the empty terminator group, non-multiples the final
+        // padded partial group.
+        for len in [0usize, 1, 7, 8, 9, 15, 16, 64, 1000] {
+            let src = vec![0xABu8; len];
+            let enc_len = super::MemComparableByteCodec::encoded_len(len);
+            let mut dest = vec![0u8; enc_len];
+            let n = mem_comparable_encode_all_naive(src.as_slice(), dest.as_mut_slice());
+
+            let mut expected = vec![0u8; enc_len];
+            let e =
+                super::MemComparableByteCodec::encode_all(src.as_slice(), expected.as_mut_slice());
+            assert_eq!(n, e, "naive encoded length mismatch for len={}", len);
+            assert_eq!(
+                &dest[..n],
+                &expected[..e],
+                "naive encoded bytes mismatch for len={}",
+                len
+            );
         }
     }
 

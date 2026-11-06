@@ -37,6 +37,7 @@ testexport = [
   "engine_panic/testexport",
   "encryption/testexport",
   "file_system/testexport",
+  "resource_control/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
@@ -54,6 +55,9 @@ openssl-vendored = [
   # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
   "encryption_export/sm4",
 ]
+# Forwards the FIPS feature to gcp_v2 (via encryption_export) so FIPS builds
+# enable the rustls/fips path. See components/encryption/export/Cargo.toml.
+fips = ["encryption_export/fips"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -195,6 +199,7 @@ hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
+resource_control = { workspace = true, features = ["testexport"] }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
@@ -315,6 +320,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+gcp_v2 = { path = "components/cloud/gcp_v2" }
 health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -377,7 +383,7 @@ grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", rev = "f8ad079c8e9812ed5900b0c12b5f1d97171464c4" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
@@ -394,7 +400,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
   "attributes",
   "std",
 ] }
-openssl = "0.10"
+openssl = "0.10.80"
 openssl-sys = "0.9"
 compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"

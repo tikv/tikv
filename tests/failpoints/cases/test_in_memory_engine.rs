@@ -3,7 +3,11 @@
 use std::{
     fs::File,
     io::Read,
-    sync::{Arc, Mutex, mpsc::sync_channel},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::sync_channel,
+    },
     thread::sleep,
     time::Duration,
 };
@@ -26,7 +30,10 @@ use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::ObserveHandle,
+    coprocessor::{
+        Coprocessor, ObserveHandle, ObserverContext, TransferLeaderObserver,
+        dispatcher::BoxTransferLeaderObserver,
+    },
     store::{
         fsm::{ApplyTask, apply::ChangeObserver},
         msg::Callback,
@@ -37,9 +44,9 @@ use test_coprocessor::{
     DagChunkSpliter, DagSelect, ProductTable, handle_request, init_data_with_details_pd_client,
 };
 use test_raftstore::{
-    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, configure_for_merge,
-    get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
-    new_server_cluster_with_hybrid_engine, sleep_ms,
+    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, Simulator,
+    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_node_cluster, new_peer,
+    new_put_cf_cmd, new_server_cluster_with_hybrid_engine, sleep_ms,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -860,8 +867,7 @@ fn test_warmup_when_transfer_leader() {
 #[test]
 fn test_warmup_timeout_does_not_block_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
-    // Using a large warmup timeout to stable the test.
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_millis(500);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -885,22 +891,36 @@ fn test_warmup_timeout_does_not_block_transfer_leader() {
     })
     .unwrap();
 
-    cluster.transfer_leader(r.id, new_peer(2, 2));
-    // Transfer leader will not block forever when warmup times out.
-    sleep(cluster.cfg.raft_store.max_entry_cache_warmup_duration.0);
-    eventually(Duration::from_millis(100), Duration::from_secs(50), || {
+    // Retry faster than the overall ACK deadline. The retries must not extend
+    // the deadline even though IME remains unready.
+    let mut transferred = false;
+    for _ in 0..20 {
         cluster.reset_leader_of_region(r.id);
-        let leader = cluster.leader_of_region(r.id).unwrap();
-        leader == new_peer(2, 2)
-    });
+        match cluster.leader_of_region(r.id) {
+            Some(leader) if leader == new_peer(2, 2) => {
+                transferred = true;
+                break;
+            }
+            Some(_) => cluster.transfer_leader(r.id, new_peer(2, 2)),
+            None => {}
+        }
+        sleep(Duration::from_millis(100));
+    }
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    region_cache_engine
+    let cache_is_still_loading = region_cache_engine
         .snapshot(cache_region.clone(), 100, 100)
-        .unwrap_err();
+        .is_err();
 
-    // Unpause the snapshot load.
+    // Unpause the snapshot load before checking assertions so a failure does
+    // not leave the failpoint blocked for other tests.
     drop(tx);
     fail::remove("ime_on_snapshot_load_finished");
+    assert!(
+        transferred,
+        "repeated transfer requests extended the ACK deadline"
+    );
+    assert!(cache_is_still_loading);
+
     // put some key to trigger load
     cluster.must_put(b"k2", b"val");
     eventually(Duration::from_millis(100), Duration::from_secs(5), || {
@@ -908,6 +928,225 @@ fn test_warmup_timeout_does_not_block_transfer_leader() {
             .snapshot(cache_region.clone(), 100, 100)
             .is_ok()
     });
+}
+
+#[test]
+fn test_new_leader_clears_pending_transfer_leader_warmup() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_transfer_leader(region.id, new_peer(1, 1));
+    let cache_region = CacheRegion::from_region(&region);
+    let leader_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    leader_cache_engine
+        .load_region(cache_region.clone())
+        .unwrap();
+    cluster.must_put(b"k", b"v");
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        leader_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
+
+    // Block only the first follower's IME load. The second transferee can
+    // finish loading and become leader while the first one still has a pending
+    // pre-transfer request from the old leader.
+    let first_load = Arc::new(AtomicBool::new(true));
+    let (blocked_tx, blocked_rx) = unbounded();
+    let (unblock_tx, unblock_rx) = unbounded();
+    let (finished_tx, finished_rx) = unbounded();
+    let (next_finished_tx, next_finished_rx) = unbounded();
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        if first_load.swap(false, Ordering::SeqCst) {
+            blocked_tx.send(()).unwrap();
+            unblock_rx.recv().unwrap();
+            finished_tx.send(()).unwrap();
+        } else {
+            next_finished_tx.send(()).unwrap();
+        }
+    })
+    .unwrap();
+
+    cluster.transfer_leader(region.id, new_peer(2, 2));
+    let first_load_blocked = blocked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+
+    cluster.transfer_leader(region.id, new_peer(3, 3));
+    // Wait for peer 3's load to finish before checking leadership. The load is
+    // asynchronous and can legitimately take almost the entire old polling
+    // window, making the leadership check race with the transfer itself.
+    let peer3_load_finished = next_finished_rx
+        .recv_timeout(Duration::from_secs(10))
+        .is_ok();
+    let mut peer3_became_leader = false;
+    for _ in 0..50 {
+        cluster.reset_leader_of_region(region.id);
+        if cluster.leader_of_region(region.id) == Some(new_peer(3, 3)) {
+            peer3_became_leader = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    // Observe and drop a stale ACK from peer 2, if one is emitted after its
+    // blocked load finishes.
+    let (stale_ack_tx, stale_ack_rx) = unbounded();
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.id, 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTransferLeader)
+            .set_msg_callback(Arc::new(move |msg| {
+                if msg.get_from_peer().get_store_id() == 2 {
+                    stale_ack_tx.send(()).unwrap();
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(3, recv_filter);
+
+    // Always release the failpoint before assertions so a failed setup cannot
+    // leave an IME worker blocked for other tests.
+    unblock_tx.send(()).unwrap();
+    let first_load_finished = finished_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    fail::remove("ime_on_snapshot_load_finished");
+
+    assert!(first_load_blocked, "peer 2 did not start loading IME");
+    assert!(peer3_load_finished, "peer 3 did not finish loading IME");
+    assert!(peer3_became_leader, "peer 3 did not become leader");
+    assert!(first_load_finished, "peer 2 did not finish loading IME");
+    assert!(
+        stale_ack_rx.recv_timeout(Duration::from_secs(3)).is_err(),
+        "peer 2 ACKed a transfer request from the previous leader"
+    );
+    cluster.reset_leader_of_region(region.id);
+    assert_eq!(cluster.leader_of_region(region.id), Some(new_peer(3, 3)));
+}
+
+#[test]
+fn test_new_term_clears_pending_transfer_leader_warmup() {
+    #[derive(Clone)]
+    struct WarmupObserver {
+        started: Arc<AtomicBool>,
+        ready: Arc<AtomicBool>,
+    }
+
+    impl Coprocessor for WarmupObserver {}
+
+    impl TransferLeaderObserver for WarmupObserver {
+        fn pre_ack_transfer_leader(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: &raft::eraftpb::Message,
+        ) -> bool {
+            self.started.store(true, Ordering::SeqCst);
+            self.ready.load(Ordering::SeqCst)
+        }
+    }
+
+    // A node cluster keeps Raft traffic in-process. The observer blocks the
+    // same pre-ACK stage used by IME warmup without depending on server ports.
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
+    cluster.pd_client.disable_default_operator();
+    let warmup_started = Arc::new(AtomicBool::new(false));
+    let warmup_ready = Arc::new(AtomicBool::new(false));
+    let started = Arc::clone(&warmup_started);
+    let ready = Arc::clone(&warmup_ready);
+    cluster
+        .sim
+        .wl()
+        .post_create_coprocessor_host(Box::new(move |store_id, host| {
+            if store_id == 2 {
+                host.registry.register_transfer_leader_observer(
+                    0,
+                    BoxTransferLeaderObserver::new(WarmupObserver {
+                        started: Arc::clone(&started),
+                        ready: Arc::clone(&ready),
+                    }),
+                );
+            }
+        }));
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_transfer_leader(region.id, new_peer(1, 1));
+    cluster.must_put(b"k", b"v");
+
+    cluster.transfer_leader(region.id, new_peer(2, 2));
+    eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        warmup_started.load(Ordering::SeqCst)
+    });
+    let original_term = cluster
+        .raft_local_state(region.id, 2)
+        .get_hard_state()
+        .get_term();
+
+    // Observe and drop a stale ACK from peer 2, if one is emitted after its
+    // blocked pre-ACK preparation finishes.
+    let (stale_ack_tx, stale_ack_rx) = unbounded();
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.id, 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTransferLeader)
+            .set_msg_callback(Arc::new(move |msg| {
+                if msg.get_from_peer().get_store_id() == 2 {
+                    stale_ack_tx.send(()).unwrap();
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
+
+    // Simulate peer 2 missing a peer 1 -> peer 3 -> peer 1 transition. Drop
+    // peer 2's responses so the synthetic newer term does not affect peer 1.
+    let send_filter = Box::new(
+        RegionPacketFilter::new(region.id, 2)
+            .direction(Direction::Send)
+            .skip(MessageType::MsgTransferLeader),
+    );
+    cluster.sim.wl().add_send_filter(2, send_filter);
+    let new_term = original_term + 1;
+    let mut message = raft::eraftpb::Message::default();
+    message.set_msg_type(MessageType::MsgHeartbeat);
+    message.set_from(1);
+    message.set_to(2);
+    message.set_term(new_term);
+    let mut raft_message = RaftMessage::default();
+    raft_message.set_region_id(region.id);
+    raft_message.set_from_peer(new_peer(1, 1));
+    raft_message.set_to_peer(new_peer(2, 2));
+    raft_message.set_region_epoch(region.get_region_epoch().clone());
+    raft_message.set_message(message);
+    cluster.send_raft_msg(raft_message.clone()).unwrap();
+
+    let mut peer2_observed_new_term = false;
+    for _ in 0..50 {
+        let peer2_term = cluster
+            .raft_local_state(region.id, 2)
+            .get_hard_state()
+            .get_term();
+        if peer2_term == new_term {
+            peer2_observed_new_term = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    assert!(
+        peer2_observed_new_term,
+        "peer 2 did not observe the new term"
+    );
+
+    // Let the pre-ACK preparation complete, then wake peer 2. Without the term
+    // check, it would ACK the pending request using the newer term.
+    warmup_ready.store(true, Ordering::SeqCst);
+    cluster.send_raft_msg(raft_message).unwrap();
+    assert!(
+        stale_ack_rx.recv_timeout(Duration::from_secs(1)).is_err(),
+        "peer 2 ACKed a transfer request from the previous term"
+    );
+    cluster.reset_leader_of_region(region.id);
+    assert_eq!(cluster.leader_of_region(region.id), Some(new_peer(1, 1)));
 }
 
 #[test]

@@ -16,7 +16,11 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -158,6 +162,8 @@ use crate::{
     utils,
 };
 
+/// Builds and runs a TiKV server, then blocks until a service event asks it
+/// to exit and stops it.
 #[inline]
 fn run_impl<CER, F>(
     config: TikvConfig,
@@ -194,7 +200,9 @@ fn run_impl<CER, F>(
 
     // Build a background worker for handling signals.
     {
-        let engines = tikv.engines.take().unwrap().engines;
+        // Clone rather than take the engines: `prepare_stop` still needs them
+        // to disable manual compactions before the workers are stopped.
+        let engines = tikv.engines.as_ref().unwrap().engines.clone();
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
         std::thread::spawn(move || {
@@ -288,6 +296,7 @@ where
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -372,10 +381,19 @@ where
         };
 
         if is_recovering_marked {
-            // Run a TiKV server in recovery modeß
+            // Run a TiKV server in recovery mode.
             info!("TiKV running in Snapshot Recovery Mode");
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
-            // connect_to_pd_cluster retreived the cluster id from pd
+        }
+
+        // Initialize and check config
+        let cfg_controller = TikvServerCore::init_config(config);
+        let config = cfg_controller.get_current();
+
+        if is_recovering_marked {
+            // `connect_to_pd_cluster` retrieved the cluster id from PD. Start
+            // recovery only after config initialization has probed the
+            // effective advertised addresses, and before regular engine setup.
             let cluster_id = config.server.cluster_id;
             snap_recovery::init_cluster::start_recovery(
                 config.clone(),
@@ -384,10 +402,6 @@ where
             );
         }
 
-        // Initialize and check config
-        let cfg_controller = TikvServerCore::init_config(config);
-        let config = cfg_controller.get_current();
-
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let thread_count = config.server.background_thread_count;
@@ -395,6 +409,7 @@ where
             .thread_count(thread_count)
             .create();
 
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -403,6 +418,8 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pending_bytes_ratio.clone(),
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
@@ -499,6 +516,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pending_bytes_ratio,
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -630,6 +648,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                self.resource_manager.clone(),
                 CleanupMethod::Remote(self.core.background_worker.remote()),
                 true,
             ))
@@ -671,6 +690,10 @@ where
                     .config
                     .resource_metering
                     .enable_network_io_collection,
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_detailed_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
@@ -1018,6 +1041,7 @@ where
             false,
         )
         .unwrap();
+        importer.set_backend_config(backup::storage_backend_config(&self.core.config.backup));
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
@@ -1652,12 +1676,18 @@ where
         }
     }
 
+    /// Runs before any component is stopped. Disables manual compactions on
+    /// the KV engine so that in-flight ones are cancelled and the workers
+    /// running them can be joined promptly.
     fn prepare_stop(&self) {
         if let Some(engines) = self.engines.as_ref() {
-            // Disable manul compaction jobs before shutting down the engines. And it
+            // Disable manual compaction jobs before shutting down the engines. And it
             // will stop the compaction thread in advance, so it won't block the
             // cleanup thread when exiting.
-            let _ = engines.engines.kv.disable_manual_compaction();
+            match engines.engines.kv.disable_manual_compaction() {
+                Ok(()) => info!("manual compaction disabled before shutdown"),
+                Err(e) => warn!("failed to disable manual compaction"; "err" => ?e),
+            }
         }
     }
 
@@ -1895,6 +1925,7 @@ where
             reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pending_bytes_ratio.clone(),
         ));
 
         (engines, engines_info, ime_engine)
@@ -1932,7 +1963,10 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1997,7 +2031,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

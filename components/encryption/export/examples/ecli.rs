@@ -3,96 +3,94 @@
 use std::io::{Read, Write};
 
 use azure::STORAGE_VENDOR_NAME_AZURE;
+use clap::{ArgEnum, Args, Parser, Subcommand};
+use cloud::STORAGE_VENDOR_NAME_GCP;
 pub use cloud::kms::Config as CloudConfig;
 use encryption::{GcpConfig, KmsBackend};
 use encryption_export::{AzureConfig, Backend, Error, KmsConfig, Result, create_cloud_backend};
 use file_system::{File, OpenOptions};
-use gcp::STORAGE_VENDOR_NAME_GCP;
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
-use structopt::{StructOpt, clap::arg_enum};
 use tikv_util::box_err;
 
-arg_enum! {
-    #[derive(Debug)]
-    enum Operation {
-        Encrypt,
-        Decrypt,
-    }
+#[derive(ArgEnum, Clone, Debug)]
+enum Operation {
+    Encrypt,
+    Decrypt,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case", name = "ecli", version = "0.1")]
+#[derive(Parser)]
+#[clap(rename_all = "kebab-case", name = "ecli", version = "0.1")]
 /// An example using encryption crate to encrypt and decrypt file.
 pub struct Opt {
     /// encrypt or decrypt.
-    #[structopt(short = "p", long, possible_values = &Operation::variants(), case_insensitive = true)]
+    #[clap(short = 'p', long, arg_enum, ignore_case = true)]
     operation: Operation,
     /// File to encrypt or decrypt.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     file: String,
     /// Path to save plaintext or ciphertext.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     output: String,
     /// Credential file path. For KMS, use ~/.aws/credentials.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     credential_file: Option<String>,
 
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     command: Command,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Subcommand)]
+#[clap(rename_all = "kebab-case")]
 enum Command {
     Aws(SubCommandAws),
     Azure(SubCommandAzure),
     Gcp(SubCommandGcp),
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Args)]
+#[clap(rename_all = "kebab-case")]
 /// KMS backend.
 struct SubCommandAws {
     /// KMS key id of backend.
-    #[structopt(long)]
+    #[clap(long)]
     key_id: String,
     /// Remote endpoint
-    #[structopt(long)]
+    #[clap(long)]
     endpoint: Option<String>,
     /// Remote region.
-    #[structopt(long)]
+    #[clap(long)]
     region: Option<String>,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Args)]
+#[clap(rename_all = "kebab-case")]
 /// Command for KeyVault backend.
 struct SubCommandAzure {
     /// Tenant id.
-    #[structopt(long)]
+    #[clap(long)]
     tenant_id: String,
     /// Client id.
-    #[structopt(long)]
+    #[clap(long)]
     client_id: String,
     /// KMS key id of Azure backend.
-    #[structopt(long)]
+    #[clap(long)]
     key_id: String,
     /// Remote endpoint of KeyVault
-    #[structopt(long)]
+    #[clap(long)]
     url: String,
     /// Secret to access key.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     secret: Option<String>,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Args)]
+#[clap(rename_all = "kebab-case")]
 /// KMS backend.
 struct SubCommandGcp {
     /// KMS key id of backend.
-    #[structopt(long)]
+    #[clap(long)]
     key_id: String,
 }
 
@@ -159,7 +157,7 @@ fn create_gcp_backend(
 
 #[allow(irrefutable_let_patterns)]
 fn process() -> Result<()> {
-    let opt: Opt = Opt::from_args();
+    let opt: Opt = Opt::parse();
 
     let mut file = File::open(&opt.file)?;
     let mut content = Vec::new();

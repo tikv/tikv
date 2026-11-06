@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
+    time::Duration,
 };
 
 use chrono::{FixedOffset, NaiveTime};
@@ -13,7 +14,7 @@ pub type Schedule = Vec<OffsetTime>;
 
 #[derive(Clone, PartialEq)]
 pub enum ConfigValue {
-    Duration(u64),
+    Duration(Duration),
     Size(u64),
     U64(u64),
     F64(f64),
@@ -33,7 +34,16 @@ pub enum ConfigValue {
 impl Display for ConfigValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigValue::Duration(v) => write!(f, "{}ms", v),
+            ConfigValue::Duration(v) => {
+                let nanos = v.as_nanos();
+                if nanos % 1_000_000 == 0 {
+                    write!(f, "{}ms", nanos / 1_000_000)
+                } else if nanos % 1_000 == 0 {
+                    write!(f, "{}us", nanos / 1_000)
+                } else {
+                    write!(f, "{}ns", nanos)
+                }
+            }
             ConfigValue::Size(v) => write!(f, "{}b", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
@@ -66,6 +76,7 @@ macro_rules! impl_from {
     };
 }
 impl_from!(u64, U64);
+impl_from!(Duration, Duration);
 impl_from!(f64, F64);
 impl_from!(i32, I32);
 impl_from!(u32, U32);
@@ -98,6 +109,7 @@ macro_rules! impl_into {
     };
 }
 impl_into!(u64, U64);
+impl_into!(Duration, Duration);
 impl_into!(f64, F64);
 impl_into!(i32, I32);
 impl_into!(u32, U32);

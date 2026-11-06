@@ -39,6 +39,34 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
+const FLAG_ENABLE_SHORT_CIRCUIT_EXPRESSION: u64 = 1 << 12;
+
+fn build_short_circuit_condition(
+    product: &ProductTable,
+    logical_sig: ScalarFuncSig,
+    comparison_sig: ScalarFuncSig,
+) -> Expr {
+    let cols = product.columns_info();
+    let id = ExprDefBuilder::column_ref(
+        offset_for_column(&cols, product["id"].id) as usize,
+        FieldTypeTp::LongLong,
+    );
+    let lhs = ExprDefBuilder::scalar_func(comparison_sig, FieldTypeTp::LongLong)
+        .push_child(id)
+        .push_child(ExprDefBuilder::constant_int(1))
+        .build();
+    let rhs = ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
+        .push_child(ExprDefBuilder::column_ref(
+            offset_for_column(&cols, product["count"].id) as usize,
+            FieldTypeTp::LongLong,
+        ))
+        .push_child(ExprDefBuilder::constant_int(0))
+        .build();
+    ExprDefBuilder::scalar_func(logical_sig, FieldTypeTp::LongLong)
+        .push_child(lhs)
+        .push_child(rhs)
+        .build()
+}
 
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
@@ -1428,6 +1456,99 @@ fn test_where() {
     let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
     assert_eq!(&*result_encoded, &*expected_encoded);
     assert_eq!(spliter.next().is_none(), true);
+}
+
+#[test]
+fn test_short_circuit_selection() {
+    let data = vec![(1, Some("one"), 1), (2, Some("2"), 2), (3, Some("zero"), 0)];
+    let product = ProductTable::new();
+    let (_, endpoint) = init_with_data(&product, &data);
+
+    let cases = [
+        (
+            ScalarFuncSig::LogicalOr,
+            ScalarFuncSig::EqInt,
+            vec![
+                vec![Datum::I64(1), Datum::Bytes(b"one".to_vec()), Datum::I64(1)],
+                vec![Datum::I64(2), Datum::Bytes(b"2".to_vec()), Datum::I64(2)],
+            ],
+        ),
+        (
+            ScalarFuncSig::LogicalAnd,
+            ScalarFuncSig::NeInt,
+            vec![vec![
+                Datum::I64(2),
+                Datum::Bytes(b"2".to_vec()),
+                Datum::I64(2),
+            ]],
+        ),
+    ];
+
+    for (logical_sig, comparison_sig, expected_rows) in cases {
+        let cond = build_short_circuit_condition(&product, logical_sig, comparison_sig);
+
+        // The eager path provides the reference result for the same expression.
+        let req = DagSelect::from(&product)
+            .where_expr(cond.clone())
+            .build_with(Context::default(), &[]);
+        let mut eager_resp = handle_select(&endpoint, req);
+        assert!(eager_resp.get_warnings().is_empty());
+        let eager_rows: Vec<_> = DagChunkSpliter::new(eager_resp.take_chunks().into(), 3).collect();
+        assert_eq!(eager_rows, expected_rows);
+
+        // Enabling the optimization must preserve the observable query result.
+        let req = DagSelect::from(&product)
+            .where_expr(cond)
+            .build_with(Context::default(), &[FLAG_ENABLE_SHORT_CIRCUIT_EXPRESSION]);
+        let mut lazy_resp = handle_select(&endpoint, req);
+        assert!(lazy_resp.get_warnings().is_empty());
+        let rows: Vec<_> = DagChunkSpliter::new(lazy_resp.take_chunks().into(), 3).collect();
+        assert_eq!(rows, expected_rows);
+    }
+}
+
+#[test]
+fn test_short_circuit_selection_null_semantics() {
+    let data = vec![(1, Some("one"), 1), (2, Some("2"), 2), (3, Some("zero"), 0)];
+    let product = ProductTable::new();
+    let (_, endpoint) = init_with_data(&product, &data);
+
+    // A NULL result must remain unresolved until the second argument is evaluated.
+    let cols = product.columns_info();
+    let id_gt_zero = ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
+        .push_child(ExprDefBuilder::column_ref(
+            offset_for_column(&cols, product["id"].id) as usize,
+            FieldTypeTp::LongLong,
+        ))
+        .push_child(ExprDefBuilder::constant_int(0))
+        .build();
+    let null_and_id = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalAnd, FieldTypeTp::LongLong)
+        .push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong))
+        .push_child(id_gt_zero.clone())
+        .build();
+    let req = DagSelect::from(&product)
+        .where_expr(null_and_id)
+        .build_with(Context::default(), &[FLAG_ENABLE_SHORT_CIRCUIT_EXPRESSION]);
+    let mut resp = handle_select(&endpoint, req);
+    assert!(resp.take_chunks().is_empty());
+
+    let null_or_id = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+        .push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong))
+        .push_child(id_gt_zero)
+        .build();
+    let req = DagSelect::from(&product)
+        .where_expr(null_or_id)
+        .build_with(Context::default(), &[FLAG_ENABLE_SHORT_CIRCUIT_EXPRESSION]);
+    let mut resp = handle_select(&endpoint, req);
+    let rows: Vec<_> = DagChunkSpliter::new(resp.take_chunks().into(), 3).collect();
+    assert_eq!(
+        rows,
+        vec![
+            vec![Datum::I64(1), Datum::Bytes(b"one".to_vec()), Datum::I64(1)],
+            vec![Datum::I64(2), Datum::Bytes(b"2".to_vec()), Datum::I64(2)],
+            vec![Datum::I64(3), Datum::Bytes(b"zero".to_vec()), Datum::I64(0)],
+        ]
+    );
 }
 
 #[test]

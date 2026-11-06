@@ -51,7 +51,7 @@ fn test_server_partition_write() {
 #[test]
 fn test_secure_connect() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.security = test_util::new_security_cfg(None);
+    cluster.cfg.security = test_util::new_security_cfg(None, None);
     cluster.pd_client.disable_default_operator();
     cluster.run();
 

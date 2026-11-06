@@ -6,6 +6,7 @@ use std::{
     path::Path,
 };
 
+use clap::{ArgEnum, Parser, Subcommand};
 use external_storage::{
     ExternalStorage, UnpinReader, create_storage, make_azblob_backend, make_gcs_backend,
     make_hdfs_backend, make_local_backend, make_noop_backend, make_s3_backend,
@@ -13,59 +14,56 @@ use external_storage::{
 use futures_util::io::{AllowStdIo, copy};
 use ini::ini::Ini;
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3, StorageBackend};
-use structopt::{StructOpt, clap::arg_enum};
 use tikv_util::stream::block_on_external_io;
 use tokio::runtime::Runtime;
 
-arg_enum! {
-    #[derive(Debug)]
-    enum StorageType {
-        Noop,
-        Local,
-        Hdfs,
-        S3,
-        GCS,
-        Azure,
-    }
+#[derive(ArgEnum, Clone, Debug)]
+enum StorageType {
+    Noop,
+    Local,
+    Hdfs,
+    S3,
+    Gcs,
+    Azure,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case", name = "scli", version = "0.1")]
+#[derive(Parser)]
+#[clap(rename_all = "kebab-case", name = "scli", version = "0.1")]
 /// An example using storage to save and load a file.
 pub struct Opt {
     /// Storage backend.
-    #[structopt(short, long, possible_values = &StorageType::variants(), case_insensitive = true)]
+    #[clap(short, long, arg_enum, ignore_case = true)]
     storage: StorageType,
     /// Local file to load from or save to.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     file: String,
     /// Remote name of the file to load from or save to.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     name: String,
     /// Path to use for local storage.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     path: Option<String>,
     /// Credential file path. For S3, use ~/.aws/credentials.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     credential_file: Option<String>,
     /// Remote endpoint
-    #[structopt(short, long)]
+    #[clap(short, long)]
     endpoint: Option<String>,
     /// Remote region.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     region: Option<String>,
     /// Remote bucket name.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     bucket: Option<String>,
     /// Remote path prefix
-    #[structopt(short = "x", long)]
+    #[clap(short = 'x', long)]
     prefix: Option<String>,
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     command: Command,
 }
 
-#[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Subcommand)]
+#[clap(rename_all = "kebab-case")]
 enum Command {
     /// Save file to storage.
     Save,
@@ -164,14 +162,14 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
 }
 
 fn process() -> Result<()> {
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
     let storage: Box<dyn ExternalStorage> = create_storage(
         &(match opt.storage {
             StorageType::Noop => make_noop_backend(),
             StorageType::Local => make_local_backend(Path::new(&opt.path.unwrap())),
             StorageType::Hdfs => make_hdfs_backend(opt.path.unwrap()),
             StorageType::S3 => create_s3_storage(&opt)?,
-            StorageType::GCS => create_gcs_storage(&opt)?,
+            StorageType::Gcs => create_gcs_storage(&opt)?,
             StorageType::Azure => create_azure_storage(&opt)?,
         }),
         Default::default(),

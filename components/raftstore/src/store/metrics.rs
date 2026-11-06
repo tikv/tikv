@@ -96,6 +96,13 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SnapGenPrecheckResponseStatus {
+        passed,
+        rejected,
+        ignored_passed,
+        ignored_rejected,
+    }
+
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -134,6 +141,9 @@ make_auto_flush_static_metric! {
     pub struct CompactionGuardActionVec: LocalIntCounter {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
+    }
+    pub struct SnapGenPrecheckResponseCounter: LocalIntCounter {
+        "status" => SnapGenPrecheckResponseStatus,
     }
 }
 
@@ -183,6 +193,7 @@ make_static_metric! {
         non_witness,
         recovery,
         unsafe_vote,
+        step_local_msg,
     }
 
     pub label_enum ProposalType {
@@ -256,6 +267,20 @@ make_static_metric! {
         no_uncross_key,
         // Split info for the top hot CPU region has been collected, ready to split.
         ready_to_split_cpu_top,
+        // Normal split-key selection failed.
+        normal_key_failed,
+        // CPU fallback is skipped because the unified read pool is not busy.
+        cpu_fallback_unified_not_busy,
+        // CPU fallback is skipped because the region CPU is not hot enough.
+        cpu_fallback_region_not_busy,
+        // CPU fallback is blocked because gRPC poll threads are busy.
+        cpu_fallback_grpc_busy,
+        // CPU-top fallback for the same key range is suppressed within cooldown.
+        cpu_top_fallback_suppressed_repeat,
+        // Load-base split admin command succeeds.
+        split_success,
+        // Load-base split admin command fails.
+        split_failed,
         // Hottest key range for the top hot CPU region could not be found.
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
@@ -345,6 +370,17 @@ make_static_metric! {
         "type" => {
             raftstore_busy,
             applystore_busy,
+        },
+    }
+
+    pub struct StoreCpuPoolGaugeVec: IntGauge {
+        "pool" => {
+            unified_read,
+            scheduler,
+        },
+        "source" => {
+            store_level,
+            region_sum,
         },
     }
 
@@ -579,6 +615,13 @@ lazy_static! {
             "tikv_raftstore_raft_dropped_message_total",
             "Total number of raft dropped messages.",
             &["type"]
+        ).unwrap();
+
+    pub static ref STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_extra_message_send_failure_total",
+            "Total number of failed raftstore extra message sends.",
+            &["type", "reason"]
         ).unwrap();
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
@@ -818,6 +861,13 @@ lazy_static! {
         linear_buckets(0.0, 0.05, 20).unwrap()
     ).unwrap();
 
+    pub static ref LOAD_BASE_SPLIT_REGION_LOAD_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_load_base_split_region_load",
+        "Histogram of region load observed before load-fit filtering when load base split evaluates regions on this TiKV. The type label is cpu_millicores, qps, or bytes_kib.",
+        &["type"],
+        exponential_buckets(1.0, 2.0, 28).unwrap()
+    ).unwrap();
+
     pub static ref LOAD_BASE_SPLIT_DURATION_HISTOGRAM : Histogram = register_histogram!(
         "tikv_load_base_split_duration_seconds",
         "Histogram of the time load base split costs in seconds"
@@ -983,6 +1033,19 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_snap_gen_precheck_response_total",
+            "Total number of snapshot generation precheck responses.",
+            &["status"]
+        )
+        .unwrap();
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER: SnapGenPrecheckResponseCounter =
+        auto_flush_from!(
+            SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC,
+            SnapGenPrecheckResponseCounter
+        );
+
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",
         "Sum of applying sst.",
@@ -1049,4 +1112,11 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_CPU_POOL_GAUGE_VEC: StoreCpuPoolGaugeVec = register_static_int_gauge_vec!(
+        StoreCpuPoolGaugeVec,
+        "tikv_raftstore_cpu_pool_usage",
+        "CPU usage comparison between store-level (ThreadInfoStatistics) and region-level sum (resource metering) per thread pool.",
+        &["pool", "source"]
+    ).unwrap();
 }

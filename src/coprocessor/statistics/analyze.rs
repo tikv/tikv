@@ -1,10 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
+use std::{any::Any, cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
+use protobuf::Message;
 use rand::{Rng, rngs::StdRng};
 use tidb_query_datatype::{
     FieldTypeAccessor,
@@ -40,6 +41,7 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     sample_rate: f64,
+    ndv_rate: Option<f64>,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -60,7 +62,17 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             return Err(box_err!("empty columns_info"));
         }
         let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
+        // TiDB sends a rate in (0, 1].
+        debug_assert!(
+            !req.has_ndv_rate() || (req.get_ndv_rate() > 0.0 && req.get_ndv_rate() <= 1.0)
+        );
+        // A rate of 1 selects every row, so it is the same as no rate.
+        let ndv_rate = if req.has_ndv_rate() && req.get_ndv_rate() < 1.0 {
+            Some(req.get_ndv_rate())
+        } else {
+            None
+        };
+        let mut table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -70,12 +82,16 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        if let Some(rate) = ndv_rate {
+            table_scanner.sample_rows(rate);
+        }
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
             max_sample_size: req.get_sample_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             sample_rate: req.get_sample_rate(),
+            ndv_rate,
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
@@ -84,18 +100,35 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     }
 
     fn new_collector(&mut self) -> Box<dyn RowSampleCollector> {
-        if self.max_sample_size > 0 {
-            return Box::new(ReservoirRowSampleCollector::new(
+        let target_count = self.columns_info.len() + self.column_groups.len();
+        let mut collector: Box<dyn RowSampleCollector> = if self.max_sample_size > 0 {
+            Box::new(ReservoirRowSampleCollector::new(
                 self.max_sample_size,
                 self.max_fm_sketch_size,
-                self.columns_info.len() + self.column_groups.len(),
-            ));
+                target_count,
+            ))
+        } else {
+            // The histogram is sampled from the rows kept for NDV, so the
+            // total chance of a row is the product of the two rates:
+            //     ndv_rate * (sample_rate / ndv_rate) = sample_rate
+            // TiDB sends `sample_rate <= ndv_rate`.
+            let histogram_rate = self.sample_rate / self.ndv_rate.unwrap_or(1.0);
+            Box::new(BernoulliRowSampleCollector::new(
+                histogram_rate,
+                self.max_fm_sketch_size,
+                target_count,
+            ))
+        };
+        if self.ndv_rate.is_some() {
+            let base = collector.mut_base();
+            for sketch in &mut base.fm_sketches {
+                sketch.track_duplicates();
+            }
+            // `Some` makes the response a sampled one: it sends the count of
+            // selected rows also when that count is 0.
+            base.ndv_sample_count = Some(0);
         }
-        Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
-            self.max_fm_sketch_size,
-            self.columns_info.len() + self.column_groups.len(),
-        ))
+        collector
     }
 
     /// Merges accumulated storage statistics into `dest`. Used by the context
@@ -119,6 +152,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // (and other background quotas) apply to manual analyze as well.
             let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
+            let scanned_rows_before = self.data.peek_scanned_rows_sum();
+            let scanned_bytes_before = self.data.peek_scanned_bytes_sum();
             {
                 let result = {
                     let (duration, res) = sample
@@ -159,6 +194,20 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
+                let base = collector.mut_base();
+                // `peek_scanned_rows_sum` counts the visible rows that the
+                // scanner has returned. Only `collect_exec_stats` resets this
+                // counter. Thus the difference is the row count of this batch
+                // only if no `collect_exec_stats` call on `self.data` occurs
+                // between the two reads. Analyze makes no such call. If one is
+                // added there, the count becomes wrong or the subtraction
+                // underflows.
+                base.count += (self.data.peek_scanned_rows_sum() - scanned_rows_before) as u64;
+                if let Some(count) = &mut base.ndv_sample_count {
+                    // A sampled batch has only the rows selected for NDV.
+                    *count += result.logical_rows.len() as u64;
+                }
+
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -191,7 +240,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
@@ -202,6 +250,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 }
             }
 
+            if self.ndv_rate.is_some() {
+                // A skipped row fills no columns, but storage still reads it.
+                read_size = self.data.peek_scanned_bytes_sum() - scanned_bytes_before;
+            }
             sample.add_read_bytes(read_size);
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
@@ -239,8 +291,12 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     }
 }
 
-trait RowSampleCollector: Send {
+trait RowSampleCollector: Any + Send {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector;
+    /// Merges another collector into this one. Both collectors are built from
+    /// the same analyze request, so they always have the same concrete type
+    /// and implementations may downcast `other` infallibly.
+    fn merge_collector(&mut self, other: Box<dyn RowSampleCollector>);
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -256,11 +312,11 @@ trait RowSampleCollector: Send {
     );
     fn sampling(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn get_reported_memory_usage(&mut self) -> usize {
         self.mut_base().reported_memory_usage
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn get_memory_usage(&mut self) -> usize {
         self.mut_base().memory_usage
     }
@@ -271,6 +327,7 @@ struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
     fm_sketches: Vec<FmSketch>,
+    ndv_sample_count: Option<u64>,
     rng: StdRng,
     total_sizes: Vec<i64>,
     memory_usage: usize,
@@ -283,6 +340,7 @@ impl Default for BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
             fm_sketches: vec![],
+            ndv_sample_count: None,
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             memory_usage: 0,
@@ -291,16 +349,44 @@ impl Default for BaseRowSampleCollector {
     }
 }
 
+fn row_sample_memory_usage(row: &[Vec<u8>]) -> usize {
+    row.iter().map(Vec::capacity).sum()
+}
+
 impl BaseRowSampleCollector {
     fn new(max_fm_sketch_size: usize, col_and_group_len: usize) -> BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            ndv_sample_count: None,
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
             reported_memory_usage: 0,
+        }
+    }
+
+    fn merge_from(&mut self, other: &mut BaseRowSampleCollector) {
+        // Collectors of one request share the layout derived from the shared
+        // request; a mismatch would silently truncate the zips below.
+        debug_assert_eq!(self.null_count.len(), other.null_count.len());
+        debug_assert_eq!(self.total_sizes.len(), other.total_sizes.len());
+        debug_assert_eq!(self.fm_sketches.len(), other.fm_sketches.len());
+        self.count += other.count;
+        if let Some(count) = &mut self.ndv_sample_count {
+            *count += other
+                .ndv_sample_count
+                .expect("collectors of one request should have the same NDV sampling mode");
+        }
+        for (dst, src) in self.null_count.iter_mut().zip(&other.null_count) {
+            *dst += src;
+        }
+        for (dst, src) in self.total_sizes.iter_mut().zip(&other.total_sizes) {
+            *dst += src;
+        }
+        for (sketch, other_sketch) in self.fm_sketches.iter_mut().zip(&other.fm_sketches) {
+            sketch.merge(other_sketch);
         }
     }
 
@@ -361,14 +447,34 @@ impl BaseRowSampleCollector {
     }
 
     pub fn fill_proto(&mut self, proto_collector: &mut tipb::RowSampleCollector) {
-        proto_collector.set_null_counts(self.null_count.clone());
         proto_collector.set_count(self.count as i64);
+        if let Some(count) = self.ndv_sample_count {
+            proto_collector.set_ndv_sample_count(count as i64);
+        }
+        // Scale only the response, after any TiKV batch merge. TiDB can keep
+        // adding these population estimates through its existing merge path.
+        //     estimate = value * (visible rows / selected rows)
+        // Without selected rows the values are 0. The product is widened so
+        // that it cannot overflow.
+        let scale = |value: i64| match self.ndv_sample_count {
+            Some(samples) if samples > 0 => {
+                ((value as u128 * self.count as u128 + samples as u128 / 2) / samples as u128)
+                    as i64
+            }
+            _ => value,
+        };
+        proto_collector.set_null_counts(self.null_count.iter().copied().map(scale).collect());
+        proto_collector.set_total_size(self.total_sizes.iter().copied().map(scale).collect());
         let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        proto_collector.set_total_size(self.total_sizes.clone());
+    }
+
+    fn release_reported_memory_usage(&mut self) {
+        self.memory_usage = 0;
+        self.report_memory_usage(true);
     }
 
     fn report_memory_usage(&mut self, on_finish: bool) {
@@ -404,6 +510,13 @@ impl BernoulliRowSampleCollector {
             sample_rate,
         }
     }
+
+    fn samples_memory_usage(&self) -> usize {
+        self.samples
+            .iter()
+            .map(|row| row_sample_memory_usage(row))
+            .sum()
+    }
 }
 
 impl Default for BernoulliRowSampleCollector {
@@ -420,6 +533,21 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
+
+    fn merge_collector(&mut self, other: Box<dyn RowSampleCollector>) {
+        // Collectors of one request always have the same concrete type.
+        let mut other = (other as Box<dyn Any>)
+            .downcast::<BernoulliRowSampleCollector>()
+            .unwrap();
+        let sample_memory_usage = other.samples_memory_usage();
+        self.samples.append(&mut other.samples);
+        self.base.memory_usage += sample_memory_usage;
+        self.base.report_memory_usage(false);
+
+        other.base.release_reported_memory_usage();
+        self.base.merge_from(&mut other.base);
+    }
+
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -455,8 +583,7 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         self.samples.push(sample);
     }
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
-        self.base.memory_usage = 0;
-        self.base.report_memory_usage(true);
+        self.base.release_reported_memory_usage();
         let mut s = tipb::RowSampleCollector::default();
         let samples = mem::take(&mut self.samples)
             .into_iter()
@@ -491,12 +618,49 @@ impl ReservoirRowSampleCollector {
             max_sample_size,
         }
     }
+
+    fn should_keep_weight(&self, weight: i64) -> bool {
+        // A zero `max_sample_size` keeps no samples. Without this early
+        // return, the `peek().unwrap()` below would panic on the empty heap.
+        if self.max_sample_size == 0 {
+            return false;
+        }
+        self.samples.len() < self.max_sample_size || self.samples.peek().unwrap().0.0 < weight
+    }
+
+    fn push_weighted_sample(&mut self, weight: i64, sample: Vec<Vec<u8>>) {
+        if self.samples.len() >= self.max_sample_size {
+            let (_, evicted) = self.samples.pop().unwrap().0;
+            let evicted_memory_usage = row_sample_memory_usage(&evicted);
+            debug_assert!(self.base.memory_usage >= evicted_memory_usage);
+            self.base.memory_usage = self.base.memory_usage.saturating_sub(evicted_memory_usage);
+        }
+        self.base.memory_usage += row_sample_memory_usage(&sample);
+        self.samples.push(Reverse((weight, sample)));
+    }
 }
 
 impl RowSampleCollector for ReservoirRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
+
+    fn merge_collector(&mut self, other: Box<dyn RowSampleCollector>) {
+        // Collectors of one request always have the same concrete type.
+        let mut other = (other as Box<dyn Any>)
+            .downcast::<ReservoirRowSampleCollector>()
+            .unwrap();
+        for Reverse((weight, sample)) in mem::take(&mut other.samples) {
+            if self.should_keep_weight(weight) {
+                self.push_weighted_sample(weight, sample);
+            }
+        }
+        self.base.report_memory_usage(false);
+
+        other.base.release_reported_memory_usage();
+        self.base.merge_from(&mut other.base);
+    }
+
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -524,31 +688,15 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
     }
 
     fn sampling(&mut self, data: &[Vec<u8>]) {
-        // We should tolerate the abnormal case => `self.max_sample_size == 0`.
-        if self.max_sample_size == 0 {
-            return;
-        }
-        let mut need_push = false;
         let cur_rng = self.base.rng.gen_range(0, i64::MAX);
-        if self.samples.len() < self.max_sample_size {
-            need_push = true;
-        } else if self.samples.peek().unwrap().0.0 < cur_rng {
-            need_push = true;
-            let (_, evicted) = self.samples.pop().unwrap().0;
-            self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
-        }
-
-        if need_push {
-            let sample = data.to_vec();
-            self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
+        if self.should_keep_weight(cur_rng) {
+            self.push_weighted_sample(cur_rng, data.to_vec());
             self.base.report_memory_usage(false);
-            self.samples.push(Reverse((cur_rng, sample)));
         }
     }
 
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
-        self.base.memory_usage = 0;
-        self.base.report_memory_usage(true);
+        self.base.release_reported_memory_usage();
         let mut s = tipb::RowSampleCollector::default();
         let samples = mem::take(&mut self.samples)
             .into_iter()
@@ -567,8 +715,7 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
 
 impl Drop for BaseRowSampleCollector {
     fn drop(&mut self) {
-        self.memory_usage = 0;
-        self.report_memory_usage(true);
+        self.release_reported_memory_usage();
     }
 }
 
@@ -843,6 +990,23 @@ impl AnalyzeSamplingResult {
     }
 }
 
+impl MergeableResult for AnalyzeSamplingResult {
+    fn merge(&mut self, other: Box<dyn MergeableResult>) {
+        // Results of one request have the same concrete type by the
+        // `MergeableResult::merge` contract, so the downcast cannot fail.
+        let other = (other as Box<dyn std::any::Any>)
+            .downcast::<AnalyzeSamplingResult>()
+            .unwrap();
+        self.row_sample_collector
+            .merge_collector(other.row_sample_collector);
+    }
+
+    fn into_data(self: Box<Self>) -> Result<Vec<u8>> {
+        let resp: tipb::AnalyzeColumnsResp = (*self).into();
+        Ok(box_try!(resp.write_to_bytes()))
+    }
+}
+
 impl From<AnalyzeSamplingResult> for tipb::AnalyzeColumnsResp {
     fn from(mut result: AnalyzeSamplingResult) -> tipb::AnalyzeColumnsResp {
         let pb_collector = result.row_sample_collector.to_proto();
@@ -1100,6 +1264,145 @@ mod tests {
             }
             assert_eq!(collector.samples.len(), 0);
         }
+    }
+
+    fn sorted_hashset(sketch: &tipb::FmSketch) -> Vec<u64> {
+        let mut hashes = sketch.get_hashset().to_vec();
+        hashes.sort_unstable();
+        hashes
+    }
+
+    fn test_sampling_result(
+        count: u64,
+        null_count: i64,
+        total_size: i64,
+        sample_weights: &[i64],
+        ndv_hashes: &[u64],
+    ) -> AnalyzeSamplingResult {
+        let mut collector = ReservoirRowSampleCollector::new(2, 1000, 1);
+        collector.base.count = count;
+        collector.base.null_count[0] = null_count;
+        collector.base.total_sizes[0] = total_size;
+        for hash in ndv_hashes {
+            collector.base.fm_sketches[0].insert_hash_value(*hash);
+        }
+        for weight in sample_weights {
+            collector.push_weighted_sample(*weight, vec![vec![*weight as u8]]);
+        }
+        AnalyzeSamplingResult::new(Box::new(collector))
+    }
+
+    #[test]
+    fn test_analyze_sampling_result_merge() {
+        let a = 10;
+        let b = 20;
+        let c = 30;
+        let mut result = test_sampling_result(2, 1, 10, &[1, 3], &[a, b]);
+        result.merge(Box::new(test_sampling_result(2, 2, 20, &[4], &[a, c])));
+
+        let resp: tipb::AnalyzeColumnsResp = result.into();
+        let collector = resp.get_row_collector();
+        assert_eq!(collector.get_count(), 4);
+        assert_eq!(collector.get_null_counts(), &[3]);
+        assert_eq!(collector.get_total_size(), &[30]);
+
+        let mut sample_weights: Vec<_> = collector
+            .get_samples()
+            .iter()
+            .map(|sample| sample.get_weight())
+            .collect();
+        sample_weights.sort_unstable();
+        assert_eq!(sample_weights, vec![3, 4]);
+        assert_eq!(sorted_hashset(&collector.get_fm_sketch()[0]), vec![a, b, c]);
+    }
+
+    fn test_bernoulli_sampling_result(
+        count: u64,
+        null_count: i64,
+        total_size: i64,
+        samples: &[u8],
+        ndv_hashes: &[u64],
+        ndv_sample_count: Option<u64>,
+    ) -> AnalyzeSamplingResult {
+        let mut collector = BernoulliRowSampleCollector::new(1.0, 1000, 1);
+        collector.base.count = count;
+        collector.base.null_count[0] = null_count;
+        collector.base.total_sizes[0] = total_size;
+        collector.base.ndv_sample_count = ndv_sample_count;
+        if ndv_sample_count.is_some() {
+            collector.base.fm_sketches[0].track_duplicates();
+        }
+        for hash in ndv_hashes {
+            collector.base.fm_sketches[0].insert_hash_value(*hash);
+        }
+        for sample in samples {
+            collector.samples.push(vec![vec![*sample]]);
+            collector.base.memory_usage += 1;
+        }
+        AnalyzeSamplingResult::new(Box::new(collector))
+    }
+
+    #[test]
+    fn test_analyze_bernoulli_sampling_result_merge() {
+        // Rate-based sampling keeps every sampled row, so merging
+        // concatenates the sample sets instead of re-reducing them.
+        let a = 10;
+        let b = 20;
+        let c = 30;
+        let mut result = test_bernoulli_sampling_result(2, 1, 10, &[1, 3], &[a, b], None);
+        result.merge(Box::new(test_bernoulli_sampling_result(
+            2,
+            2,
+            20,
+            &[4],
+            &[a, c],
+            None,
+        )));
+
+        let resp: tipb::AnalyzeColumnsResp = result.into();
+        let collector = resp.get_row_collector();
+        assert_eq!(collector.get_count(), 4);
+        assert_eq!(collector.get_null_counts(), &[3]);
+        assert_eq!(collector.get_total_size(), &[30]);
+        let mut samples: Vec<_> = collector
+            .get_samples()
+            .iter()
+            .map(|sample| sample.get_row()[0][0])
+            .collect();
+        samples.sort_unstable();
+        assert_eq!(samples, vec![1, 3, 4]);
+        assert_eq!(sorted_hashset(&collector.get_fm_sketch()[0]), vec![a, b, c]);
+    }
+
+    #[test]
+    fn test_analyze_sampled_ndv_result_merge() {
+        let mut result = test_bernoulli_sampling_result(20, 1, 12, &[], &[10, 20], Some(3));
+        result.merge(Box::new(test_bernoulli_sampling_result(
+            20,
+            2,
+            20,
+            &[],
+            &[10, 30],
+            Some(4),
+        )));
+
+        let resp: tipb::AnalyzeColumnsResp = result.into();
+        let collector = resp.get_row_collector();
+        // `count` has all visible rows; the merge adds the selected rows
+        // separately.
+        assert_eq!(collector.get_count(), 40);
+        assert_eq!(collector.get_ndv_sample_count(), 7);
+        // The 7 selected rows have 3 NULLs and 32 bytes. The response scales
+        // both to the 40 visible rows: 120 / 7 rounds to 17, and 1280 / 7
+        // rounds to 183. A truncating division gives 182, so the size also
+        // checks the rounding.
+        assert_eq!(collector.get_null_counts(), &[17]);
+        assert_eq!(collector.get_total_size(), &[183]);
+        let sketch = &collector.get_fm_sketch()[0];
+        // Each input has the hash 10 one time, so the merge moves it to
+        // `multi_hashset`.
+        assert_eq!(sorted_hashset(sketch), vec![20, 30]);
+        assert_eq!(sketch.get_multi_hashset(), &[10]);
     }
 }
 

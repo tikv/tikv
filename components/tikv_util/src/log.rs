@@ -107,6 +107,18 @@ macro_rules! info_or_error{
   };
 }
 
+/// Logs a warn or debug level message using the slog global logger.
+#[macro_export]
+macro_rules! warn_or_debug{
+  ($cond:expr; $($args:tt)+) => {
+        if $cond {
+            warn!($($args)+)
+        } else {
+            debug!($($args)+)
+        }
+  };
+}
+
 use std::fmt::{self, Display, Write};
 
 use slog::{BorrowedKV, KV, OwnedKVList, Record};

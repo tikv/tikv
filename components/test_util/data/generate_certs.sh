@@ -26,15 +26,20 @@ openssl x509 -text -in "$CA_CERT" -noout
 # Server certs.
 openssl genrsa -out "$SERVER_KEY" "$RSA_KEY_SIZE"
 openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" \
-    -extensions v3_ca \
     -subj "/CN=tikv-server" \
     -addext "basicConstraints = critical, CA:FALSE" \
     -addext "keyUsage = critical, digitalSignature, keyEncipherment" \
     -addext "extendedKeyUsage = serverAuth, clientAuth" \
-    -addext "subjectAltName = IP.1:172.16.5.40, IP.2:127.0.0.1"
+    -addext "subjectAltName = IP.1:172.16.5.40, IP.2:127.0.0.1, DNS.1:tikv-server, DNS.2:localhost"
 openssl x509 -req -days "$VALID_DAYS" \
     -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial \
-    -copy_extensions copyall \
+    -extensions v3_req -extfile <(
+printf "[v3_req]\n"
+printf "basicConstraints = critical, CA:FALSE\n"
+printf "keyUsage = critical, digitalSignature, keyEncipherment\n"
+printf "extendedKeyUsage = serverAuth, clientAuth\n"
+printf "subjectAltName = IP.1:172.16.5.40, IP.2:127.0.0.1, DNS.1:tikv-server, DNS.2:localhost\n"
+) \
     -in "$SERVER_CSR" -out "$SERVER_CERT"
 echo "Server certificate:"
 openssl x509 -text -in "$SERVER_CERT" -noout

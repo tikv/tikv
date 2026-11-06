@@ -24,7 +24,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
-use protobuf::Message;
+use protobuf::{Message, RepeatedField};
 use raftstore::{
     router::CdcHandle,
     store::{msg::Callback, util::RegionReadProgressRegistry},
@@ -36,6 +36,7 @@ use tikv_util::{
     thread_name_prefix::ADVANCED_TS_THREAD,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
+    warn,
     worker::Scheduler,
 };
 use tokio::{
@@ -49,6 +50,20 @@ use crate::{TsSource, endpoint::Task, metrics::*};
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
+const CHECK_LEADER_REQ_REGIONS_SHRINK_FACTOR: usize = 4;
+const CHECK_LEADER_REQ_REGIONS_MIN_RETAIN_CAPACITY: usize = 1024;
+const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CheckLeaderLocalNotLeader {
+    region_id: u64,
+    cached_leader_store_id: Option<u64>,
+    cached_leader_peer_id: u64,
+    cached_leader_term: u64,
+    cached_epoch_conf_ver: u64,
+    cached_epoch_version: u64,
+}
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -219,8 +234,7 @@ impl LeadershipResolver {
 
     fn clear(&mut self) {
         for v in self.store_req_map.values_mut() {
-            v.regions.clear();
-            v.ts = 0;
+            reset_check_leader_request(v);
         }
         for v in self.progresses.values_mut() {
             v.clear();
@@ -260,6 +274,9 @@ impl LeadershipResolver {
         for region_id in &regions {
             checking_regions.insert(*region_id);
         }
+        let mut local_not_leader_regions = Vec::with_capacity(CHECK_LEADER_LOG_REGION_LIMIT);
+        let mut local_not_leader_count = 0;
+        let mut local_not_leader_regions_truncated = false;
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 if !checking_regions.contains(region_id) {
@@ -272,6 +289,24 @@ impl LeadershipResolver {
                 let peer_list = local_leader_info.get_peers();
                 // Check if the leader in this store
                 if leader_store_id != Some(store_id) {
+                    local_not_leader_count += 1;
+                    if local_not_leader_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                        let cached_leader_info = core.get_leader_info();
+                        local_not_leader_regions.push(CheckLeaderLocalNotLeader {
+                            region_id: *region_id,
+                            cached_leader_store_id: leader_store_id,
+                            cached_leader_peer_id: cached_leader_info.peer_id,
+                            cached_leader_term: cached_leader_info.term,
+                            cached_epoch_conf_ver: cached_leader_info
+                                .get_region_epoch()
+                                .get_conf_ver(),
+                            cached_epoch_version: cached_leader_info
+                                .get_region_epoch()
+                                .get_version(),
+                        });
+                    } else {
+                        local_not_leader_regions_truncated = true;
+                    }
                     continue;
                 }
                 let leader_info = core.get_leader_info();
@@ -288,11 +323,7 @@ impl LeadershipResolver {
                         // because performing stale read on learners require it.
                         store_req_map
                             .entry(peer.store_id)
-                            .or_insert_with(|| {
-                                let mut req = CheckLeaderRequest::default();
-                                req.regions = Vec::with_capacity(registry.len()).into();
-                                req
-                            })
+                            .or_default()
                             .regions
                             .push(leader_info.clone());
                         if peer.get_role() != PeerRole::Learner {
@@ -324,7 +355,7 @@ impl LeadershipResolver {
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         let timeout = get_min_timeout(timeout, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION);
 
-        for (store_id, req) in store_req_map {
+        for (store_id, req) in store_req_map.iter_mut() {
             if req.regions.is_empty() {
                 continue;
             }
@@ -396,6 +427,8 @@ impl LeadershipResolver {
         });
 
         let rpc_count = check_leader_rpcs.len();
+        let mut returned_region_count_by_store = HashMap::default();
+        let mut check_leader_errors = HashMap::default();
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
@@ -403,6 +436,7 @@ impl LeadershipResolver {
             check_leader_rpcs = remains;
             match res {
                 Ok((to_store, resp)) => {
+                    returned_region_count_by_store.insert(to_store, resp.regions.len());
                     for region_id in resp.regions {
                         if let Some(prog) = progresses.get_mut(&region_id) {
                             if prog.resolved {
@@ -418,6 +452,7 @@ impl LeadershipResolver {
                 }
                 Err((to_store, reconnect, err)) => {
                     info!("check leader failed"; "error" => ?err, "to_store" => to_store);
+                    check_leader_errors.insert(to_store, err);
                     if reconnect {
                         self.tikv_clients.lock().await.remove(&to_store);
                     }
@@ -427,16 +462,102 @@ impl LeadershipResolver {
                 break;
             }
         }
+        drop(check_leader_rpcs);
         let res: Vec<u64> = self.valid_regions.drain().collect();
         if res.len() != checking_regions.len() {
-            warn!(
-                "check leader returns valid regions different from checking regions";
-                "valid_regions" => res.len(),
-                "checking_regions" => checking_regions.len(),
+            let valid_region_set = res.iter().copied().collect::<HashSet<_>>();
+            let (local_registry_miss_regions, local_registry_miss_regions_truncated) =
+                self.region_read_progress.with(|registry| {
+                    limited_region_list(
+                        checking_regions
+                            .iter()
+                            .filter(|region_id| !registry.contains_key(*region_id))
+                            .copied(),
+                    )
+                });
+            let (unresolved_regions, unresolved_regions_truncated) = limited_region_list(
+                checking_regions
+                    .iter()
+                    .filter(|region_id| !valid_region_set.contains(*region_id))
+                    .copied(),
             );
+            warn!(
+                "[resolved-ts-stuck] check leader unresolved regions";
+                "local_store_id" => self.store_id,
+                "valid_region_count" => res.len(),
+                "checking_region_count" => checking_regions.len(),
+                "target_store_count" => rpc_count,
+                "unresolved_regions" => ?unresolved_regions,
+                "unresolved_regions_truncated" => unresolved_regions_truncated,
+                "local_registry_miss_regions" => ?local_registry_miss_regions,
+                "local_registry_miss_regions_truncated" => local_registry_miss_regions_truncated,
+                "local_not_leader_count" => local_not_leader_count,
+                "local_not_leader_regions" => ?local_not_leader_regions,
+                "local_not_leader_regions_truncated" => local_not_leader_regions_truncated,
+            );
+            for (to_store, req) in store_req_map.iter() {
+                if req.regions.is_empty() {
+                    continue;
+                }
+                let (unreturned_regions, unreturned_regions_truncated) = limited_region_list(
+                    req.regions
+                        .iter()
+                        .map(|leader_info| leader_info.get_region_id())
+                        .filter(|region_id| !valid_region_set.contains(region_id))
+                        .filter(|region_id| {
+                            progresses
+                                .get(region_id)
+                                .is_none_or(|prog| !prog.resps.contains(to_store))
+                        }),
+                );
+                if !unreturned_regions.is_empty() || check_leader_errors.contains_key(to_store) {
+                    warn!(
+                        "[resolved-ts-stuck] check leader target store did not confirm regions";
+                        "local_store_id" => self.store_id,
+                        "to_store" => *to_store,
+                        "requested_count" => req.regions.len(),
+                        "returned_count" => returned_region_count_by_store.get(to_store).copied().unwrap_or(0),
+                        "unreturned_regions" => ?unreturned_regions,
+                        "unreturned_regions_truncated" => unreturned_regions_truncated,
+                        "rpc_error" => ?check_leader_errors.get(to_store),
+                    );
+                }
+            }
         }
         res
     }
+}
+
+fn reset_check_leader_request(req: &mut CheckLeaderRequest) {
+    let retained_len = req.regions.len();
+    let shrink_threshold = retained_len
+        .saturating_mul(CHECK_LEADER_REQ_REGIONS_SHRINK_FACTOR)
+        .max(CHECK_LEADER_REQ_REGIONS_MIN_RETAIN_CAPACITY);
+    if req.regions.capacity() > shrink_threshold {
+        req.regions = RepeatedField::from_vec(Vec::with_capacity(retained_len));
+    } else {
+        req.regions.clear();
+    }
+    req.ts = 0;
+}
+
+fn limited_region_list<I>(regions: I) -> (Vec<u64>, bool)
+where
+    I: IntoIterator<Item = u64>,
+{
+    // Bound diagnostic samples so a large CheckLeader gap cannot produce an
+    // unbounded warning log. The boolean records whether there were more
+    // regions beyond the sampled prefix.
+    let mut limited = Vec::with_capacity(CHECK_LEADER_LOG_REGION_LIMIT);
+    let mut truncated = false;
+    for region_id in regions {
+        if limited.len() == CHECK_LEADER_LOG_REGION_LIMIT {
+            truncated = true;
+            break;
+        }
+        limited.push(region_id);
+    }
+    (limited, truncated)
 }
 
 pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
@@ -600,6 +721,7 @@ mod tests {
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
+    use protobuf::RepeatedField;
     use raftstore::store::util::RegionReadProgress;
     use tikv_util::store::new_peer;
 
@@ -638,6 +760,18 @@ mod tests {
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = TikvClient::new(channel);
         (server, client, rx)
+    }
+
+    fn new_progress(region_id: u64, remote_store_id: u64) -> Arc<RegionReadProgress> {
+        let mut region = Region::default();
+        region.id = region_id;
+        region.peers.push(new_peer(1, region_id));
+        region
+            .peers
+            .push(new_peer(remote_store_id, region_id + 10_000));
+        let progress = RegionReadProgress::new(&region, 1, 1, region_id);
+        progress.update_leader_info(region_id, 1, &region);
+        Arc::new(progress)
     }
 
     #[tokio::test]
@@ -697,6 +831,91 @@ mod tests {
             .resolve(vec![], TimeStamp::new(1), None)
             .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+        let _ = server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_capacity_ignores_registry_size() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(1),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        for region_id in 1..=2048 {
+            leader_resolver
+                .region_read_progress
+                .insert(region_id, new_progress(region_id, 2));
+        }
+
+        leader_resolver
+            .resolve(vec![1], TimeStamp::new(1), None)
+            .await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        let retained_req = leader_resolver.store_req_map.get(&2).unwrap();
+        assert_eq!(retained_req.regions.len(), 1);
+        assert!(
+            retained_req.regions.capacity() < 64,
+            "unexpected request capacity {} for a single checked region",
+            retained_req.regions.capacity()
+        );
+
+        let _ = server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shrinks_oversized_request_buffer_on_reuse() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(60),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        leader_resolver
+            .region_read_progress
+            .insert(1, new_progress(1, 2));
+
+        let mut req = CheckLeaderRequest::default();
+        req.regions = RepeatedField::from_vec(Vec::with_capacity(4096));
+        req.regions.push(Default::default());
+        leader_resolver.store_req_map.insert(2, req);
+
+        leader_resolver
+            .resolve(vec![1], TimeStamp::new(1), None)
+            .await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        let retained_req = leader_resolver.store_req_map.get(&2).unwrap();
+        assert_eq!(retained_req.regions.len(), 1);
+        assert!(
+            retained_req.regions.capacity() < 64,
+            "oversized request buffer was not shrunk, capacity {}",
+            retained_req.regions.capacity()
+        );
 
         let _ = server.shutdown().await;
     }

@@ -7,7 +7,7 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::util::{db_exist, new_engine_opt};
+use engine_rocks::util::db_exist;
 use engine_traits::{
     ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, Engines, Error as EngineError, RaftEngine,
     TabletRegistry,
@@ -128,7 +128,12 @@ pub fn new_debug_executor(
             error!("raft db not exists: {}", raft_path);
             tikv_util::logger::exit_process_gracefully(-1);
         }
-        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+        let raft_db = match engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            &raft_path,
+            raft_db_opts,
+            raft_db_cf_opts,
+            cfg.raftdb.enable_snapshot_sequence_number_check,
+        ) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };

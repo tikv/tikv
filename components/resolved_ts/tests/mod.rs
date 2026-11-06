@@ -56,7 +56,7 @@ impl TestSuite {
             let mut c = std::collections::HashMap::default();
             c.insert(
                 "advance_ts_interval".to_owned(),
-                ConfigValue::Duration(new_interval.as_millis() as u64),
+                ConfigValue::Duration(new_interval),
             );
             c
         };

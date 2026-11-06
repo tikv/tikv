@@ -14,7 +14,7 @@ mod softlimit;
 mod utils;
 mod writer;
 
-pub use endpoint::{Endpoint, Task, backup_file_name};
+pub use endpoint::{Endpoint, Task, backup_file_name, storage_backend_config};
 pub use errors::{Error, Result};
 pub use service::Service;
 pub use writer::{BackupRawKvWriter, BackupWriter};

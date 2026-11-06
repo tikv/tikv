@@ -15,7 +15,7 @@ use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::{
     io::{AsyncReadExt, Cursor as ACursor},
-    stream::StreamExt,
+    stream::{StreamExt, TryStreamExt},
 };
 use keys::origin_key;
 use kvproto::brpb;
@@ -666,19 +666,20 @@ impl TmpStorage {
         &self,
         pfx: &str,
     ) -> crate::Result<Vec<brpb::LogFileSubcompaction>> {
-        let mut stream = self.storage.iter_prefix(pfx);
+        let mut keys = self
+            .storage
+            .iter_prefix(pfx)
+            .map_ok(|file| file.key)
+            .try_collect::<Vec<_>>()
+            .await?;
+        keys.sort();
+
         let mut output = vec![];
-        while let Some(file) = stream.next().await {
-            let file = file?;
+        for key in keys {
             let mut content = vec![];
-            self.storage
-                .read(&file.key)
-                .read_to_end(&mut content)
-                .await?;
+            self.storage.read(&key).read_to_end(&mut content).await?;
             let mig = parse_from_bytes::<brpb::LogFileSubcompactions>(&content)?;
-            for c in mig.subcompactions.into_iter() {
-                output.push(c)
-            }
+            output.extend(mig.subcompactions.into_iter());
         }
         Ok(output)
     }

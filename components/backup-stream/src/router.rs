@@ -343,10 +343,11 @@ pub struct Config {
     pub temp_file_memory_quota: u64,
     pub max_flush_interval: Duration,
     pub s3_multi_part_size: usize,
+    pub gcp_v2_enable: bool,
 }
 
-impl From<BackupStreamConfig> for Config {
-    fn from(value: BackupStreamConfig) -> Self {
+impl Config {
+    pub fn from_backup_stream_config(value: BackupStreamConfig) -> Self {
         let prefix = PathBuf::from(value.temp_path);
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
@@ -358,6 +359,7 @@ impl From<BackupStreamConfig> for Config {
             temp_file_memory_quota,
             max_flush_interval,
             s3_multi_part_size,
+            gcp_v2_enable: value.gcp_v2_enable,
         }
     }
 }
@@ -412,6 +414,7 @@ pub struct RouterInner {
     temp_file_memory_quota: AtomicU64,
     /// The max duration the local data can be pending.
     max_flush_interval: SyncRwLock<Duration>,
+    gcp_v2_enable: bool,
 
     /// Backup encryption manager
     backup_encryption_manager: BackupEncryptionManager,
@@ -444,6 +447,7 @@ impl RouterInner {
             temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
+            gcp_v2_enable: config.gcp_v2_enable,
             backup_encryption_manager,
             s3_multi_part_size: AtomicUsize::new(config.s3_multi_part_size),
         }
@@ -455,6 +459,8 @@ impl RouterInner {
             .store(config.file_size_limit.0, Ordering::SeqCst);
         self.temp_file_memory_quota
             .store(config.temp_file_memory_quota.0, Ordering::SeqCst);
+        self.s3_multi_part_size
+            .store(config.s3_multi_part_size.0 as usize, Ordering::SeqCst);
         for entry in self.tasks.iter() {
             entry
                 .temp_file_pool
@@ -516,10 +522,12 @@ impl RouterInner {
         let task_name = task.info.get_name().to_owned();
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
+        let gcp_v2_enable = self.gcp_v2_enable;
         let backup_encryption_manager =
             self.build_backup_encryption_manager_for_task(&task).await?;
         let backend_config = BackendConfig {
             s3_multi_part_size: self.s3_multi_part_size.load(Ordering::Relaxed),
+            gcp_v2_enable,
             hdfs_config: HdfsConfig::default(),
         };
         let stream_task = StreamTaskHandler::new(
@@ -625,6 +633,10 @@ impl RouterInner {
             self.unregister_ranges(task_name);
             t.1.task.info.clone()
         })
+    }
+
+    pub fn has_task(&self, task_name: &str) -> bool {
+        self.tasks.contains_key(task_name)
     }
 
     /// get the task name by a key.
@@ -1339,6 +1351,9 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
+                crate::metrics::UPLOAD_FILE_SIZE
+                    .with_label_values(&["log"])
+                    .inc_by(stat_length as _);
                 debug!(
                     "backup stream flush success";
                     "storage_file" => ?filepath,
@@ -1362,7 +1377,7 @@ impl StreamTaskHandler {
         )?;
 
         // push merged file into metadata
-        metadata.push(merged_file_info);
+        metadata.push(merged_file_info, is_meta);
         Ok(())
     }
 
@@ -1422,29 +1437,34 @@ impl StreamTaskHandler {
         flush_ts: TimeStamp,
     ) -> Result<Vec<String>> {
         let mut meta_files = vec![];
-        if !metadata_info.file_groups.is_empty() {
-            let mut min_begin_ts = u64::MAX;
-            for file_group in metadata_info.file_groups.as_slice() {
-                assert!(!file_group.data_files_info.is_empty());
-                for d in file_group.data_files_info.as_slice() {
-                    assert_ne!(d.min_begin_ts_in_default_cf, 0);
-                    min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
-                }
+        let mut min_begin_ts = 0;
+        for file_group in metadata_info.file_groups.as_slice() {
+            assert!(!file_group.data_files_info.is_empty());
+            for d in file_group.data_files_info.as_slice() {
+                assert_ne!(d.min_begin_ts_in_default_cf, 0);
+                min_begin_ts = if min_begin_ts == 0 {
+                    d.min_begin_ts_in_default_cf
+                } else {
+                    min_begin_ts.min(d.min_begin_ts_in_default_cf)
+                };
             }
-            let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
-            let meta_buff = metadata_info.marshal_to()?;
-            let buflen = meta_buff.len();
-
-            self.storage
-                .write(
-                    &meta_path,
-                    UnpinReader(Box::new(Cursor::new(meta_buff))),
-                    buflen as _,
-                )
-                .await
-                .context(format_args!("flush meta {:?}", meta_path))?;
-            meta_files.push(meta_path);
         }
+        let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
+        let meta_buff = metadata_info.marshal_to()?;
+        let buflen = meta_buff.len();
+
+        self.storage
+            .write(
+                &meta_path,
+                UnpinReader(Box::new(Cursor::new(meta_buff))),
+                buflen as _,
+            )
+            .await
+            .context(format_args!("flush meta {:?}", meta_path))?;
+        crate::metrics::UPLOAD_FILE_SIZE
+            .with_label_values(&["metadata"])
+            .inc_by(buflen as _);
+        meta_files.push(meta_path);
         Ok(meta_files)
     }
 
@@ -1764,6 +1784,8 @@ pub struct MetadataInfo {
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
+
+    has_meta_files: bool,
 }
 
 impl MetadataInfo {
@@ -1774,6 +1796,7 @@ impl MetadataInfo {
             min_ts: None,
             max_ts: None,
             store_id: 0,
+            has_meta_files: false,
         }
     }
 
@@ -1781,7 +1804,18 @@ impl MetadataInfo {
         self.store_id = store_id;
     }
 
-    fn push(&mut self, file: DataFileGroup) {
+    fn make_flags(&self) -> u64 {
+        let mut flags = 0;
+        if !self.has_meta_files {
+            flags |= utils::BACKUP_META_FLAG_NO_META_FILES;
+        }
+        if self.file_groups.is_empty() {
+            flags |= utils::BACKUP_META_FLAG_EMPTY;
+        }
+        flags
+    }
+
+    fn push(&mut self, file: DataFileGroup, is_meta: bool) {
         let rts = file.min_resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
         self.min_ts = self
@@ -1791,6 +1825,7 @@ impl MetadataInfo {
             .max_ts
             .map_or(Some(file.max_ts), |ts| Some(ts.max(file.max_ts)));
         self.file_groups.push(file);
+        self.has_meta_files = self.has_meta_files || is_meta;
     }
 
     fn marshal_to(self) -> Result<Vec<u8>> {
@@ -1813,7 +1848,7 @@ impl MetadataInfo {
             "flush_ts must be positive (monotonically assigned by Endpoint)"
         );
         format!(
-            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}.meta",
+            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}{}{:016X}.meta",
             flush_ts,
             self.store_id,
             utils::BACKUP_META_MIN_BEGIN_TS_PREFIX,
@@ -1822,6 +1857,8 @@ impl MetadataInfo {
             self.min_ts.unwrap_or_default(),
             utils::BACKUP_META_MAX_TS_PREFIX,
             self.max_ts.unwrap_or_default(),
+            utils::BACKUP_META_FLAG_PREFIX,
+            self.make_flags()
         )
     }
 }
@@ -1987,7 +2024,7 @@ mod tests {
     use external_storage::{BlobObject, ExternalData, NoopStorage};
     use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
-        brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
+        brpb::{CipherInfo, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
     };
     use online_config::{ConfigManager, OnlineConfig};
@@ -2119,6 +2156,7 @@ mod tests {
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
@@ -2143,13 +2181,6 @@ mod tests {
             result.push(task);
         }
         result
-    }
-
-    fn create_noop_storage_backend() -> StorageBackend {
-        let nop = Noop::new();
-        let mut backend = StorageBackend::default();
-        backend.set_noop(nop);
-        backend
     }
 
     async fn task_handler(name: String) -> Result<(StreamBackupTaskInfo, PathBuf)> {
@@ -2219,6 +2250,7 @@ mod tests {
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
@@ -2494,6 +2526,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2526,6 +2559,7 @@ mod tests {
     async fn test_empty_resolved_ts() {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let storage_dir = tempfile::tempdir().unwrap();
         let router = RouterInner::new(
             tx,
             Config {
@@ -2534,12 +2568,13 @@ mod tests {
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
         let mut stream_task = StreamBackupTaskInfo::default();
         stream_task.set_name("nothing".to_string());
-        stream_task.set_storage(create_noop_storage_backend());
+        stream_task.set_storage(external_storage::make_local_backend(storage_dir.path()));
 
         router
             .register_task(
@@ -2564,6 +2599,25 @@ mod tests {
         };
         let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
+
+        let meta_file_paths = meta_file_names(storage_dir.path());
+        assert_eq!(meta_file_paths.len(), 1);
+        let meta_file_name = meta_file_paths[0]
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .unwrap();
+        let parsed_meta_file_name = utils::parse_backupmeta_filename(meta_file_name).unwrap();
+        assert_eq!(
+            parsed_meta_file_name.flags,
+            Some(utils::BACKUP_META_FLAG_NO_META_FILES | utils::BACKUP_META_FLAG_EMPTY)
+        );
+
+        let metadata = read_and_parse_meta_files(meta_file_paths);
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata[0].file_groups.is_empty());
+        assert_eq!(metadata[0].resolved_ts, ts.into_inner());
+        assert_eq!(metadata[0].store_id, 1);
+        assert!(log_file_names(storage_dir.path()).is_empty());
     }
 
     #[tokio::test]
@@ -2578,6 +2632,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2634,6 +2689,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2929,6 +2985,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
                 s3_multi_part_size: cfg.s3_multi_part_size.0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2987,6 +3044,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
+                gcp_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));

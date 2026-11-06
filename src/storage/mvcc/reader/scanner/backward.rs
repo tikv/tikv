@@ -9,7 +9,7 @@ use txn_types::{Key, TimeStamp, Value, ValueEntry, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::{
-    kv::{Cursor, SEEK_BOUND, Snapshot, Statistics},
+    kv::{Cursor, SEEK_BOUND, Snapshot, Statistics, kv_processed_size},
     mvcc::{Error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
     need_check_locks,
 };
@@ -211,7 +211,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             if let Some(v) = result? {
                 self.statistics.write.processed_keys += 1;
-                self.statistics.processed_size += current_user_key.len() + v.value.len();
+                self.statistics.processed_size +=
+                    kv_processed_size(current_user_key.len(), v.value.len());
                 resource_metering::record_read_keys(1);
                 return Ok(Some((current_user_key, v)));
             }

@@ -326,12 +326,15 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
             let options = self.as_inner().get_options_cf(handle);
-            let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+            // Use level0_stop_writes_trigger instead of level0_slowdown_writes_trigger
+            // to integrate with flow control while preserving RocksDB's compaction
+            // speed-up mechanism. See `fill_cf_opts` in src/config/mod.rs.
+            let stop_trigger = options.get_level_zero_stop_writes_trigger();
             let compaction_trigger = options.get_level_zero_file_num_compaction_trigger() as u64;
             // Leave enough buffer to tolerate heavy write workload,
             // which may flush some memtables in a short time.
             let worse_case_l0_file_count = n + inflight_ingest_cnt;
-            if worse_case_l0_file_count > u64::from(slowdown_trigger) / 2
+            if worse_case_l0_file_count > u64::from(stop_trigger) / 2
                 && worse_case_l0_file_count >= compaction_trigger
             {
                 return Ok(true);
@@ -503,7 +506,8 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
+        ALL_CFS, CF_DEFAULT, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable,
+        WriteBatchExt,
     };
     use tempfile::Builder;
 
@@ -805,5 +809,40 @@ mod tests {
         assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
         assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
         assert!(db.get_total_sst_files_size_cf("default").unwrap().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_ingest_maybe_slowdown_writes_follows_stop_writes_trigger() {
+        let path = Builder::new()
+            .prefix("test_ingest_maybe_slowdown_writes")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        // Mimic the config after `fill_cf_opts` when flow control raises
+        // `l0-files-threshold`: the stop trigger follows it while the slowdown
+        // trigger stays low so that RocksDB speeds up compaction early.
+        let mut cf_opts = RocksCfOptions::default();
+        cf_opts.set_level_zero_file_num_compaction_trigger(2);
+        cf_opts.set_level_zero_slowdown_writes_trigger(4);
+        cf_opts.set_level_zero_stop_writes_trigger(20);
+        cf_opts.set_disable_auto_compactions(true);
+        let db = new_engine_opt(
+            path_str,
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, cf_opts)],
+        )
+        .unwrap();
+
+        // Build 3 L0 files, which is above half the slowdown trigger but well
+        // below half the stop trigger.
+        for i in 0..3u8 {
+            db.put_cf(CF_DEFAULT, &[b'k', i], b"v").unwrap();
+            db.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        assert!(!db.ingest_maybe_slowdown_writes(CF_DEFAULT, 0).unwrap());
+        // 3 existing files plus 8 inflight ones exceed half the stop trigger.
+        assert!(db.ingest_maybe_slowdown_writes(CF_DEFAULT, 8).unwrap());
     }
 }

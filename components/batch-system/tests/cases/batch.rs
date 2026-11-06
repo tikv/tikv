@@ -202,3 +202,49 @@ fn test_resource_group() {
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_thread_priority() {
+    use tikv_util::sys::thread::get_priority;
+
+    // Raising the nice value doesn't require `CAP_SYS_NICE`.
+    const POLLER_PRI: i32 = 10;
+    let caller_pri = get_priority().unwrap();
+    let (control_tx, control_fsm) = Runner::new(10);
+    let (router, mut system) =
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
+    system.set_thread_priority(POLLER_PRI);
+    system.spawn("test".to_owned(), Builder::new());
+    // The thread spawning the pollers must keep its own priority.
+    assert_eq!(get_priority().unwrap(), caller_pri);
+
+    let (tx, rx) = mpsc::unbounded();
+    let tx_ = tx.clone();
+    let r = router.clone();
+    router
+        .send_control(Message::Callback(Box::new(
+            move |_: &Handler, _: &mut Runner| {
+                let (tx2, mut runner2) = Runner::new(10);
+                runner2.set_priority(Priority::Low);
+                r.register(1, BasicMailbox::new(tx2, runner2, Arc::default()));
+                tx_.send(get_priority().unwrap()).unwrap();
+            },
+        )))
+        .unwrap();
+    // Normal priority pollers run with the configured priority.
+    assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(POLLER_PRI));
+
+    router
+        .send(
+            1,
+            Message::Callback(Box::new(move |h: &Handler, _: &mut Runner| {
+                assert_eq!(h.get_priority(), Priority::Low);
+                tx.send(get_priority().unwrap()).unwrap();
+            })),
+        )
+        .unwrap();
+    // Low priority pollers are left untouched.
+    assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(caller_pri));
+    system.shutdown();
+}

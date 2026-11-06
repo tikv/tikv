@@ -95,6 +95,12 @@ pub struct RaftStatus {
     pub learners: HashMap<u64, RaftProgress>,
     pub last_index: u64,
     pub persisted_index: u64,
+    #[cfg(any(test, feature = "testexport"))]
+    pub unstable_entries_len: usize,
+    #[cfg(any(test, feature = "testexport"))]
+    pub unstable_entries_capacity: usize,
+    #[cfg(any(test, feature = "testexport"))]
+    pub unstable_entries_size: usize,
 }
 
 impl<'a> From<raft::Status<'a>> for RaftStatus {
@@ -130,6 +136,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
             learners,
             last_index: 0,
             persisted_index: 0,
+            #[cfg(any(test, feature = "testexport"))]
+            unstable_entries_len: 0,
+            #[cfg(any(test, feature = "testexport"))]
+            unstable_entries_capacity: 0,
+            #[cfg(any(test, feature = "testexport"))]
+            unstable_entries_size: 0,
         }
     }
 }

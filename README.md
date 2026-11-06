@@ -10,7 +10,10 @@ TiKV is an open-source, distributed, and transactional key-value database. Unlik
 
 The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
 
-If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+If you're interested in contributing to TiKV, or want to build it from source,
+see [CONTRIBUTING.md](./CONTRIBUTING.md). For maintainership-oriented code
+reading and review context, see
+[doc/maintenance-guides/README.md](./doc/maintenance-guides/README.md).
 
 ![cncf_logo](images/cncf.png#gh-light-mode-only)
 ![cncf_logo](images/cncf-white.png#gh-dark-mode-only)

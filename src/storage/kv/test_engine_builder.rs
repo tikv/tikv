@@ -230,6 +230,7 @@ mod tests {
             snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
             ScanMode::Forward,
             false,
+            false,
         );
 
         let mut statistics = CfStatistics::default();
@@ -258,6 +259,7 @@ mod tests {
         let mut iter = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
+            false,
             false,
         );
 

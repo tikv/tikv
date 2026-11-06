@@ -7,7 +7,7 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{Key, OldValues, insert_old_value_if_resolved};
+use txn_types::{Key, OldValues, TimeStamp, insert_old_value_if_resolved};
 
 use crate::storage::{
     Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
@@ -16,7 +16,9 @@ use crate::storage::{
         LockManager, LockWaitToken, lock_wait_context::LockWaitContextSharedState,
         lock_waiting_queue::LockWaitEntry,
     },
-    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    mvcc::{
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, ReleasedLock, SnapshotReader,
+    },
     txn::{
         Error, Result, acquire_pessimistic_lock,
         commands::{
@@ -101,6 +103,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
         let mut old_values = OldValues::default();
 
         let mut new_locked_keys = Vec::with_capacity(total_keys);
+        let mut released_locks = ReleasedLocks::new();
 
         for item in self.items.into_iter() {
             let ResumedPessimisticLockItem {
@@ -189,6 +192,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                     encountered_locks.push(lock_info);
                 }
                 Err(e) => {
+                    // Failed without acquiring the lock, so no release will wake up the
+                    // remaining waiters. Report the key as released to wake up the next one.
+                    let (conflict_start_ts, conflict_commit_ts) = match &e {
+                        MvccError(box MvccErrorInner::WriteConflict {
+                            conflict_start_ts,
+                            conflict_commit_ts,
+                            ..
+                        }) => (*conflict_start_ts, *conflict_commit_ts),
+                        _ => (TimeStamp::zero(), TimeStamp::zero()),
+                    };
+                    released_locks.push(Some(ReleasedLock::new(
+                        conflict_start_ts,
+                        conflict_commit_ts,
+                        key,
+                        true,
+                    )));
                     res.push(PessimisticLockKeyResult::Failed(
                         StorageError::from(Error::from(e)).into(),
                     ));
@@ -215,7 +234,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             rows: total_keys,
             pr,
             lock_info: encountered_locks,
-            released_locks: ReleasedLocks::new(),
+            released_locks,
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
@@ -275,6 +294,14 @@ mod tests {
         engine: &mut E,
         lock_wait_entries: Vec<Box<LockWaitEntry>>,
     ) -> PessimisticLockResults {
+        must_success_with_released_locks(engine, lock_wait_entries).0
+    }
+
+    #[allow(clippy::vec_box)]
+    fn must_success_with_released_locks<E: Engine>(
+        engine: &mut E,
+        lock_wait_entries: Vec<Box<LockWaitEntry>>,
+    ) -> (PessimisticLockResults, ReleasedLocks) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
@@ -329,7 +356,7 @@ mod tests {
         assert_eq!(lock_info_index, result.lock_info.len());
 
         write(engine, &ctx, result.to_be_write.modifies);
-        res
+        (res, result.released_locks)
     }
 
     fn make_lock_waiting(
@@ -470,5 +497,51 @@ mod tests {
         must_rollback(&mut engine, b"k2", 40, false);
         must_pessimistic_rollback(&mut engine, b"k5", 45, 45);
         must_rollback(&mut engine, b"k2", 40, false);
+    }
+
+    #[test]
+    fn test_acquire_pessimistic_lock_resumed_failed_releases_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&mut engine, b"k1", 10, 20);
+        must_prewrite_put(&mut engine, b"k2", b"v2", b"k2", 10);
+        must_commit(&mut engine, b"k2", 10, 20);
+        must_prewrite_put(&mut engine, b"k4", b"v4", b"k4", 30);
+
+        let mut entries = vec![
+            // Conflicts with the write committed at 20 and the key exists: WriteConflict.
+            make_lock_waiting(b"k1", 15, 15, false, false),
+            // No conflict but the key exists: AlreadyExist.
+            make_lock_waiting(b"k2", 25, 25, false, false),
+            // Succeeds.
+            make_lock_waiting(b"k3", 25, 25, false, false),
+            // Meets another lock and waits again.
+            make_lock_waiting(b"k4", 35, 35, false, false),
+        ];
+        for entry in &mut entries {
+            entry.should_not_exist = true;
+        }
+        let (res, released_locks) = must_success_with_released_locks(&mut engine, entries);
+        assert_eq!(res.0.len(), 4);
+        res.0[0].unwrap_err();
+        res.0[1].unwrap_err();
+        res.0[2].assert_empty();
+        res.0[3].assert_waiting();
+        must_pessimistic_locked(&mut engine, b"k3", 25, 25);
+
+        // Keys of the failed requests are reported as released so that the next
+        // waiters on them can be woken up.
+        let released: Vec<_> = released_locks
+            .into_iter()
+            .map(|l| (l.key.into_raw().unwrap(), l.start_ts, l.commit_ts))
+            .collect();
+        assert_eq!(
+            released,
+            vec![
+                (b"k1".to_vec(), 10.into(), 20.into()),
+                (b"k2".to_vec(), TimeStamp::zero(), TimeStamp::zero()),
+            ]
+        );
     }
 }

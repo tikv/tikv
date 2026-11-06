@@ -13,8 +13,8 @@ use rocksdb::{
 use slog_global::warn;
 
 use crate::{
-    RocksStatistics, cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine,
-    r2e, rocks_metrics_defs::*,
+    DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK, RocksStatistics, cf_options::RocksCfOptions,
+    db_options::RocksDbOptions, engine::RocksEngine, r2e, rocks_metrics_defs::*,
 };
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
@@ -41,6 +41,22 @@ pub fn new_engine_opt(
     db_opt: RocksDbOptions,
     cf_opts: Vec<(&str, RocksCfOptions)>,
 ) -> Result<RocksEngine> {
+    new_engine_opt_with_snapshot_sequence_number_check(
+        path,
+        db_opt,
+        cf_opts,
+        DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK,
+    )
+}
+
+/// Opens a RocksDB instance and fixes its snapshot sequence-number check
+/// setting for the lifetime of the returned engine and all of its clones.
+pub fn new_engine_opt_with_snapshot_sequence_number_check(
+    path: &str,
+    db_opt: RocksDbOptions,
+    cf_opts: Vec<(&str, RocksCfOptions)>,
+    enable_snapshot_sequence_number_check: bool,
+) -> Result<RocksEngine> {
     let mut db_opt = db_opt.into_raw();
     if cf_opts.iter().all(|(name, _)| *name != CF_DEFAULT) {
         return Err(engine_traits::Error::Engine(
@@ -62,7 +78,7 @@ pub fn new_engine_opt(
 
         let db = DB::open_cf(db_opt, path, cf_opts.into_iter().collect()).map_err(r2e)?;
 
-        return Ok(RocksEngine::new(db));
+        return Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check));
     }
 
     db_opt.create_if_missing(false);
@@ -101,7 +117,7 @@ pub fn new_engine_opt(
     // orders. So just open db.
     if needed.len() == existed.len() && needed.len() == cfds.len() {
         let db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
-        return Ok(RocksEngine::new(db));
+        return Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check));
     }
 
     // Opens db.
@@ -115,7 +131,7 @@ pub fn new_engine_opt(
         db.drop_cf(cf).map_err(r2e)?;
     }
 
-    Ok(RocksEngine::new(db))
+    Ok(RocksEngine::new(db, enable_snapshot_sequence_number_check))
 }
 
 /// Turns "dynamic level size" off for the existing column family which was off
@@ -246,6 +262,11 @@ pub fn get_cf_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<
 /// Gets the amount of pending compaction bytes of given column family.
 pub fn get_cf_pending_compaction_bytes(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
+}
+
+/// Gets the base level of given column family.
+pub fn get_cf_base_level(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_BASE_LEVEL)
 }
 
 pub struct FixedSuffixSliceTransform {

@@ -194,8 +194,14 @@ impl KvEngineFactory {
             db_opts.add_event_listener(listener.clone());
         }
         let target_path = path.join(DEFAULT_ROCKSDB_SUB_DIR);
-        let kv_engine =
-            engine_rocks::util::new_engine_opt(target_path.to_str().unwrap(), db_opts, cf_opts);
+        let kv_engine = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            target_path.to_str().unwrap(),
+            db_opts,
+            cf_opts,
+            self.inner
+                .rocksdb_config
+                .enable_snapshot_sequence_number_check,
+        );
         if let Err(e) = &kv_engine {
             error!("failed to create kv engine"; "path" => %path.display(), "err" => ?e);
         }
@@ -224,8 +230,14 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
                 db_opts.add_event_listener(RocksPersistenceListener::new(listener));
             }
         }
-        let kv_engine =
-            engine_rocks::util::new_engine_opt(path.to_str().unwrap(), db_opts, cf_opts);
+        let kv_engine = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            path.to_str().unwrap(),
+            db_opts,
+            cf_opts,
+            self.inner
+                .rocksdb_config
+                .enable_snapshot_sequence_number_check,
+        );
         if let Err(e) = &kv_engine {
             error!("failed to create tablet"; "id" => ctx.id, "suffix" => ?ctx.suffix, "path" => %path.display(), "err" => ?e);
         } else if let Some(listener) = &self.inner.flow_listener {

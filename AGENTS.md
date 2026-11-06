@@ -107,6 +107,19 @@ make dev
 
 The `make dev` command should pass before submitting a PR.
 
+## Maintenance Guides
+
+The maintainer-oriented guide set lives under `doc/maintenance-guides/`.
+
+- For non-trivial changes in a covered subsystem, read
+  `doc/maintenance-guides/README.md`, then `repo-overview.md`, then the
+  matching subsystem guide before implementing or reviewing the change.
+- Treat these guides as required development and review context, not optional
+  afterthoughts.
+- If a change modifies ownership boundaries, startup or shutdown order, data or
+  metadata contracts, invariants, observability, or the recommended reading
+  map for a covered subsystem, update the matching guide in the same change.
+
 ## Pull Request Instructions
 
 ### PR title

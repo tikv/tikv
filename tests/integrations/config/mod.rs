@@ -24,7 +24,9 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
-use resource_control::config::{Config as ResourceControlConfig, PriorityCtlStrategy};
+use resource_control::config::{
+    Config as ResourceControlConfig, NoisyDetection, PriorityCtlStrategy,
+};
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -120,6 +122,7 @@ fn test_serde_custom_tikv_config() {
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: Some(ReadableDuration::secs(12)),
         end_point_max_concurrency: 10,
+        end_point_max_bg_concurrency: Some(3),
         end_point_perf_level: PerfLevel::EnableTime,
         snap_io_max_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
@@ -185,6 +188,7 @@ fn test_serde_custom_tikv_config() {
         capacity: ReadableSize(123),
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
+        raft_bcast_commit: true,
         raft_election_timeout_ticks: 12,
         raft_min_election_timeout_ticks: 14,
         raft_max_election_timeout_ticks: 20,
@@ -659,6 +663,7 @@ fn test_serde_custom_tikv_config() {
             enable_pipelined_write: false,
             enable_unordered_write: false,
             allow_concurrent_memtable_write: false,
+            enable_snapshot_sequence_number_check: cfg!(debug_assertions),
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(32),
             defaultcf: RaftDefaultCfConfig {
@@ -813,6 +818,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
+        cert_allowed_san: HashSet::default(),
         redact_info_log: log_wrappers::RedactOption::On,
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
@@ -854,6 +860,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
         memory_use_ratio: 0.3,
+        use_direct_io_for_ingest: true,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -869,6 +876,7 @@ fn test_serde_custom_tikv_config() {
             tombstones_percent_threshold: 30,
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
+            redundant_bytes_threshold: ReadableSize::mb(129),
             bottommost_level_force: false,
             mvcc_read_aware_enabled: true,
             mvcc_scan_threshold: 10000,
@@ -918,6 +926,22 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        noisy_detection: NoisyDetection::CurrentUsage,
+        bg_cpu_throttle_threshold: 60.0,
+        fg_cpu_throttle_threshold: 70.0,
+        bg_compaction_pressure_threshold: 70.0,
+        bg_write_io_ceiling: ReadableSize::gb(100),
+        bg_write_io_floor: ReadableSize::mb(10),
+        bg_egress_limit: ReadableSize::mb(50),
+        enable_fair_scheduling: false,
+        enable_read_admission_control: false,
+        enable_write_admission_control: false,
+        historical_usage_window_mins: 15,
+        baseline_burst_pct: 20.0,
+        admission_max_delayed_count: 10_000,
+        request_base_cost_micros: 40,
+        normal_control_interval: ReadableDuration::secs(20),
+        overloaded_control_interval: ReadableDuration::secs(3),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -934,6 +958,7 @@ fn test_serde_custom_tikv_config() {
 fn test_serde_default_config() {
     let cfg: TikvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TikvConfig::default());
+    assert_eq!(cfg.security.redact_info_log, log_wrappers::RedactOption::On);
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
     let cfg: TikvConfig = toml::from_str(&content).unwrap();
@@ -950,6 +975,13 @@ fn test_readpool_default_config() {
     let mut expected = TikvConfig::default();
     expected.readpool.unified.max_thread_count = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_compaction_readahead_default_config() {
+    let cfg = TikvConfig::default();
+    assert_eq!(cfg.rocksdb.compaction_readahead_size, ReadableSize::mb(2));
+    assert_eq!(cfg.raftdb.compaction_readahead_size, ReadableSize::mb(2));
 }
 
 #[test]

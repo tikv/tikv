@@ -1,13 +1,19 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, atomic::AtomicU32},
+    time::Duration,
+};
 
 use pd_client::RpcClient;
+use tikv_util::time::Instant;
 
 mod resource_group;
 pub use resource_group::{
-    MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
+    AdmissionDecision, CONTROL_TICK, CONTROL_TICK_OVERLOADED, DelaySlotGuard, HIGH_PRIORITY,
+    LEEWAY_FACTOR, LEEWAY_FRACTION, MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType,
+    ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
@@ -26,18 +32,27 @@ pub use channel::ResourceMetered;
 pub mod config;
 
 mod resource_limiter;
-pub use resource_limiter::ResourceLimiter;
+pub use resource_limiter::{ResourceLimiter, update_background_egress};
 use tikv_util::worker::Worker;
-use worker::{BACKGROUND_LIMIT_ADJUST_DURATION, GroupQuotaAdjustWorker};
+use worker::GroupQuotaAdjustWorker;
 
 mod metrics;
+pub use metrics::READ_POOL_CPU_VEC;
+mod score;
 pub mod worker;
+
+pub use score::{
+    ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
+    compute_resource_scores,
+};
 
 pub fn start_periodic_tasks(
     mgr: &Arc<ResourceGroupManager>,
     pd_client: Arc<RpcClient>,
     bg_worker: &Worker,
     io_bandwidth: u64,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
+    grpc_concurrency: usize,
 ) {
     let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client);
     // spawn a task to periodically update the minimal virtual time of all resource
@@ -53,11 +68,30 @@ pub fn start_periodic_tasks(
     });
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
-    let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
+    let mut worker = GroupQuotaAdjustWorker::new(
+        mgr.clone(),
+        io_bandwidth,
+        compaction_pending_bytes_ratio,
+        grpc_concurrency,
+    );
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
-    bg_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
+    // Woken every second and gated to the current tick, so neither tick has
+    // to divide the other: spawn_interval_task's period is fixed, and a wakeup
+    // at the shorter tick would round the longer one up to its next multiple.
+    // TICK_SLACK absorbs timer jitter, which would otherwise defer a tick that
+    // arrives a moment early by a whole wakeup.
+    const TICK_WAKEUP: Duration = Duration::from_secs(1);
+    const TICK_SLACK: Duration = Duration::from_millis(500);
+    let tick_mgr = mgr.clone();
+    let mut last_tick = Instant::now_coarse();
+    bg_worker.spawn_interval_task(TICK_WAKEUP, move || {
+        let now = Instant::now_coarse();
+        if now.saturating_duration_since(last_tick) + TICK_SLACK < tick_mgr.control_tick() {
+            return;
+        }
+        last_tick = now;
         worker.adjust_quota();
         // priority_worker.adjust();
     });

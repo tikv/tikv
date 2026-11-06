@@ -3,13 +3,14 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
-    cmp::{Ord, Ordering as CmpOrdering},
+    cmp::{self, Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
-        Bound::{Excluded, Included, Unbounded},
+        Bound::{Excluded, Unbounded},
     },
     mem,
     ops::{Deref, DerefMut},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -142,6 +143,52 @@ const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60)
 // Only when the count of regions which finish applying logs exceed
 // the threshold, can the raftstore supply service.
 const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
+// Keep store-to-peer broadcasts small enough to avoid monopolizing the
+// raftstore thread when a store has a large number of regions.
+const PEER_BROADCAST_REGION_BATCH_SIZE: usize = 4096;
+
+#[derive(Clone, Copy)]
+enum PeerBroadcast {
+    StoreUnreachable { store_id: u64 },
+    StoreResolved { store_id: u64, group_id: u64 },
+    UpdateReplicationMode,
+}
+
+impl PeerBroadcast {
+    fn to_peer_msg<EK: KvEngine>(self) -> PeerMsg<EK> {
+        match self {
+            PeerBroadcast::StoreUnreachable { store_id } => {
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
+            }
+            PeerBroadcast::StoreResolved { store_id, group_id } => {
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreResolved {
+                    store_id,
+                    group_id,
+                }))
+            }
+            PeerBroadcast::UpdateReplicationMode => PeerMsg::UpdateReplicationMode,
+        }
+    }
+
+    fn into_store_msg<EK: KvEngine>(self, region_ids: Arc<[u64]>, offset: usize) -> StoreMsg<EK> {
+        match self {
+            PeerBroadcast::StoreUnreachable { store_id } => StoreMsg::StoreUnreachableBatch {
+                store_id,
+                region_ids,
+                offset,
+            },
+            PeerBroadcast::StoreResolved { store_id, group_id } => StoreMsg::StoreResolvedBatch {
+                store_id,
+                group_id,
+                region_ids,
+                offset,
+            },
+            PeerBroadcast::UpdateReplicationMode => {
+                StoreMsg::UpdateReplicationModeBatch { region_ids, offset }
+            }
+        }
+    }
+}
 
 /// A trait that provide the meta information that can be accessed outside
 /// of raftstore.
@@ -259,6 +306,32 @@ impl StoreMeta {
             busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: Some(0),
         }
+    }
+
+    /// Release a completed source's dependency on a target snapshot.
+    pub(super) fn remove_destroyed_region_from_snapshot(
+        &mut self,
+        region_id: u64,
+        merged_by_target: bool,
+    ) -> Option<u64> {
+        let need_atomic = *self.destroyed_region_for_snap.get(&region_id)?;
+        let target_region_id = *self.targets_map.get(&region_id).unwrap();
+        let sources = self.atomic_snap_regions.get_mut(&target_region_id).unwrap();
+        let is_ready = *sources.get(&region_id).unwrap();
+        if need_atomic {
+            // Step1 can be queued behind the independent cleanup completion.
+            // A false readiness flag guarantees the target has not included
+            // this source in its snapshot's destroy_regions. Once ready, the
+            // source must finish through the atomic snapshot protocol instead.
+            assert!(
+                !merged_by_target && !is_ready,
+                "[region {}] should destroy with target region atomically",
+                region_id,
+            );
+        }
+        sources.remove(&region_id);
+        self.destroyed_region_for_snap.remove(&region_id);
+        Some(target_region_id)
     }
 
     #[inline]
@@ -475,24 +548,32 @@ where
         }
     }
 
-    fn report_unreachable(&self, store_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
-        });
+    fn send_peer_broadcast(&self, msg: PeerBroadcast, region_ids: &[u64]) {
+        for region_id in region_ids {
+            let _ = self.force_send(*region_id, msg.to_peer_msg());
+        }
+    }
+
+    fn schedule_peer_broadcast(&self, msg: PeerBroadcast, region_ids: Arc<[u64]>) {
+        if region_ids.is_empty() {
+            return;
+        }
+        let _ = self.force_send_control(msg.into_store_msg(region_ids, 0));
     }
 
     fn report_status_update(&self) {
-        self.broadcast_normal(|| PeerMsg::UpdateReplicationMode)
+        self.schedule_peer_broadcast(
+            PeerBroadcast::UpdateReplicationMode,
+            Arc::from(self.normal_ids()),
+        );
     }
 
     /// Broadcasts resolved result to all regions.
     pub fn report_resolved(&self, store_id: u64, group_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreResolved {
-                store_id,
-                group_id,
-            }))
-        })
+        self.schedule_peer_broadcast(
+            PeerBroadcast::StoreResolved { store_id, group_id },
+            Arc::from(self.normal_ids()),
+        );
     }
 
     pub fn register(&self, region_id: u64, mailbox: BasicMailbox<PeerFsm<EK, ER>>) {
@@ -544,6 +625,65 @@ impl Clone for PeerTickBatch {
         PeerTickBatch {
             ticks: vec![],
             wait_duration: self.wait_duration,
+        }
+    }
+}
+
+const EXTRA_MESSAGE_FULL_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct ExtraMessageFullLogKey {
+    target_store_id: u64,
+    msg_type: ExtraMessageType,
+}
+
+struct ExtraMessageFullLogState {
+    last_log_time: Instant,
+    suppressed_count: u64,
+}
+
+#[derive(Default)]
+pub struct ExtraMessageFullLogLimiter {
+    states: HashMap<ExtraMessageFullLogKey, ExtraMessageFullLogState>,
+}
+
+impl ExtraMessageFullLogLimiter {
+    pub fn record(&mut self, target_store_id: u64, msg_type: ExtraMessageType) -> Option<u64> {
+        self.record_at(target_store_id, msg_type, Instant::now())
+    }
+
+    fn record_at(
+        &mut self,
+        target_store_id: u64,
+        msg_type: ExtraMessageType,
+        now: Instant,
+    ) -> Option<u64> {
+        let key = ExtraMessageFullLogKey {
+            target_store_id,
+            msg_type,
+        };
+        match self.states.entry(key) {
+            HashMapEntry::Vacant(entry) => {
+                entry.insert(ExtraMessageFullLogState {
+                    last_log_time: now,
+                    suppressed_count: 0,
+                });
+                Some(0)
+            }
+            HashMapEntry::Occupied(mut entry) => {
+                let state = entry.get_mut();
+                if now.saturating_duration_since(state.last_log_time)
+                    < EXTRA_MESSAGE_FULL_LOG_INTERVAL
+                {
+                    state.suppressed_count = state.suppressed_count.saturating_add(1);
+                    return None;
+                }
+
+                let suppressed_count = state.suppressed_count;
+                state.last_log_time = now;
+                state.suppressed_count = 0;
+                Some(suppressed_count)
+            }
         }
     }
 }
@@ -618,6 +758,7 @@ where
     pub gc_safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
+    pub extra_message_full_log_limiter: ExtraMessageFullLogLimiter,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -841,15 +982,9 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
         let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        let mut region_ids = None;
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
-        // As the detail of one msg is not very useful when handling multiple messages,
-        // only format the msg detail in slow log when there is only one message.
-        let detail = if msgs.len() == 1 {
-            msgs.first().map(|m| format!("{:?}", m))
-        } else {
-            None
-        };
 
         for m in msgs.drain(..) {
             distribution[m.discriminant()] += 1;
@@ -881,7 +1016,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
                 StoreMsg::StoreUnreachable { store_id } => {
-                    self.on_store_unreachable(store_id);
+                    self.on_store_unreachable(store_id, &mut region_ids);
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -934,15 +1069,36 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
+                StoreMsg::StoreUnreachableBatch {
+                    store_id,
+                    region_ids,
+                    offset,
+                } => self.on_peer_broadcast(
+                    PeerBroadcast::StoreUnreachable { store_id },
+                    region_ids,
+                    offset,
+                ),
+                StoreMsg::StoreResolvedBatch {
+                    store_id,
+                    group_id,
+                    region_ids,
+                    offset,
+                } => self.on_peer_broadcast(
+                    PeerBroadcast::StoreResolved { store_id, group_id },
+                    region_ids,
+                    offset,
+                ),
+                StoreMsg::UpdateReplicationModeBatch { region_ids, offset } => {
+                    self.on_peer_broadcast(PeerBroadcast::UpdateReplicationMode, region_ids, offset)
+                }
             }
         }
         slow_log!(
             T timer,
-            "[store {}] handle {} store messages {:?}, detail: {:?}",
+            "[store {}] handle {} store messages {:?}",
             self.fsm.store.id,
             count,
             StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
-            detail,
         );
         self.ctx
             .raft_metrics
@@ -1096,6 +1252,19 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             "on_peer_collect_message_2",
             peer.peer_id() == 2,
             |_| unreachable!()
+        );
+
+        // Test hook: park *only* on the round whose pending Raft tick is about to start
+        // an election, so a test can let a follower campaign on its own timer and still
+        // control which messages that single round handles together.
+        fail_point!(
+            "pause_before_collect_peer_msg_on_election",
+            (self.poll_ctx.store_id() == 2 || self.poll_ctx.store_id() == 3)
+                && peer.region_id() == 1
+                && peer.peer.raft_group.raft.state == StateRole::Follower
+                && peer.peer.raft_group.raft.election_elapsed + 1
+                    >= peer.peer.raft_group.raft.randomized_election_timeout(),
+            |_| panic!("should not use return")
         );
 
         while self.peer_msg_buf.len() < self.messages_per_tick {
@@ -1303,6 +1472,10 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
     gc_safe_point: Arc<AtomicU64>,
+    // These timestamps feed fail-fast's recent real disk-progress vetoes for
+    // raft and kv respectively.
+    pub(crate) last_raft_append_success_at_millis: Arc<AtomicU64>,
+    pub(crate) last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1509,6 +1682,8 @@ where
                 self.router.clone(),
                 self.trans.clone(),
                 &self.cfg,
+                self.last_raft_append_success_at_millis.clone(),
+                self.last_kv_sync_success_at_millis.clone(),
             ))
         } else {
             None
@@ -1568,6 +1743,7 @@ where
             pending_latency_inspect: vec![],
             gc_safe_point: self.gc_safe_point.clone(),
             process_stat: None,
+            extra_message_full_log_limiter: ExtraMessageFullLogLimiter::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1623,6 +1799,8 @@ where
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
             gc_safe_point: self.gc_safe_point.clone(),
+            last_raft_append_success_at_millis: self.last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis: self.last_kv_sync_success_at_millis.clone(),
         }
     }
 }
@@ -1630,6 +1808,7 @@ where
 struct Workers<EK: KvEngine> {
     pd_worker: LazyWorker<PdTask<EK>>,
     background_worker: Worker,
+    fail_fast_check_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
     // background_workers. This is because the underlying compact_range call is a
@@ -1740,6 +1919,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
+        let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
@@ -1747,6 +1928,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut workers = Workers {
             pd_worker,
             background_worker,
+            fail_fast_check_worker: WorkerBuilder::new("fail-fast-check")
+                .thread_count(1)
+                .create(),
             cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD),
             snap_gen_worker,
             region_worker: Worker::new(REGION_WORKER_THREAD),
@@ -1846,6 +2030,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("disk-check-worker", disk_check_runner);
 
+        let separated_raft_mount_path =
+            sys_util::path_in_diff_mount_point(engines.kv.path(), engines.raft.get_engine_path());
+        let fail_fast_monitor = crate::store::FailFastMonitor::new(
+            cfg.clone(),
+            health_controller.clone(),
+            PathBuf::from(engines.raft.get_engine_path()),
+            separated_raft_mount_path.then(|| PathBuf::from(engines.kv.path())),
+            workers.fail_fast_check_worker.clone(),
+            last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
+        )?;
+        workers.on_stop_hooks.push(Box::new(move || {
+            fail_fast_monitor.stop();
+        }));
+
         self.store_writers.spawn(
             meta.get_id(),
             engines.raft.clone(),
@@ -1853,6 +2052,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             &self.router,
             &trans,
             &cfg,
+            last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
         )?;
 
         let mut builder = RaftPollerBuilder {
@@ -1880,6 +2081,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
+            last_raft_append_success_at_millis,
+            last_kv_sync_success_at_millis,
             node_start_time: self.node_start_time,
             gc_safe_point,
         };
@@ -1948,6 +2151,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let tag = format!("{}-{}", RAFTSTORE_THREAD, store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
+        // The nice value is per thread, so it has to be set by every raftstore
+        // poller itself rather than by the thread starting the system.
+        self.system.set_thread_priority(sys_util::HIGH_PRI);
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -1981,6 +2187,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 kv_engine: Some(raft_builder.engines.kv.clone()),
                 transfer: raft_builder.trans.clone(),
                 cfg: raft_builder.cfg.clone(),
+                last_raft_append_success_at_millis: raft_builder
+                    .last_raft_append_success_at_millis
+                    .clone(),
+                last_kv_sync_success_at_millis: raft_builder.last_kv_sync_success_at_millis.clone(),
             },
             self.store_writers.clone(),
             self.apply_router.router.clone(),
@@ -2010,9 +2220,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.pd_worker.start(pd_runner));
 
-        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
         self.workers = Some(workers);
         Ok(())
     }
@@ -2043,6 +2250,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
+        workers.fail_fast_check_worker.stop();
         if let Some(w) = workers.purge_worker {
             w.stop();
         }
@@ -3246,18 +3454,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
-        let start_key = data_key(start_key);
-        let end_key = data_end_key(end_key);
-
         let mut regions = vec![];
         {
             let meta = self.ctx.store_meta.lock().unwrap();
-            for (_, region_id) in meta
-                .region_ranges
-                .range((Excluded(start_key), Included(end_key)))
-            {
-                regions.push(*region_id);
-            }
+            // Include the Region containing `end_key`. Its boundaries may have
+            // changed since the caller looked up the range, e.g. by a merge, so
+            // it can extend past `end_key` while still covering changed data.
+            meta.search_region(start_key, end_key, |region| regions.push(region.get_id()));
         }
         for region_id in regions {
             let _ = self.ctx.router.send(
@@ -3267,7 +3470,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_store_unreachable(&mut self, store_id: u64) {
+    fn on_store_unreachable(&mut self, store_id: u64, region_ids: &mut Option<Arc<[u64]>>) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         let new_messages = MESSAGE_RECV_BY_STORE
@@ -3299,10 +3502,28 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        // It's possible to acquire the lock and only send notification to
-        // involved regions. However loop over all the regions can take a
-        // lot of time, which may block other operations.
-        self.ctx.router.report_unreachable(store_id);
+        let region_ids =
+            region_ids.get_or_insert_with(|| Arc::<[u64]>::from(self.ctx.router.normal_ids()));
+        self.ctx.router.schedule_peer_broadcast(
+            PeerBroadcast::StoreUnreachable { store_id },
+            Arc::clone(region_ids),
+        );
+    }
+
+    fn on_peer_broadcast(&mut self, msg: PeerBroadcast, region_ids: Arc<[u64]>, offset: usize) {
+        if offset >= region_ids.len() {
+            return;
+        }
+        let next_offset = cmp::min(offset + PEER_BROADCAST_REGION_BATCH_SIZE, region_ids.len());
+        self.ctx
+            .router
+            .send_peer_broadcast(msg, &region_ids[offset..next_offset]);
+        if next_offset < region_ids.len() {
+            let _ = self
+                .ctx
+                .router
+                .force_send_control(msg.into_store_msg(region_ids, next_offset));
+        }
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
@@ -3450,10 +3671,116 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, time::Duration};
 
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
+    use kvproto::raft_serverpb::ExtraMessageType;
+
+    use super::{ExtraMessageFullLogLimiter, StoreMeta};
+
+    fn snapshot_source_meta(is_ready: bool) -> StoreMeta {
+        let mut meta = StoreMeta::new(0);
+        meta.targets_map.insert(1, 2);
+        meta.destroyed_region_for_snap.insert(1, true);
+        meta.atomic_snap_regions
+            .entry(2)
+            .or_default()
+            .insert(1, is_ready);
+        meta
+    }
+
+    #[test]
+    fn test_remove_destroyed_region_from_snapshot() {
+        let mut meta = snapshot_source_meta(false);
+        // Another source can already be ready for atomic destruction. Removing
+        // the independently destroyed source must preserve that dependency.
+        meta.atomic_snap_regions
+            .get_mut(&2)
+            .unwrap()
+            .insert(3, true);
+        assert_eq!(
+            meta.remove_destroyed_region_from_snapshot(1, false),
+            Some(2)
+        );
+        assert!(!meta.destroyed_region_for_snap.contains_key(&1));
+        assert_eq!(meta.atomic_snap_regions[&2].len(), 1);
+        assert_eq!(meta.atomic_snap_regions[&2].get(&3), Some(&true));
+        assert_eq!(meta.remove_destroyed_region_from_snapshot(1, false), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_ready_source() {
+        let mut meta = snapshot_source_meta(true);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_atomic_cleanup() {
+        let mut meta = snapshot_source_meta(false);
+        meta.remove_destroyed_region_from_snapshot(1, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_destroyed_region_from_snapshot_requires_source_dependency() {
+        let mut meta = snapshot_source_meta(false);
+        meta.atomic_snap_regions.get_mut(&2).unwrap().remove(&1);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
+
+    #[test]
+    fn test_extra_message_full_log_limiter() {
+        let mut limiter = ExtraMessageFullLogLimiter::default();
+        let now = std::time::Instant::now();
+
+        assert_eq!(
+            limiter.record_at(2, ExtraMessageType::MsgHibernateRequest, now),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_secs(1)
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                3,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateResponse,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+    }
 
     #[test]
     fn test_calc_region_declined_bytes() {

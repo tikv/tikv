@@ -79,7 +79,7 @@ use super::{
     worker::BucketStatsInfo,
 };
 use crate::{
-    Error, Result,
+    DiscardReason, Error, Result,
     coprocessor::{
         CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
         TransferLeaderCustomContext,
@@ -117,6 +117,42 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
+
+fn extra_message_type_label(msg_type: ExtraMessageType) -> &'static str {
+    match msg_type {
+        ExtraMessageType::MsgRegionWakeUp => "region_wake_up",
+        ExtraMessageType::MsgWantRollbackMerge => "want_rollback_merge",
+        ExtraMessageType::MsgCheckStalePeer => "check_stale_peer",
+        ExtraMessageType::MsgCheckStalePeerResponse => "check_stale_peer_response",
+        ExtraMessageType::MsgHibernateRequest => "hibernate_request",
+        ExtraMessageType::MsgHibernateResponse => "hibernate_response",
+        ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+            "reject_raft_log_caused_by_memory_usage"
+        }
+        ExtraMessageType::MsgAvailabilityRequest => "availability_request",
+        ExtraMessageType::MsgAvailabilityResponse => "availability_response",
+        ExtraMessageType::MsgVoterReplicatedIndexRequest => "voter_replicated_index_request",
+        ExtraMessageType::MsgVoterReplicatedIndexResponse => "voter_replicated_index_response",
+        ExtraMessageType::MsgGcPeerRequest => "gc_peer_request",
+        ExtraMessageType::MsgGcPeerResponse => "gc_peer_response",
+        ExtraMessageType::MsgFlushMemtable => "flush_memtable",
+        ExtraMessageType::MsgRefreshBuckets => "refresh_buckets",
+        ExtraMessageType::MsgSnapGenPrecheckRequest => "snap_gen_precheck_request",
+        ExtraMessageType::MsgSnapGenPrecheckResponse => "snap_gen_precheck_response",
+        ExtraMessageType::MsgPreLoadRegionRequest => "pre_load_region_request",
+        ExtraMessageType::MsgPreLoadRegionResponse => "pre_load_region_response",
+    }
+}
+
+fn extra_message_send_failure_reason(err: &Error) -> &'static str {
+    match err {
+        Error::Transport(DiscardReason::Full) => "full",
+        Error::Transport(DiscardReason::Disconnected) => "disconnected",
+        Error::Transport(DiscardReason::Paused) => "paused",
+        Error::Transport(DiscardReason::Filtered) => "filtered",
+        _ => "other",
+    }
+}
 
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -997,7 +1033,7 @@ where
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: !cfg.unsafe_disable_check_quorum,
-            skip_bcast_commit: true,
+            skip_bcast_commit: !cfg.raft_bcast_commit,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
@@ -1748,9 +1784,20 @@ where
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
 
-        // Update leader info
-        self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+        // Test hook: a region update is the point where the raw Raft `leader_id` used
+        // to be published into the resolved-ts cache. While an election is still
+        // pending, `leader_id` is already `INVALID_ID` here even though the cache holds
+        // the old leader, so the tuple `consume_leader_info` compares would be poisoned
+        // without any published leadership change. Read-only: it decides when the test
+        // may inspect the window, it never writes state.
+        fail_point!(
+            "set_region_publishes_raw_leader_id",
+            self.leader_id() == raft::INVALID_ID
+                && self.read_progress.dump_leader_info().0.get_peer_id() != raft::INVALID_ID,
+            |_| {}
+        );
+
+        self.read_progress.update_region(self.region());
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
@@ -2413,6 +2460,11 @@ where
     fn on_role_changed<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            // A pending pre-transfer request belongs to the previous SoftState.
+            // In particular, a follower can learn about a new leader without
+            // changing its role. Do not let it ACK the old request to the new
+            // leader.
+            self.transfer_leader_state.reset_transferee_state();
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -2448,8 +2500,6 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
-                    // Exit entry cache warmup state when the peer becomes leader.
-                    self.transfer_leader_state.cache_warmup_state = None;
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -2813,7 +2863,7 @@ where
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
             msg.wait_data = false;
-            self.send_extra_message(msg, &mut ctx.trans, &leader);
+            self.send_extra_message(msg, ctx, &leader);
             info!(
                 "notify leader the peer is available";
                 "region_id" => self.region().get_id(),
@@ -3251,9 +3301,16 @@ where
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
-                // Urgent requests are flushed, make it lazy again.
-                self.raft_group.skip_bcast_commit(true);
+                // Urgent requests are flushed.
                 self.last_urgent_proposal_idx = u64::MAX;
+            }
+            if self.last_urgent_proposal_idx == u64::MAX {
+                // No urgent proposal is pending, so follow the configured
+                // policy. This runs on every batch of committed entries so a
+                // hot-reloaded `raft-bcast-commit` reaches existing leaders
+                // instead of only peers created after the change.
+                self.raft_group
+                    .skip_bcast_commit(!ctx.cfg.raft_bcast_commit);
             }
             let cbs = if !self.proposals.is_empty() {
                 let current_term = self.term();
@@ -4892,7 +4949,8 @@ where
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state
+            .set_pending_message(msg, deadline);
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -4905,6 +4963,14 @@ where
             return false;
         }
 
+        let current_leader = self.leader_id();
+        let current_term = self.term();
+        if self
+            .transfer_leader_state
+            .reset_if_stale(current_leader, current_term)
+        {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
@@ -5901,7 +5967,7 @@ where
     pub fn send_extra_message<T: Transport>(
         &self,
         msg: ExtraMessage,
-        trans: &mut T,
+        ctx: &mut PollContext<EK, ER, T>,
         to: &metapb::Peer,
     ) {
         let mut send_msg = self.prepare_raft_message();
@@ -5914,15 +5980,39 @@ where
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
-        if let Err(e) = trans.send(send_msg) {
-            warn!(
-                "failed to send extra message";
-                "err" => ?e,
-                "type" => ?ty,
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target" => ?to,
-            );
+        if let Err(e) = ctx.trans.send(send_msg) {
+            STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC
+                .with_label_values(&[
+                    extra_message_type_label(ty),
+                    extra_message_send_failure_reason(&e),
+                ])
+                .inc();
+            if matches!(&e, Error::Transport(DiscardReason::Full)) {
+                if let Some(suppressed_count) = ctx
+                    .extra_message_full_log_limiter
+                    .record(to.get_store_id(), ty)
+                {
+                    warn!(
+                        "failed to send extra message";
+                        "err" => ?e,
+                        "type" => ?ty,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "target" => ?to,
+                        "target_store_id" => to.get_store_id(),
+                        "suppressed_count" => suppressed_count,
+                    );
+                }
+            } else {
+                warn!(
+                    "failed to send extra message";
+                    "err" => ?e,
+                    "type" => ?ty,
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target" => ?to,
+                );
+            }
         }
     }
 
@@ -5997,7 +6087,7 @@ where
     ) {
         let mut msg = ExtraMessage::default();
         msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-        self.send_extra_message(msg, &mut ctx.trans, peer);
+        self.send_extra_message(msg, ctx, peer);
     }
 
     pub fn bcast_check_stale_peer_message<T: Transport>(
@@ -6022,7 +6112,7 @@ where
             }
             let mut extra_msg = ExtraMessage::default();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
-            self.send_extra_message(extra_msg, &mut ctx.trans, peer);
+            self.send_extra_message(extra_msg, ctx, peer);
         }
     }
 
@@ -6044,7 +6134,7 @@ where
     ) {
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckRequest);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_snap_gen_precheck_response<T: Transport>(
@@ -6056,7 +6146,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckResponse);
         extra_msg.set_snap_gen_precheck_passed(passed);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_want_rollback_merge<T: Transport>(
@@ -6079,7 +6169,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_index(premerge_commit);
-        self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
+        self.send_extra_message(extra_msg, ctx, &to_peer);
     }
 
     pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
@@ -6491,6 +6581,58 @@ pub struct TransferLeaderState {
     pub cache_warmup_state: Option<CacheWarmupState>,
 }
 
+impl TransferLeaderState {
+    /// Discards transferee state created for a previous leader or term.
+    ///
+    /// The peer FSM checks pending messages before processing Ready, so the
+    /// SoftState cleanup may not have run when this check is made.
+    /// A term change with the same leader ID may not produce a new SoftState,
+    /// so the leader ID alone cannot establish that the request is current.
+    /// This check must also happen before deadline evaluation: an expired
+    /// request from a previous leader or term must be discarded, not ACKed to
+    /// the current leader.
+    pub fn reset_if_stale(&mut self, current_leader: u64, current_term: u64) -> bool {
+        let is_stale = match &self.transfer_leader_msg {
+            Some((msg, _)) => {
+                msg.get_from() != current_leader || msg.get_log_term() != current_term
+            }
+            None => false,
+        };
+        if is_stale {
+            self.reset_transferee_state();
+        }
+        is_stale
+    }
+
+    /// Clears state created while this peer was a leader transferee.
+    ///
+    /// The state is valid only while the leader ID and term that accepted the
+    /// pre-transfer request remain current.
+    pub fn reset_transferee_state(&mut self) {
+        self.transfer_leader_msg = None;
+        self.cache_warmup_state = None;
+    }
+
+    /// Records a pre-transfer-leader message without extending the deadline
+    /// when the leader retries the same transfer attempt. A different sender
+    /// or leader term starts a new attempt.
+    ///
+    /// The preserved deadline may already have elapsed. Callers immediately
+    /// check the pending message: a request from the current leader receives
+    /// its timeout ACK, while a stale request is discarded first.
+    pub fn set_pending_message(&mut self, msg: &eraftpb::Message, deadline: Instant) {
+        let is_retry = self
+            .transfer_leader_msg
+            .as_ref()
+            .is_some_and(|(pending, _)| {
+                pending.get_from() == msg.get_from() && pending.get_log_term() == msg.get_log_term()
+            });
+        if !is_retry {
+            self.transfer_leader_msg = Some((msg.clone(), deadline));
+        }
+    }
+}
+
 mod memtrace {
     use std::mem;
 
@@ -6537,6 +6679,71 @@ mod tests {
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_pending_transfer_leader_message_deadline() {
+        let mut state = TransferLeaderState::default();
+        let first_deadline = Instant::now() + Duration::from_secs(1);
+        let mut first = eraftpb::Message::default();
+        first.set_from(1);
+        first.set_log_term(1);
+        first.set_index(10);
+        state.set_pending_message(&first, first_deadline);
+
+        // A retry of the same transfer attempt must preserve the first message
+        // and deadline even if fields such as the cache warmup index change.
+        let retry_deadline = first_deadline + Duration::from_secs(1);
+        let mut retry = first.clone();
+        retry.set_index(20);
+        state.set_pending_message(&retry, retry_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 10);
+        assert_eq!(*deadline, first_deadline);
+
+        // A request from a new leader term is a new attempt and gets its own
+        // message and deadline.
+        let next_deadline = retry_deadline + Duration::from_secs(1);
+        let mut next = retry;
+        next.set_log_term(2);
+        state.set_pending_message(&next, next_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 20);
+        assert_eq!(pending.get_log_term(), 2);
+        assert_eq!(*deadline, next_deadline);
+    }
+
+    #[test]
+    fn test_reset_transfer_leader_transferee_state() {
+        let mut msg = eraftpb::Message::default();
+        msg.set_from(1);
+        msg.set_log_term(5);
+        let mut state = TransferLeaderState {
+            leader_transferee: 10,
+            transfer_leader_msg: Some((msg.clone(), Instant::now() - Duration::from_secs(1))),
+            cache_warmup_state: Some(CacheWarmupState::new(
+                1,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )),
+        };
+
+        // Even an expired request must not be ACKed to a different leader.
+        assert!(state.reset_if_stale(2, 5));
+
+        // The leader-side state is handled separately when Ready is processed.
+        assert_eq!(state.leader_transferee, 10);
+        assert!(state.transfer_leader_msg.is_none());
+        assert!(state.cache_warmup_state.is_none());
+
+        state.transfer_leader_msg = Some((msg.clone(), Instant::now() - Duration::from_secs(1)));
+        assert!(state.reset_if_stale(1, 6));
+        assert!(state.transfer_leader_msg.is_none());
+
+        state.transfer_leader_msg = Some((msg, Instant::now() - Duration::from_secs(1)));
+        assert!(!state.reset_if_stale(1, 5));
+        assert!(state.transfer_leader_msg.is_some());
+    }
 
     #[test]
     fn test_sync_log() {

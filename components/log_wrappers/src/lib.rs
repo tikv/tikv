@@ -68,8 +68,8 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
 /// data.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum RedactOption {
-    #[default]
     Off,
+    #[default]
     On,
     Marker,
 }
@@ -308,7 +308,7 @@ mod tests {
             redact_info_log: RedactOption,
         }
 
-        assert_eq!(RedactOption::from_str("").unwrap(), RedactOption::Off);
+        assert_eq!(RedactOption::from_str("").unwrap(), RedactOption::On);
         assert_eq!(RedactOption::from_str("on").unwrap(), RedactOption::On);
         assert_eq!(RedactOption::from_str("off").unwrap(), RedactOption::Off);
         assert_eq!(
@@ -323,8 +323,8 @@ mod tests {
 
         let mut template = r#""#;
         let mut test_config: TestRedactInfo = toml::from_str(template).unwrap();
-        assert_eq!(test_config.redact_info_log, RedactOption::default());
-        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
+        assert_eq!(test_config.redact_info_log, RedactOption::On);
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
 
         template = r#"
             redact-info-log = true
@@ -378,12 +378,12 @@ mod tests {
     fn test_redact_info_log() {
         let buffer = crate::test_util::SyncLoggerBuffer::new();
         let logger = buffer.build_logger();
-        set_redact_info_log(RedactOption::On);
+        set_redact_info_log(RedactOption::default());
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
 
         buffer.clear();
-        set_redact_info_log(RedactOption::default());
+        set_redact_info_log(RedactOption::Off);
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
 

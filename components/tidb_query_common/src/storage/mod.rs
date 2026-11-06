@@ -68,6 +68,15 @@ pub trait Storage: Send {
     fn met_uncacheable_data(&self) -> Option<bool>;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
+
+    /// Returns the cumulative number of bytes scanned so far, counting the
+    /// key and value of every returned entry. Unlike `collect_statistics`,
+    /// this is a non-draining read: the total keeps growing monotonically
+    /// across calls.
+    ///
+    /// How the key bytes are measured (e.g. raw or encoded form) is up to the
+    /// implementation.
+    fn scanned_bytes(&self) -> usize;
 }
 
 impl<T: Storage + ?Sized> Storage for Box<T> {
@@ -102,6 +111,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
         (**self).collect_statistics(dest);
+    }
+
+    fn scanned_bytes(&self) -> usize {
+        (**self).scanned_bytes()
     }
 }
 

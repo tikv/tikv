@@ -2,19 +2,20 @@
 # The members of 'sig-community-*' are synced from memberships defined in repository: https://github.com/tikv/community.
 aliases:
   sig-critical-approvers-config-components:
-    - BenMeadowcroft
+    - likidu
     - yudongusa
     - zhangjinpeng87
   sig-critical-approvers-config-src:
-    - BenMeadowcroft
+    - likidu
     - cfzjywxk
     - yudongusa
     - zhangjinpeng87
   sig-critical-approvers-config-cdc:
-    - BenMeadowcroft
-    - flowbehappy
+    - likidu
+    - nongfushanquan
     - yudongusa
   sig-community-reviewers:
+    - 0xPoe
     - 3AceShowHand
     - 3pointer
     - CalvinNeo
@@ -25,7 +26,6 @@ aliases:
     - Leavrth
     - Mossaka
     - MrCroxx
-    - Rustin170506
     - Xuanwo
     - ethercflow
     - fredchenbj
@@ -43,6 +43,8 @@ aliases:
     - nolouch
     - rleungx
     - tier-cap
+    - wfxr
+    - winoros
     - wjhuang2016
     - wshwsh12
   sig-community-approvers:

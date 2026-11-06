@@ -294,22 +294,28 @@ impl<L: LockManager> LockWaitQueues<L> {
         lock_wait_entry: Box<LockWaitEntry>,
         key_state: DashMapEntry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
     ) {
+        fail_point!("lock_wait_queue_before_canceled_error");
+        let latest_lock_info = match &key_state {
+            DashMapEntry::Occupied(entry) => {
+                let info = &entry.get().current_lock;
+                (!info.key.is_empty()).then(|| info.clone())
+            }
+            DashMapEntry::Vacant(_) => None,
+        };
+        // Cancellation must acquire this shard lock before sending the error.
+        // Release both occupied and vacant guards before waiting for it.
+        drop(key_state);
         let mut err = lock_wait_entry.req_states.get_external_error();
 
-        if let DashMapEntry::Occupied(key_state_entry) = key_state {
-            if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
-            )))) = &mut err
-            {
-                // Update the lock info in the error to the latest if possible.
-                let latest_lock_info = &key_state_entry.get().current_lock;
-                if !latest_lock_info.key.is_empty() {
-                    *lock_info = latest_lock_info.clone();
-                }
+        if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+            MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
+        )))) = &mut err
+        {
+            // Update the error with the lock info observed before releasing the shard.
+            if let Some(latest_lock_info) = latest_lock_info {
+                *lock_info = latest_lock_info;
             }
         }
-
-        // `key_state` is dropped here, so the mutex in the queue map is released.
 
         let cb = lock_wait_entry.key_cb.unwrap().into_inner();
         cb(Err(err.into()), true);

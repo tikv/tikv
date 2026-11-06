@@ -24,10 +24,11 @@ use causal_ts::Config as CausalTsConfig;
 pub use configurable::{ConfigRes, ConfigurableDb, loop_registry};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger,
-    RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory, RocksCfOptions,
-    RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics, RocksTitanDbOptions,
-    RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger, RangePropertiesCollectorFactory,
+    RawMvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+    RocksEventListener, RocksStatistics, RocksTitanDbOptions, RocksdbLogger,
+    TtlPropertiesCollectorFactory,
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
     properties::MvccPropertiesCollectorFactory,
@@ -918,6 +919,9 @@ impl DefaultCfConfig {
                         )
                         .unwrap();
                 }
+                ApiVersion::V3 => {
+                    unreachable!("API V3 is not supported by this TiKV build")
+                }
             }
         } else {
             match api_version {
@@ -947,6 +951,9 @@ impl DefaultCfConfig {
                             RawCompactionFilterFactory,
                         )
                         .unwrap();
+                }
+                ApiVersion::V3 => {
+                    unreachable!("API V3 is not supported by this TiKV build")
                 }
             }
         }
@@ -1356,6 +1363,9 @@ pub struct DbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: Option<ReadableDuration>,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1411,6 +1421,11 @@ pub struct DbConfig {
     pub write_buffer_flush_oldest_first: bool,
     #[online_config(skip)]
     pub track_and_verify_wals_in_manifest: bool,
+    /// Enables TiKV's defense-in-depth check that RocksDB snapshot sequence
+    /// numbers never regress. The build-dependent default is defined by
+    /// `DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK`.
+    #[online_config(skip)]
+    pub enable_snapshot_sequence_number_check: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1452,7 +1467,7 @@ impl Default for DbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: None,
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
@@ -1476,6 +1491,7 @@ impl Default for DbConfig {
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
             track_and_verify_wals_in_manifest: true,
+            enable_snapshot_sequence_number_check: DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1873,6 +1889,9 @@ impl DbConfig {
             .with_label_values(&["rocksdb", "track_and_verify_wals_in_manifest"])
             .set(self.track_and_verify_wals_in_manifest.into());
         CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "enable_snapshot_sequence_number_check"])
+            .set(self.enable_snapshot_sequence_number_check.into());
+        CONFIG_ROCKSDB_DB_GAUGE
             .with_label_values(&["rocksdb", "paranoid_checks"])
             .set(self.paranoid_checks.unwrap_or_default().into());
     }
@@ -2017,6 +2036,9 @@ pub struct RaftDbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2050,6 +2072,10 @@ pub struct RaftDbConfig {
     pub enable_unordered_write: bool,
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: bool,
+    /// Enables TiKV's defense-in-depth check that RocksDB snapshot sequence
+    /// numbers never regress.
+    #[online_config(skip)]
+    pub enable_snapshot_sequence_number_check: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     #[online_config(submodule)]
@@ -2082,7 +2108,7 @@ impl Default for RaftDbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
@@ -2094,6 +2120,7 @@ impl Default for RaftDbConfig {
             enable_pipelined_write: true,
             enable_unordered_write: false,
             allow_concurrent_memtable_write: true,
+            enable_snapshot_sequence_number_check: DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
@@ -3053,6 +3080,9 @@ pub struct BackupConfig {
     // Do not expose this config to user.
     // It used to debug s3 503 error.
     pub s3_multi_part_size: ReadableSize,
+    /// Enable GCP v2 external storage backend for full backup.
+    #[serde(alias = "gcp_v2_enable")]
+    pub gcp_v2_enable: bool,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -3102,6 +3132,7 @@ impl Default for BackupConfig {
             io_thread_size: 2,
             // 5MB is the minimum part size that S3 allowed.
             s3_multi_part_size: ReadableSize::mb(5),
+            gcp_v2_enable: true,
             hadoop: Default::default(),
         }
     }
@@ -3119,6 +3150,10 @@ pub struct BackupStreamConfig {
     pub num_threads: usize,
     #[online_config(skip)]
     pub enable: bool,
+    /// Enable GCP v2 external storage backend for log-backup.
+    #[online_config(skip)]
+    #[serde(alias = "gcp_v2_enable")]
+    pub gcp_v2_enable: bool,
     #[online_config(skip)]
     pub temp_path: String,
 
@@ -3199,6 +3234,7 @@ impl Default for BackupStreamConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
             enable: true,
+            gcp_v2_enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             file_size_limit,
@@ -3842,6 +3878,24 @@ impl TikvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
+    /// Returns the read pools whose background reads `bg-egress-limit` does
+    /// not throttle. Background reads pay egress debt at the admission gate of
+    /// the unified read pool, which the legacy (non-unified) read pools do not
+    /// have, so the limit does not apply to modules that use them.
+    fn bg_egress_limit_unenforced_read_pools(&self) -> Vec<&'static str> {
+        if !self.resource_control.enabled || self.resource_control.bg_egress_limit.0 == 0 {
+            return vec![];
+        }
+        let mut pools = vec![];
+        if !self.readpool.storage.use_unified_pool() {
+            pools.push("storage");
+        }
+        if !self.readpool.coprocessor.use_unified_pool() {
+            pools.push("coprocessor");
+        }
+        pools
+    }
+
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
         if self.cfg_path.is_empty() {
@@ -4158,6 +4212,13 @@ impl TikvConfig {
         // Validate sub-components.
         self.log.validate()?;
         self.readpool.validate()?;
+        for pool in self.bg_egress_limit_unenforced_read_pools() {
+            warn!(
+                "resource-control.bg-egress-limit does not apply to background reads served by \
+                the legacy read pool, set use-unified-pool of this read pool to true to enforce it";
+                "readpool" => pool,
+            );
+        }
         self.storage.validate()?;
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
@@ -4172,6 +4233,7 @@ impl TikvConfig {
             self.coprocessor.region_bucket_size,
             self.storage.engine == EngineType::RaftKv2,
         )?;
+        self.split.validate()?;
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
@@ -4184,6 +4246,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.resource_control.validate()?;
 
         // Disable in memory engine if api version is V1ttl or V2.
         if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
@@ -5253,6 +5316,7 @@ mod tests {
     };
 
     use api_version::{ApiV1, KvFormat};
+    use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager, TSOProvider};
     use engine_rocks::raw::LRUCacheOptions;
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
@@ -5260,6 +5324,7 @@ mod tests {
     use in_memory_engine::config::InMemoryEngineConfigManager;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
+    use pd_client::PdFuture;
     use raft_log_engine::RaftLogEngine;
     use raftstore::{
         coprocessor::{
@@ -5283,6 +5348,7 @@ mod tests {
         sys::SysQuota,
         worker::{ReceiverWrapper, dummy_scheduler},
     };
+    use txn_types::TimeStamp;
 
     use super::*;
     use crate::{
@@ -5294,6 +5360,31 @@ mod tests {
             txn::flow_controller::{EngineFlowController, FlowController},
         },
     };
+
+    #[test]
+    fn test_snapshot_sequence_number_check_config() {
+        let default = TikvConfig::default();
+        assert_eq!(
+            default.rocksdb.enable_snapshot_sequence_number_check,
+            cfg!(debug_assertions)
+        );
+        assert_eq!(
+            default.raftdb.enable_snapshot_sequence_number_check,
+            cfg!(debug_assertions)
+        );
+
+        let config: TikvConfig = toml::from_str(
+            r#"
+                [rocksdb]
+                enable-snapshot-sequence-number-check = false
+                [raftdb]
+                enable-snapshot-sequence-number-check = true
+            "#,
+        )
+        .unwrap();
+        assert!(!config.rocksdb.enable_snapshot_sequence_number_check);
+        assert!(config.raftdb.enable_snapshot_sequence_number_check);
+    }
 
     fn create_mock_raftdb(path: &Path) {
         fs::create_dir_all(path).unwrap();
@@ -5897,7 +5988,7 @@ mod tests {
     #[test]
     fn test_to_config_change() {
         assert_eq!(
-            to_change_value("10h", &ConfigValue::Duration(0)).unwrap(),
+            to_change_value("10h", &ConfigValue::Duration(Duration::ZERO)).unwrap(),
             ConfigValue::from(ReadableDuration::hours(10))
         );
         assert_eq!(
@@ -5963,6 +6054,13 @@ mod tests {
             change.insert(name, value);
             to_config_change(change).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_to_config_change_preserves_sub_millisecond_duration() {
+        let value = to_change_value("200us", &ConfigValue::from(ReadableDuration::ZERO)).unwrap();
+
+        assert_eq!(ReadableDuration::from(value), ReadableDuration::micros(200));
     }
 
     #[test]
@@ -6073,6 +6171,59 @@ mod tests {
             )),
         );
         (storage, cfg_controller, receiver, flow_controller)
+    }
+
+    #[test]
+    fn test_online_max_ts_drift_dispatch_uses_millisecond_tso_boundary() {
+        struct FixedTso(TimeStamp);
+
+        impl TSOProvider for FixedTso {
+            fn get_tso(&self) -> PdFuture<TimeStamp> {
+                let tso = self.0;
+                Box::pin(async move { Ok(tso) })
+            }
+        }
+
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.storage.max_ts.action_on_invalid_update = "error".to_owned();
+        cfg.storage.max_ts.cache_sync_interval = ReadableDuration::secs(14);
+        cfg.validate().unwrap();
+        let cache_sync_interval = cfg.storage.max_ts.cache_sync_interval.0;
+        let initial_drift = cfg.storage.max_ts.max_drift.0;
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
+        let base = TimeStamp::compose(100_000, 0);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            1.into(),
+            cache_sync_interval,
+            ActionOnInvalidMaxTs::Error,
+            Some(Arc::new(FixedTso(base))),
+            initial_drift,
+        );
+        let (scheduler, _receiver) = dummy_scheduler();
+        cfg_controller.register(
+            Module::Storage,
+            Box::new(StorageConfigManger::new(
+                storage.get_engine().get_rocksdb(),
+                scheduler,
+                flow_controller,
+                storage.get_scheduler(),
+                concurrency_manager.clone(),
+            )),
+        );
+
+        cfg_controller
+            .update_config("storage.max-ts.max-drift", "15s1us")
+            .unwrap();
+        concurrency_manager.set_max_ts_limit(base);
+
+        concurrency_manager
+            .update_max_ts(TimeStamp::compose(115_000, 0), "test")
+            .unwrap();
+        assert!(
+            concurrency_manager
+                .update_max_ts(TimeStamp::compose(115_001, 0), "test")
+                .is_err()
+        );
     }
 
     struct MockCfgManager(Box<dyn Fn(ConfigChange) + Send + Sync>);
@@ -6994,6 +7145,36 @@ mod tests {
     }
 
     #[test]
+    fn test_bg_egress_limit_unenforced_read_pools() {
+        let mut cfg = TikvConfig::default();
+        // Disabled by default, nothing to report.
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
+
+        // Enabled with the default unified read pools: enforced everywhere.
+        cfg.resource_control.bg_egress_limit = ReadableSize::mb(50);
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
+
+        // A module explicitly on the legacy read pool is reported.
+        cfg.readpool.storage.use_unified_pool = Some(false);
+        assert_eq!(cfg.bg_egress_limit_unenforced_read_pools(), vec!["storage"]);
+
+        // Customizing a module's read pool without setting use-unified-pool
+        // falls back to the legacy read pool, which is reported too.
+        cfg.readpool.coprocessor.high_concurrency += 1;
+        assert_eq!(
+            cfg.bg_egress_limit_unenforced_read_pools(),
+            vec!["storage", "coprocessor"]
+        );
+
+        // Only a warning: the configuration is still valid.
+        cfg.validate().unwrap();
+
+        // Nothing to report when resource control is disabled.
+        cfg.resource_control.enabled = false;
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
+    }
+
+    #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TikvConfig::default();
         cfg.validate().unwrap();
@@ -7449,15 +7630,20 @@ mod tests {
         cfg.server.grpc_raft_conn_num = default_cfg.server.grpc_raft_conn_num;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
         cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
+        cfg.server.end_point_max_bg_concurrency = default_cfg.server.end_point_max_bg_concurrency;
         cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
         cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
         cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
         cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;
         cfg.rocksdb.max_sub_compactions = default_cfg.rocksdb.max_sub_compactions;
+        cfg.rocksdb.enable_snapshot_sequence_number_check =
+            default_cfg.rocksdb.enable_snapshot_sequence_number_check;
         cfg.rocksdb.titan.max_background_gc = default_cfg.rocksdb.titan.max_background_gc;
         cfg.raftdb.max_background_jobs = default_cfg.raftdb.max_background_jobs;
         cfg.raftdb.max_background_flushes = default_cfg.raftdb.max_background_flushes;
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
+        cfg.raftdb.enable_snapshot_sequence_number_check =
+            default_cfg.raftdb.enable_snapshot_sequence_number_check;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
@@ -7642,6 +7828,32 @@ mod tests {
         assert!(!default_cfg.coprocessor.enable_region_bucket());
         default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
+    }
+
+    #[test]
+    fn test_split_config_is_validated_on_startup() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.split.qps_threshold = Some(10);
+        cfg.split.sample_num = 10;
+
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("sample_num should be less than qps_threshold"));
+    }
+
+    #[test]
+    fn test_split_config_is_validated_on_online_update() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.split.qps_threshold = Some(10);
+        cfg.split.sample_num = 1;
+        cfg.validate().unwrap();
+
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let err = cfg_controller
+            .update_config("split.sample-num", "10")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sample_num should be less than qps_threshold"));
+        assert_eq!(cfg_controller.get_current().split, cfg.split);
     }
 
     #[test]

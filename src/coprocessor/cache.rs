@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 use kvproto::coprocessor::Response;
-use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 
 use crate::{
@@ -28,12 +27,12 @@ impl CachedRequestHandler {
 
 #[async_trait]
 impl RequestHandler for CachedRequestHandler {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
+    async fn handle_request(&mut self) -> Result<HandlerOutput> {
         let mut resp = Response::default();
         resp.set_is_cache_hit(true);
         if let Some(v) = self.data_version {
             resp.set_cache_last_version(v);
         }
-        Ok(resp.into())
+        Ok(HandlerOutput::ready(resp))
     }
 }

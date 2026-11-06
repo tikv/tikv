@@ -13,7 +13,6 @@ use raftstore::store::GlobalReplicationState;
 use thiserror::Error;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    info,
     time::Instant,
     worker::{Runnable, Scheduler, Worker},
 };
@@ -26,6 +25,8 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub enum Error {
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+    #[error("store {0} is not found in PD")]
+    StoreNotFound(u64),
     #[error("store {0} has been removed")]
     StoreTombstone(u64),
 }
@@ -112,17 +113,16 @@ where
                 return Err(Error::StoreTombstone(store_id));
             }
             Err(e) => {
-                // Tombstone store may be removed manually or automatically
-                // after 30 days of deletion. PD returns
-                // "invalid store ID %d, not found" for such store id.
-                // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
-                // And to avoid repeatedly logging the same errors, it
-                // can directly return the `StoreTombstone` err.
+                // PD returns the same not-found error when a store has not
+                // registered yet and when its tombstone record has been
+                // removed. Treat it as retryable because the two cases can't
+                // be distinguished from this response.
                 if format!("{:?}", e).contains("not found") {
                     RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
-                    info!("resolve store not found"; "store_id" => store_id);
+                    // Keep address resolution retryable, but let raftstore-v2
+                    // clean up existing peer-removal records for this store.
                     self.router.report_store_maybe_tombstone(store_id);
-                    return Err(Error::StoreTombstone(store_id));
+                    return Err(Error::StoreNotFound(store_id));
                 }
                 return Err(box_err!(e));
             }
@@ -230,13 +230,23 @@ impl Default for MockStoreAddrResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
+    use std::{
+        net::SocketAddr,
+        ops::Sub,
+        str::FromStr,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
 
     use collections::HashMap;
     use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
-    use tikv_kv::FakeExtension;
+    use tikv_kv::RaftExtension;
 
     use super::*;
 
@@ -245,6 +255,18 @@ mod tests {
     struct MockPdClient {
         start: Instant,
         store: metapb::Store,
+    }
+
+    #[derive(Clone, Default)]
+    struct MockExtension {
+        maybe_tombstone_store_id: Arc<AtomicU64>,
+    }
+
+    impl RaftExtension for MockExtension {
+        fn report_store_maybe_tombstone(&self, store_id: u64) {
+            self.maybe_tombstone_store_id
+                .store(store_id, Ordering::SeqCst);
+        }
     }
 
     impl PdClient for MockPdClient {
@@ -281,7 +303,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, FakeExtension> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, MockExtension> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -290,7 +312,7 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: FakeExtension,
+            router: MockExtension::default(),
         }
     }
 
@@ -313,8 +335,19 @@ mod tests {
     #[test]
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
+        let store_id = store.get_id();
         let runner = new_runner(store);
-        runner.get_address(0).unwrap_err();
+        assert!(matches!(
+            runner.get_address(store_id),
+            Err(Error::StoreTombstone(id)) if id == store_id
+        ));
+        assert_eq!(
+            runner
+                .router
+                .maybe_tombstone_store_id
+                .load(Ordering::SeqCst),
+            store_id
+        );
     }
 
     #[test]
@@ -323,10 +356,17 @@ mod tests {
         store.set_id(u64::MAX);
         let store_id = store.get_id();
         let runner = new_runner(store);
-        let result = runner.get_address(store_id).unwrap_err();
-        if let Error::StoreTombstone(id) = result {
-            assert_eq!(store_id, id);
-        }
+        assert!(matches!(
+            runner.get_address(store_id),
+            Err(Error::StoreNotFound(id)) if id == store_id
+        ));
+        assert_eq!(
+            runner
+                .router
+                .maybe_tombstone_store_id
+                .load(Ordering::SeqCst),
+            store_id
+        );
     }
 
     #[test]

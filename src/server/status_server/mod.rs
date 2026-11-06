@@ -9,7 +9,7 @@ pub mod lite;
 use std::{
     env::args,
     error::Error as StdError,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     str::{self, FromStr},
     sync::Arc,
@@ -881,7 +881,7 @@ where
                                 Self::handle_resume_grpc(grpc_service_mgr)
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
-                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "/debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
                             (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
                             (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
                             (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
@@ -1027,7 +1027,7 @@ where
     }
 }
 
-#[derive(Serialize, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, PartialEq, Eq)]
 struct CachedRegion {
     start: String,
     end: String,
@@ -1100,25 +1100,66 @@ impl ServerConnection for AddrStream {
 //
 // For now, the check only verifies the role of the peer certificate.
 fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
-    // if `cert_allowed_cn` is empty, skip check and return true
-    if !security_config.cert_allowed_cn.is_empty() {
-        if let Some(x509) = cert {
+    // If no certificate restrictions are configured, allow access
+    if security_config.cert_allowed_cn.is_empty() && security_config.cert_allowed_san.is_empty() {
+        return true;
+    }
+
+    if let Some(x509) = cert {
+        let mut is_cn_authorized = true;
+        let mut is_san_authorized = true;
+        if !security_config.cert_allowed_cn.is_empty() {
+            is_cn_authorized = false;
             if let Some(name) = x509
                 .subject_name()
                 .entries_by_nid(openssl::nid::Nid::COMMONNAME)
                 .next()
             {
-                let data = name.data().as_slice();
-                // Check common name in peer cert
-                return security::match_peer_names(
-                    &security_config.cert_allowed_cn,
-                    std::str::from_utf8(data).unwrap(),
-                );
+                // A malformed common name must fail authorization instead of
+                // panicking the status server.
+                if let Ok(peer_cn) = std::str::from_utf8(name.data().as_slice()) {
+                    is_cn_authorized =
+                        security::match_peer_names(&security_config.cert_allowed_cn, peer_cn);
+                }
             }
         }
-        false
+
+        if !security_config.cert_allowed_san.is_empty() {
+            is_san_authorized = false;
+            if let Some(sans) = x509.subject_alt_names() {
+                is_san_authorized = sans.into_iter().any(|san| {
+                    if let Some(dns_name) = san.dnsname() {
+                        return security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            dns_name,
+                        );
+                    }
+                    if let Some(uri) = san.uri() {
+                        return security::match_peer_names(&security_config.cert_allowed_san, uri);
+                    }
+                    if let Some(ip) = san.ipaddress().and_then(ip_address_from_bytes) {
+                        return security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            &ip.to_string(),
+                        );
+                    }
+                    false
+                });
+            }
+        }
+        // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return
+        // true
+        is_cn_authorized && is_san_authorized
     } else {
-        true
+        false
+    }
+}
+
+fn ip_address_from_bytes(bytes: &[u8]) -> Option<IpAddr> {
+    match bytes.len() {
+        4 => Some(IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?)),
+        16 => Some(IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?)),
+        _ => None,
     }
 }
 
@@ -1127,7 +1168,7 @@ fn tls_acceptor(security_config: &SecurityConfig) -> Result<SslAcceptor> {
     acceptor.set_ca_file(&security_config.ca_path)?;
     acceptor.set_certificate_chain_file(&security_config.cert_path)?;
     acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
-    if !security_config.cert_allowed_cn.is_empty() {
+    if !security_config.cert_allowed_cn.is_empty() || !security_config.cert_allowed_san.is_empty() {
         acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
     }
     Ok(acceptor.build())
@@ -1363,6 +1404,7 @@ mod tests {
     use http::header::{ACCEPT_ENCODING, HeaderValue};
     use hyper::{Body, Client, Method, Request, StatusCode, Uri, body::Buf, client::HttpConnector};
     use hyper_openssl::HttpsConnector;
+    use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
@@ -1370,11 +1412,17 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::{GLOBAL_SERVER_READINESS, logger::get_log_level};
+    use tikv_util::{
+        GLOBAL_SERVER_READINESS,
+        config::{ReadableDuration, VersionTrack},
+        logger::get_log_level,
+    };
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX},
+        server::status_server::{
+            CachedRegion, LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX,
+        },
         storage::config::EngineType,
     };
 
@@ -1420,21 +1468,35 @@ mod tests {
 
     #[test]
     fn test_security_status_service_without_cn() {
-        do_test_security_status_service(HashSet::default(), true);
+        do_test_security_status_service(HashSet::default(), HashSet::default(), true);
     }
 
     #[test]
     fn test_security_status_service_with_cn() {
         let mut allowed_cn = HashSet::default();
         allowed_cn.insert("tikv-server".to_owned());
-        do_test_security_status_service(allowed_cn, true);
+        do_test_security_status_service(allowed_cn, HashSet::default(), true);
+    }
+
+    #[test]
+    fn test_security_status_service_with_san() {
+        let mut allowed_san = HashSet::default();
+        allowed_san.insert("127.0.0.1".to_owned());
+        do_test_security_status_service(HashSet::default(), allowed_san, true);
     }
 
     #[test]
     fn test_security_status_service_with_cn_fail() {
         let mut allowed_cn = HashSet::default();
         allowed_cn.insert("invaild-cn".to_owned());
-        do_test_security_status_service(allowed_cn, false);
+        do_test_security_status_service(allowed_cn, HashSet::default(), false);
+    }
+
+    #[test]
+    fn test_security_status_service_with_san_fail() {
+        let mut allowed_san = HashSet::default();
+        allowed_san.insert("invaild-san".to_owned());
+        do_test_security_status_service(HashSet::default(), allowed_san, false);
     }
 
     #[test]
@@ -1480,6 +1542,51 @@ mod tests {
         });
         block_on(handle).unwrap();
         status_server.stop();
+    }
+
+    #[test]
+    fn test_config_endpoint_preserves_duration_text() {
+        let mut config = TikvConfig::default();
+        config.raft_store.raft_write_wait_duration = ReadableDuration::micros(200);
+        config.raft_store.snap_wait_split_duration = ReadableDuration::millis(1);
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::new(config),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        status_server.start("127.0.0.1:0".to_owned()).unwrap();
+        let addr = status_server.listening_addr().to_string();
+        let handle = status_server.thread_pool.spawn(async move {
+            let client = Client::new();
+            let mut responses = Vec::new();
+            for path in ["/config", "/config?full=true"] {
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(addr.as_str())
+                    .path_and_query(path)
+                    .build()
+                    .unwrap();
+                let response = client.get(uri).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+                responses.push(serde_json::from_slice::<serde_json::Value>(&body).unwrap());
+            }
+            responses
+        });
+        let responses = block_on(handle);
+        status_server.stop();
+        let responses = responses.unwrap();
+
+        for response in responses {
+            assert_eq!(response["raftstore"]["raft-write-wait-duration"], "200us");
+            assert_eq!(response["raftstore"]["snap-wait-split-duration"], "1ms");
+        }
     }
 
     #[test]
@@ -1758,11 +1865,15 @@ mod tests {
         status_server.stop();
     }
 
-    fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+    fn do_test_security_status_service(
+        allowed_cn: HashSet<String>,
+        allowed_san: HashSet<String>,
+        expected: bool,
+    ) {
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
-            Arc::new(new_security_cfg(Some(allowed_cn))),
+            Arc::new(new_security_cfg(Some(allowed_cn), Some(allowed_san))),
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
@@ -2199,6 +2310,62 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::OK);
         });
         block_on(handle2).unwrap();
+
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_debug_in_memory_engine() {
+        let mut cfg = InMemoryEngineConfig::default();
+        cfg.enable = true;
+        let ime_ctx = InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(cfg)));
+        let in_memory_engine = RegionCacheMemoryEngine::new(ime_ctx);
+
+        let mut region = kvproto::metapb::Region::default();
+        region.id = 1;
+        region.start_key = b"a".to_vec();
+        region.end_key = b"b".to_vec();
+        region.mut_region_epoch().version = 1;
+        let mut peer = kvproto::metapb::Peer::default();
+        peer.id = 2;
+        region.mut_peers().push(peer);
+        in_memory_engine.new_region(region);
+
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            Some(in_memory_engine),
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/ime/cached_regions")
+            .build()
+            .unwrap();
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let mut regions: Vec<CachedRegion> = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(regions.len(), 1);
+            let region = regions.pop().unwrap();
+
+            assert_eq!(region.id, 1);
+            assert_eq!(region.start, "61");
+            assert_eq!(region.end, "62");
+            assert_eq!(region.epoch_version, 1);
+        });
+        block_on(handle).unwrap();
 
         status_server.stop();
     }

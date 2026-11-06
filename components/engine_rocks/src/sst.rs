@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use ::encryption::DataKeyManager;
 use engine_traits::{
@@ -12,7 +12,7 @@ use file_system::get_io_rate_limiter;
 use rocksdb::{
     ColumnFamilyOptions, DB, DBCompressionType, DBIterator, Env, EnvOptions,
     ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader, SstFileWriter,
-    rocksdb::supported_compression,
+    WritableFile, rocksdb::supported_compression,
 };
 
 use crate::{engine::RocksEngine, get_env, options::RocksReadOptions, r2e};
@@ -29,13 +29,33 @@ pub struct RocksSstReader {
 
 impl RocksSstReader {
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
+        Self::open_with_env_and_direct_reads(path, env, false)
+    }
+
+    fn open_with_env_and_direct_reads(
+        path: &str,
+        env: Option<Arc<Env>>,
+        use_direct_reads: bool,
+    ) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {
             cf_options.set_env(env);
         }
+        // Read with O_DIRECT so a one-shot full read of the SST does not populate
+        // the OS page cache. Pairs with the direct-I/O SST write on the ingest
+        // path: without this, the verification read-back undoes it.
+        if use_direct_reads {
+            cf_options.set_use_direct_reads(true);
+        }
         let mut reader = SstFileReader::new(cf_options);
         reader.open(path).map_err(r2e)?;
         Ok(RocksSstReader { inner: reader })
+    }
+
+    pub fn open_in_memory(path: &str, content: &[u8]) -> Result<Self> {
+        let mut file = RocksInMemoryFile::new(path)?;
+        file.write_all(content).map_err(Error::from)?;
+        file.finish_reader()
     }
 
     pub fn compression_name(&self) -> String {
@@ -51,6 +71,15 @@ impl SstReader for RocksSstReader {
     fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self> {
         let env = get_env(mgr, get_io_rate_limiter())?;
         Self::open_with_env(path, Some(env))
+    }
+
+    fn open_for_one_shot_read(
+        path: &str,
+        mgr: Option<Arc<DataKeyManager>>,
+        use_direct_io: bool,
+    ) -> Result<Self> {
+        let env = get_env(mgr, get_io_rate_limiter())?;
+        Self::open_with_env_and_direct_reads(path, Some(env), use_direct_io)
     }
 
     fn verify_checksum(&self) -> Result<()> {
@@ -76,6 +105,68 @@ impl RefIterable for RocksSstReader {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
         Ok(RocksSstIterator(SstFileReader::iter_opt(&self.inner, opt)))
+    }
+}
+
+pub struct RocksInMemoryFile {
+    env: Arc<Env>,
+    path: String,
+    file: WritableFile,
+}
+
+pub struct RocksInMemorySst {
+    env: Arc<Env>,
+    path: String,
+}
+
+impl std::fmt::Debug for RocksInMemorySst {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocksInMemorySst")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RocksInMemorySst {
+    pub fn open_reader(&self) -> Result<RocksSstReader> {
+        RocksSstReader::open_with_env(&self.path, Some(self.env.clone()))
+    }
+}
+
+impl RocksInMemoryFile {
+    pub fn new(path: &str) -> Result<RocksInMemoryFile> {
+        let env = Arc::new(Env::new_mem());
+        let file = env
+            .new_writable_file(path, EnvOptions::new())
+            .map_err(r2e)?;
+        Ok(RocksInMemoryFile {
+            env,
+            path: path.to_owned(),
+            file,
+        })
+    }
+
+    pub fn finish(mut self) -> Result<RocksInMemorySst> {
+        self.file.flush().map_err(Error::from)?;
+        self.file.close().map_err(r2e)?;
+        Ok(RocksInMemorySst {
+            env: self.env,
+            path: self.path,
+        })
+    }
+
+    fn finish_reader(self) -> Result<RocksSstReader> {
+        self.finish()?.open_reader()
+    }
+}
+
+impl Write for RocksInMemoryFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -141,6 +232,7 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
     compression_type: Option<DBCompressionType>,
     compression_level: i32,
+    use_direct_writes: bool,
 }
 
 impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
@@ -151,6 +243,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             db: None,
             compression_type: None,
             compression_level: 0,
+            use_direct_writes: false,
         }
     }
 
@@ -176,6 +269,11 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
 
     fn set_compression_level(mut self, level: i32) -> Self {
         self.compression_level = level;
+        self
+    }
+
+    fn set_use_direct_writes(mut self, use_direct_writes: bool) -> Self {
+        self.use_direct_writes = use_direct_writes;
         self
     }
 
@@ -231,7 +329,11 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         // being used, we must set them empty or disabled.
         io_options.compression_per_level(&[]);
         io_options.bottommost_compression(DBCompressionType::Disable);
-        let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        let mut env_options = EnvOptions::new();
+        // Write with O_DIRECT so the SST write stream does not evict the hot read
+        // working set from the OS page cache. Write path only.
+        env_options.set_use_direct_writes(self.use_direct_writes);
+        let mut writer = SstFileWriter::new(env_options, io_options);
         fail_point!("on_open_sst_writer");
         writer.open(path).map_err(r2e)?;
         Ok(RocksSstWriter { writer, env })
@@ -433,5 +535,49 @@ mod tests {
         reader.reset().unwrap();
         reader.read_to_end(&mut buf2).unwrap();
         assert_eq!(buf, buf2);
+
+        let in_memory_reader = RocksSstReader::open_in_memory("downloaded.sst", &buf).unwrap();
+        in_memory_reader.verify_checksum().unwrap();
+        let mut iter = in_memory_reader.iter(IterOptions::default()).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), k);
+        assert_eq!(iter.value(), v);
+        assert!(!iter.next().unwrap());
+    }
+
+    #[test]
+    fn test_direct_io_sst_round_trip() {
+        let path = Builder::new()
+            .prefix("test_direct_io_sst_round_trip")
+            .tempdir()
+            .unwrap();
+        let engine = new_default_engine(path.path().to_str().unwrap()).unwrap();
+        let (k, v) = (b"foo", b"bar");
+
+        let p = path.path().join("direct.sst");
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_cf(CF_DEFAULT)
+            .set_db(&engine)
+            .set_use_direct_writes(true)
+            .build(p.to_str().unwrap())
+            .unwrap();
+        writer.put(k, v).unwrap();
+        let sst_file = writer.finish().unwrap();
+        assert_eq!(sst_file.num_entries(), 1);
+
+        // Verifying with direct I/O must succeed, ...
+        let reader =
+            RocksSstReader::open_for_one_shot_read(p.to_str().unwrap(), None, true).unwrap();
+        reader.verify_checksum().unwrap();
+
+        // ... and the file must still be an ordinary, buffered-readable SST: the
+        // alignment padding direct I/O requires must not leak into the format.
+        let reader = RocksSstReader::open(p.to_str().unwrap(), None).unwrap();
+        reader.verify_checksum().unwrap();
+        let mut iter = reader.iter(IterOptions::default()).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), k);
+        assert_eq!(iter.value(), v);
+        assert!(!iter.next().unwrap());
     }
 }
