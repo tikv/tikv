@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{cmp, collections::VecDeque, mem};
+use std::{collections::VecDeque, mem};
 
 use collections::HashMap;
 use kvproto::{
@@ -203,6 +203,13 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         self.reads.back()
     }
 
+    /// Iterate reads whose `read_index` has not yet been resolved.
+    /// Used by `retry_pending_reads` to re-fetch every stuck read;
+    /// retrying only the tail leaves mid-queue losses permanent.
+    pub fn unresolved_iter(&self) -> impl Iterator<Item = &ReadIndexRequest<C>> {
+        self.reads.iter().filter(|r| r.read_index.is_none())
+    }
+
     pub fn last_ready(&self) -> Option<&ReadIndexRequest<C>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
@@ -251,7 +258,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
     where
         T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
-        let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
+        let mut any_changed = false;
         for (uuid, locked, index) in states {
             if let Some(raw_offset) = self.contexts.remove(&uuid) {
                 let offset = match raw_offset.checked_sub(self.handled_cnt) {
@@ -276,8 +283,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                     }
                 }
                 self.reads[offset].read_index = Some(index);
-                min_changed_offset = cmp::min(min_changed_offset, offset);
-                max_changed_offset = cmp::max(max_changed_offset, offset);
+                any_changed = true;
                 continue;
             }
             debug!(
@@ -286,13 +292,22 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             );
         }
 
-        if min_changed_offset != usize::MAX {
-            self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
+        // Advance `ready_cnt` only over entries with a resolved
+        // `read_index`. Advancing past a `None` entry (from a lost or
+        // reordered `MsgReadIndexResp`) would break the invariant that
+        // `post_pending_read_index_on_replica` asserts on the popped
+        // entry. The stuck entry is re-fetched by `retry_pending_reads`.
+        //
+        // NOTE: we still must not fold indices forward — an earlier
+        // request can rely on a higher committed index under 1pc /
+        // async-commit. See https://github.com/tikv/tikv/issues/17018.
+        if any_changed {
+            while self.ready_cnt < self.reads.len()
+                && self.reads[self.ready_cnt].read_index.is_some()
+            {
+                self.ready_cnt += 1;
+            }
         }
-        // NOTE: We should not try to fold these read index requests anymore,
-        // an earlier request can rely a higher committed index due to txn
-        // lock when 1pc/async-commit is used.
-        // See https://github.com/tikv/tikv/issues/17018 for more details.
     }
 
     pub fn gc(&mut self) {
@@ -621,12 +636,75 @@ mod tests {
             queue.push_back(req, false);
         }
 
+        // Later response arrives first. `ready_cnt` must stay at 0
+        // because the head's `read_index` is still `None`; advancing
+        // past it would violate the invariant asserted by
+        // `post_pending_read_index_on_replica`.
         queue.advance_replica_reads(vec![(ids[1], None, 100)]);
+        assert_eq!(queue.ready_cnt, 0);
+        assert!(queue.pop_front().is_none());
+
+        // Head response arrives; both entries become drainable.
+        queue.advance_replica_reads(vec![(ids[0], None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
+    }
 
+    /// Regression: when the response for the head of the queue is
+    /// lost and a later response arrives, `advance_replica_reads` must
+    /// not bump `ready_cnt` past the still-unresolved head. Otherwise
+    /// `post_pending_read_index_on_replica` would `pop_front` an entry
+    /// with `read_index == None` and hit its
+    /// `assert!(read.read_index.is_some())`. Also verifies the drain
+    /// completes once the missing response arrives.
+    #[test]
+    fn test_post_pending_read_index_on_replica_lost_response() {
+        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
+            handled_cnt: 0,
+            ..Default::default()
+        };
+
+        // Two in-flight follower reads queued as `pending_reads`.
+        let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
+        for id in &ids {
+            let req = ReadIndexRequest::with_command(
+                *id,
+                RaftCmdRequest::default(),
+                Callback::None,
+                Timespec::new(0, 0),
+            );
+            queue.push_back(req, false);
+        }
+
+        // The response for `ids[0]` is lost; only `ids[1]`'s response
+        // arrives in this raft ready batch.
+        queue.advance_replica_reads(vec![(ids[1], None, 100)]);
+
+        // Drain the queue exactly as `post_pending_read_index_on_replica`
+        // does, executing the same assertion. Without the fix,
+        // `ready_cnt` was bumped to 2 despite `reads[0].read_index` being
+        // `None`, so `pop_front` returns the head with `read_index ==
+        // None` and this assertion aborts the process.
+        while let Some(mut read) = queue.pop_front() {
+            assert!(read.read_index.is_some(), "read.read_index.is_some()");
+            read.cmds.clear();
+        }
+        // Nothing should have drained yet: `advance_replica_reads`
+        // must not have bumped `ready_cnt` past the unresolved head.
+        assert_eq!(queue.reads.len(), 2);
+        assert_eq!(queue.ready_cnt, 0);
+
+        // The missing response finally arrives (via
+        // `retry_pending_reads` in production).
         queue.advance_replica_reads(vec![(ids[0], None, 100)]);
+        let mut drained = 0;
+        while let Some(mut read) = queue.pop_front() {
+            assert!(read.read_index.is_some());
+            read.cmds.clear();
+            drained += 1;
+        }
+        assert_eq!(drained, 2);
     }
 }
