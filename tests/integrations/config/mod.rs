@@ -147,6 +147,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker: 2200,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
+            ..Default::default()
         },
         storage: StorageReadPoolConfig {
             use_unified_pool: Some(true),

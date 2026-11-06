@@ -49,7 +49,8 @@ Concrete runtime anchors:
 Hot contracts to review carefully:
 
 - group-name identity and default/background-group semantics
-- baseline-window and fairness-phase encoding
+- read-policy generation, positive weights, and priority updates
+- shared baseline-window accounting for foreground write admission
 - RU accounting inputs and report-unit interpretation
 
 ## Start Here
@@ -87,11 +88,9 @@ Hot contracts to review carefully:
 - adjust quotas and throttling behavior periodically
 - expose fair scheduling and admission-control decisions to callers
 - compute common CPU/IO/compaction pressure scores (`score.rs`) shared by
-  background quota adjustment and foreground/read-pool throttling
-- expose a read-pool CPU-pressure/target-CPU contract that `src/read_pool.rs`
-  consumes to drive unified-read-pool scale in/out
-- name the groups responsible for a foreground overload, and drive both
-  actuators from that one verdict
+  background quota adjustment and foreground write throttling
+- expose stable `GroupPolicy` handles through `GroupProvider` for the unified
+  read pool; its scheduling ledger and CPU budget live in `tikv_util`
 
 ## Important Design Points
 
@@ -99,9 +98,9 @@ Hot contracts to review carefully:
   watches config paths, and retries on compaction or transient failures.
 - `resource_group.rs` is the policy core. It contains:
   - resource group state
-  - virtual-time and baseline logic
-  - admission decisions
-  - fairness/two-phase scheduling helpers
+  - legacy virtual-time controllers for non-unified-read pools
+  - stable policy identities for the unified read scheduler
+  - shared usage history and foreground write admission decisions
 - `resource_limiter.rs` is the actual limiter and statistics store.
 - `worker.rs` adjusts background quota and related runtime state periodically.
   Each tick it measures CPU/IO/compaction inputs, calls
@@ -109,7 +108,8 @@ Hot contracts to review carefully:
   `compaction_score`, uses `cpu_score`/`io_score` for its own background-quota
   adjustment, and passes `cpu_score` to
   `ResourceGroupManager::online_adjust_resource_quota` so the same signal
-  drives foreground throttling and read-pool scheduling in `resource_group.rs`.
+  drives foreground write throttling in `resource_group.rs`. The unified read
+  scheduler does not consume this signal or the historical baseline.
 - `score.rs` is the shared pressure-scoring module. `compute_resource_scores`
   turns raw CPU/IO/compaction measurements into three independent 0-100
   scores; `pressure_fraction` maps a score onto a `[0, 1]` pressure fraction
@@ -117,69 +117,130 @@ Hot contracts to review carefully:
   cores consumed by threads matching a name prefix (e.g.
   `UNIFIED_READ_POOL_THREAD`, `GRPC_SERVER_THREAD`) via `/proc` thread stats.
   This is the one shared code path behind both background quota adjustment
-  (`worker.rs`) and foreground/read-pool throttling (`resource_group.rs`) — a
+  (`worker.rs`) and foreground write throttling (`resource_group.rs`) — a
   bug here silently skews both.
-- `config.rs` defines dynamic policy knobs such as fair scheduling and
-  admission-control thresholds.
+- `config.rs` defines background/write admission policy knobs. The obsolete
+  `enable-fair-scheduling` and `enable-read-admission-control` fields remain
+  parseable but are ignored; validation warns when they are enabled.
 - Background quota limiting is independent of priority-queue selection. A
   background limiter can throttle a task in place even when the transaction
   scheduler uses its vanilla queue.
 - `ResourceController::is_customized` reflects non-default resource groups;
   background configuration is tracked separately by `ResourceGroupManager`.
 
-## Cross-Component Contract: Unified Read Pool Coupling
+## Cross-Component Contract: Unified Read Pool
 
-`ResourceGroupManager` exposes a small API that `src/read_pool.rs` depends on
-to scale the unified read pool's thread count under foreground CPU pressure.
-This is a real cross-crate contract, not an internal implementation detail —
-changes to either side must keep the other consistent:
+`ResourceGroupManager` implements `tikv_util::yatp_pool::fair_queue::GroupProvider`.
+The provider returns an `Arc<GroupPolicy>` containing canonical name, identity,
+configured priority, positive weight, and retirement state. It does not read or
+mutate scheduling VT. The fair queue owns each priority lane's committed VT,
+reservations, idle placement, task history, and CPU gate.
 
-> **`enable-fair-scheduling` requires `readpool.unified.auto-adjust-pool-size`.**
-> A group is deprioritised while the pool is scaled in and released once the
-> pool recovers to `core_thread_count`, so pool movement *is* the release
-> signal. `adjust_pool_size` returns early when auto-adjustment is off, which
-> means the pool never moves and no group is ever deprioritised. Since
-> `auto-adjust-pool-size` defaults to false, enabling fair scheduling on its
-> own silently does nothing. This is deliberately not rejected at config load,
-> to stay backward compatible with configs that already set only one of them.
+Identity and update rules:
 
+- Names are ASCII-case-insensitive. Unknown names resolve to the existing
+  default handle; lookup never creates another scheduling entitlement.
+- Ordinary PD updates and watch reloads update the existing handle. They must
+  not create a generation or reset queue history.
+- Deletion and `retain` retire the removed handle. A later create receives a
+  new identity. In-flight work retains its original handle for settlement;
+  the queue redirects retired queued work to default.
+- Default remains available. Deleting its customized definition restores its
+  default policy without retiring its identity. The queue caches this handle
+  and registers its scheduling group before workers start.
+- Normal finite weights equal read quota (RU fill rate in RU mode, CPU fill
+  rate in raw mode). Zero quota and default's unlimited sentinel use
+  `min(10 * max(10000, largest normal quota), MAX_RU_QUOTA)` instead.
+  Changing this reference weight updates only special handles; ordinary
+  groups keep their units and the queue retains committed progress.
+- The registry serializes metadata publication. It never calls the scheduler
+  or destroys tasks while holding its lock. Consumers must not call the
+  provider while holding a scheduler lock that can be reentered.
 
-- `online_adjust_resource_quota(cpu_score)` — called once per tick from
-  `worker.rs` with the shared `cpu_score` from `score::compute_resource_scores`.
-  Runs detection (see "Noisy-Group Selection") and then refreshes
-  `read_pool_cpu_pressure` (`1.0` or `0.0` — a flag, not a varying fraction,
-  because the read pool only tests it against zero) and
-  `read_pool_scale_up_allowed` (whether CPU is comfortably idle enough to let
-  the read pool grow back toward its max).
-- `compute_read_pool_target_cpu(read_pool_cpu, interval_secs)` — the read
-  pool's actual scale-down input. Records `read_pool_cpu` into the pool's
-  tracker and returns either `f64::INFINITY` (no ceiling — caller's own
-  ceiling wins) or a target below `read_pool_cpu`, stepped down per engaged
-  tick and floored at the pool's quiet-window CPU.
-- The floor is the *quiet-window* freeze, not the live historical average. The
-  average keeps recording the overload, so it rises as load is shed and floats
-  the floor up under the ratchet. Until there has been a quiet tick the floor
-  is `MIN_READ_POOL_TARGET_CORES` (1 core), which is also what stops the
-  ratchet compounding toward zero. Same mechanism as a group's baseline.
-- `read_pool_scale_up_allowed()` — read pool consults this before growing its
-  thread count back up.
+Read admission and accounting:
 
-Invariant: `compute_read_pool_target_cpu` must never return a target above
-`read_pool_cpu` when pressure is engaged; a caller `min()`-ing this into its
-own ceiling relies on `INFINITY` (not the current usage) as the "no pressure"
-value. If you change the pressure/threshold math in `resource_group.rs`,
-re-check the read-pool scaling tests in `src/read_pool.rs` (search for
-`online_adjust_resource_quota`, `read_pool_cpu_pressure`,
-`read_pool_scale_up_allowed`).
+- Foreground reads bypass the shared historical limiter's admission delay.
+  Its debt/rate is not cleared, because foreground writes may still use it.
+- `LimitedFuture` continues recording shared read/write usage. Keeping this
+  history preserves existing write policy; splitting read and write history
+  would be a separate behavior change.
+- Background requests still consult their background limiter. Removing
+  historical read admission must not disable background CPU/IO control.
+- New read scheduling does not consume the legacy controller's VT or external
+  RPC CPU/write-byte penalties. Other pools keep their legacy controllers.
+- The global CPU gate and live-task limits belong to the unified read pool.
+  There is no Phase bit, historical read-pool CPU floor, pressure-driven
+  target, or recovery-to-core release signal. RC unified pools keep their
+  configured `max-thread-count`: `auto-adjust-pool-size` and `cpu-threshold`
+  do not control that pool, and `read-cpu-ratio` owns its CPU budget. Non-RC
+  pools retain their existing CPU-threshold and autoscaling behavior.
+- YATP prestarts surplus physical workers for online growth, and its Custom
+  queue can be popped before those workers park. The fair queue therefore
+  bounds active dispatches under its existing scheduler lock. The bound is
+  installed before workers start and updated by `scale_pool_size`. Only
+  `Dispatch::drop` releases a slot; inline repolls and cancellation of a running
+  task do not release it early. Lowering the bound lets current dispatches
+  finish but blocks new ones until below the new limit. A full bound returns
+  `Pending` with a 1ms retry, while `has_ready_task` still signals queued work
+  to the current runner for preemption. Online growth retains YATP's wake
+  behavior: new submissions or worker turnover activate the additional threads.
+- A ready `BTreeSet` indexes current committed-plus-reserved VT per nonempty
+  priority lane. Selection and the initial precharge share one scheduler
+  critical section. A separate committed index advances each priority's
+  monotonic reference; the new queue does not use periodic legacy VT calibration.
+- RG generations share live capacity and task-id history across their priority
+  lanes. The internal scheduler task ID identifies one live task for lookup and
+  cancellation; it is distinct from the reusable MLFQ history task ID.
+- CPU ratio, per-RG base capacity, precharge, and time slice are startup
+  settings. Global capacity follows configured workers times tasks per worker;
+  online changes update the queue shared by existing handles.
+
+Cancellation ownership lives in `tikv_util::yatp_pool::fair_queue`. The queue
+registry owns Records, permits weakly reference Records, and a Record weakly
+references the task's `FutureSlot`. A slot owns a boxed pinned future behind a
+per-task mutex. Cancel uses `try_lock`, never waits for a running poll, and
+drops extracted futures outside locks to break IO-waker retention cycles.
+Do not replace this with a strong Record-to-future ownership cycle or run
+future destructors under the scheduler lock.
+
+YATP may call `FairQueue::pop` inside `park.validate` while holding a
+`parking_lot` bucket lock. Releasing the scheduler lock does not release that
+outer lock. `pop` must not invoke the provider, task-history helpers, cancellation,
+or task/waker destructors. Retired queued entries move directly to the cached
+default group's lane, retaining their Record, original live-capacity ownership,
+MLFQ level/history, and schedule time. They rejoin priority/VT selection before
+dispatch. A canceled entry is cleaned up by its cancellation owner or runner
+outside the parking callback.
+
+Implementation and validation details are in
+[`resource-control-read-pool.md`](../../design/resource-control-read-pool.md).
 
 ## Noisy-Group Selection
 
-Detection runs once per tick in `online_adjust_resource_quota_at`, before
-either actuator, so both act on the same verdict against one set of
-measurements. The verdict is a set of group names, published by
-`noisy_groups()` and consumed by `adjust_group_throttling` (per-group CPU rate
-limit, -15% per engaged tick, +10% per tick on recovery) and
-`deprioritize_over_quota_groups` (read-scheduler phase).
+Detection runs once per quota-worker tick in `online_adjust_resource_quota_at`,
+before `adjust_group_throttling`. The verdict is a set of group names used by
+foreground write admission's per-group rate limit: -15% per engaged tick and
++10% per tick on recovery. A finite write limiter is the only held state;
+there is no read-scheduler Phase actuator or pool-size recovery handshake.
+The quota worker uses `normal-control-interval` (10s by default) while quiet
+and `overloaded-control-interval` (5s) while loaded.
+
+`reports_noisy_groups` follows only `enable-write-admission-control`.
+`noisy_group_names` returns an empty list when this gate is disabled, so the
+client can clear an earlier verdict. The deprecated read flags do not enable
+reporting. These names retain master's attribution over shared read/write
+usage; they are not proof of write-only consumption, nor a verdict from the
+new read fair queue. Splitting read and write attribution requires a separate
+accounting change. Read-pool busy-threshold decisions must use the actual
+queue contract rather than these history-based names.
+
+The fair read queue skips the client's whole-pool FIFO `busy_threshold`
+estimate even when no group is classified as noisy: another group's backlog
+does not predict this request's position under weighted RG scheduling and
+MLFQ. Hard live-task caps, background admission, and the global CPU gate still
+apply. Non-RC pools retain the estimate-based rejection. The aggregate wait
+gauge remains available as a backlog indicator, not a per-request latency
+prediction for the fair queue.
 
 `select_noisy_groups(cpu_score)`:
 
@@ -195,14 +256,16 @@ limit, -15% per engaged tick, +10% per tick on recovery) and
   further down. Candidates below `TAIL_EXCESS_RATIO` (10%) of the top excess
   are spared, and the top candidate is always taken unless something is
   already held.
-- Groups an actuator is already holding stay named — they sit inside their gate
+- Groups a finite write limiter is already holding stay named — they sit inside their gate
   only because they are held there — and their whole share is credited against
   the target rather than inflating one the innocent tail would be taken to
   meet.
 
 Baselines are *quiet-window* frozen, not rolling: a group's baseline updates
-only while the node is quiet, so the reference does not drift upward during the
-overload it is meant to explain.
+after a full window of quiet samples (CPU below 85% of the foreground
+threshold), so the reference does not drift upward during an overload.
+Recovery starts below 90% of that threshold, and the cached verdict clears
+once pressure has cleared and no finite foreground write limiter remains.
 
 What a *missing* baseline means is the operator's call, and it is the only
 thing separating the first two policies below. `candidate_baseline` is the sole
@@ -241,7 +304,11 @@ charge, added to a group's foreground tracker once per request at the gRPC
 handler entry — before admission control, so a rejected request still pays, and
 skipped for background-routed requests, which their background limiter meters.
 It is cached outside the config lock and re-read by `refresh_cached_config` on
-each control tick, so a config change lands within one tick.
+each control tick, so a config change lands within one tick. `RuTrackerSlot`
+shares the open-bucket atomic counter to avoid its per-group mutex on ordinary
+recording. This ledger contains synchronous poll wall time and the fixed
+arrival charge, not measured thread CPU. The arrival charge does not add
+limiter debt and does not charge the new read scheduler's wall-VT or CPU gate.
 
 ## Background Egress Limit (`bg-egress-limit`)
 
@@ -334,6 +401,15 @@ Signals:
 - RU reporting cadence and background-group behavior
 - background egress consumption, wait, and uncharged-bytes metrics (see
   "Background Egress Limit")
+- noisy-detection policy, live usage, quiet baseline, and finite write-limit
+  gauges; these describe the historical write policy independently of read VT
+- The process-level `tikv_yatp_fair_pool_*` metrics in
+  `tikv_util/src/yatp_pool/metrics.rs` report actual poll CPU/wall time, poll
+  duration, CPU-gate Pending attempts, global/group capacity rejections, and
+  eviction. They have no RG labels and do not report precharge as consumed CPU.
+- `READ_POOL_CPU_VEC` continues publishing current CPU and the configured
+  target for RC pools even though their worker count is fixed. Updating these
+  measurements does not reintroduce a CPU feedback controller.
 
 Start triage with:
 
@@ -355,54 +431,50 @@ Start triage with:
 - PD watch or config reload changes:
   inspect `service.rs`, PD client interactions, and caller assumptions about
   convergence
-- Fairness or baseline changes:
-  inspect `resource_group.rs`, `resource_limiter.rs`, and hot-path consumers in
-  storage/server
+- Read fairness or metadata-lifecycle changes:
+  inspect `resource_group.rs`, `tikv_util::yatp_pool::fair_queue`, and
+  `src/read_pool.rs`; test ordinary updates, reload, delete/recreate, fallback,
+  and in-flight settlement separately
+- Write baseline changes:
+  inspect `resource_group.rs`, `resource_limiter.rs`, and storage consumers
 - Request admission or delay/reject changes:
   inspect `future.rs`, `channel.rs`, `src/server/service/kv.rs`, and
   `src/storage`
 - Background RU reporting changes:
   inspect `worker.rs`, limiter statistics, and PD-facing reporting contracts
+- Background egress changes:
+  inspect `resource_limiter.rs`, `worker.rs`, read admission, and response
+  accounting in coprocessor/storage; never move this debt into write admission
+- Noisy feedback or arrival-accounting changes:
+  inspect `resource_group.rs`, `config.rs`, RPC handler calls to
+  `consume_penalty`, and client health reporting; deprecated read flags must
+  remain inert
 - Config knob changes:
   inspect `config.rs`, runtime update sites, metrics, and reviewer-facing docs
 - Pressure-scoring changes (`score.rs`):
   inspect both consumers — background quota adjustment in `worker.rs` and
-  foreground/read-pool throttling in `resource_group.rs` — since they share
+  foreground write throttling in `resource_group.rs` — since they share
   the same `cpu_score`/`io_score`/`compaction_score` computation
-- Read-pool coupling changes (`online_adjust_resource_quota`,
-  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`):
-  inspect both `resource_group.rs` and `src/read_pool.rs`; update this guide's
-  "Cross-Component Contract" section in the same change
-- Detection changes (`select_noisy_groups`, `survey_groups`, quiet baselines,
-  `noisy_detection`): inspect both actuators — `adjust_group_throttling` and
-  `deprioritize_over_quota_groups` — since they consume one shared verdict
-- Background egress limit changes (`egress_limiter`, `update_background_egress`,
-  egress in `admission_delay`):
-  inspect `resource_limiter.rs`, `worker.rs`, `src/read_pool.rs` admission, and
-  the charge sites in `src/coprocessor` and `src/storage`; keep egress out of
-  `consume` so Backup, ImportSST and background writes are unaffected, and
-  update the "Background Egress Limit" section
+- Read provider or admission changes:
+  inspect `resource_group.rs` and `src/read_pool.rs`; update this guide's
+  "Cross-Component Contract" section and the design document together
 
 ## Review Checklist
 
 - Does the change affect `watch_resource_groups`, reload, or retry behavior?
-- Does it alter fairness phase encoding, priority ordering, or baseline logic?
+- Does it preserve read policy identity on update/reload and retire it on
+  deletion? Does it change priority ordering or write baseline logic?
 - Does it change request rejection versus delay behavior?
 - Does it change accounting units or resource-cost interpretation?
 - Does it create lock contention in the hot path?
 - Does it update metrics and tests for new scheduling outcomes?
 - Does it touch `score.rs`? If so, does it affect both the background
-  (`worker.rs`) and foreground/read-pool (`resource_group.rs`) consumers as
+  (`worker.rs`) and foreground write (`resource_group.rs`) consumers as
   intended?
-- Does it touch the read-pool coupling API (`online_adjust_resource_quota`,
-  `compute_read_pool_target_cpu`, `read_pool_scale_up_allowed`)? If so, is
-  `src/read_pool.rs` updated and are its scaling tests still valid?
-- Does it change who gets blamed for an overload (candidacy, ranking, the
-  target, or the quiet baseline)? If so, does a test pin *which* group is
-  picked, not just how many?
-- Does it add a read path that sends response bytes? If so, does it call
-  `update_background_egress` next to `record_network_out_bytes`, or is it
-  documented as not charged?
+- Does read admission still bypass foreground historical debt without changing
+  write/background delay behavior?
+- Does it preserve the distinction between the new read policy weight and the
+  legacy inverse-quota factor used by other pool controllers?
 
 ## Observability And Tests
 
@@ -413,7 +485,7 @@ Start triage with:
   `resource_group.rs`.
 - Changes should usually be validated together with the call sites in
   `src/server`, `src/storage`, `components/batch-system`, and (for
-  pressure-scoring / read-pool coupling changes) `src/read_pool.rs`.
+  read-provider / admission changes) `src/read_pool.rs`.
 
 ## Common Failure Modes
 
@@ -424,15 +496,10 @@ Start triage with:
 - dynamic-config changes that fail to take effect operationally
 - transient `/proc` read failures in `ThreadGroupCpuTracker` corrupting the
   next tick's CPU delta baseline (see `score.rs`)
-- read-pool scale-down target computed from stale or unrecorded
-  `read_pool_cpu` history, causing the read pool to over- or under-shrink
-- a floor taken from live average CPU instead of the quiet window, which rises
-  as load is shed and so floats up under the ratchet
-- blame that lands on a group whose baseline is stale, or on the largest tenant
-  rather than the one that changed
-- `bg-egress-limit` silently not applying because the job's task type is not a
-  background task type of its group, or because its reads use a legacy read
-  pool
+- replacing a read policy handle during a PD reload and accidentally granting
+  fresh queue progress
+- clearing shared foreground limiter debt when disabling read admission,
+  thereby changing write admission
 
 ## Reading Map And Companion Docs
 
@@ -453,46 +520,33 @@ Companion docs:
 - `src/server.md`
 - `src/storage.md`
 - `src/read_pool.rs` — no dedicated guide yet; see "Cross-Component Contract:
-  Unified Read Pool Coupling" above for the API surface it depends on here
+  Unified Read Pool" above for the API surface it depends on here
 
 ## Glossary
 
 - RU:
   request unit used for resource accounting
 - Baseline:
-  a group's usage reference, frozen from quiet windows rather than rolling, so
-  it does not drift up during the overload it is meant to explain. The read
-  pool's own floor is the same mechanism on the pool's tracker.
-- Excess:
-  a group's rate above its own baseline — the ranking key for blame, since it
-  identifies the group that *changed* rather than the group that is large
-- Noisy group:
-  a group this tick blamed for the foreground overload; see
-  "Noisy-Group Selection"
-- Held group:
-  a group an actuator is already holding (finite CPU rate limit or scheduler
-  backpressure). Stays named, and its share counts toward the target
+  shared historical usage reference for foreground write admission
 - Admission control:
   delay or reject logic under pressure
 - Virtual time:
   scheduling progress notion used to compare group fairness state
 - Resource score (`cpu_score`/`io_score`/`compaction_score`):
   0-100 utilization percentages from `score::compute_resource_scores`, shared
-  by background quota adjustment and foreground/read-pool throttling
+  by background quota adjustment and foreground write throttling
 - Pressure fraction:
   a score mapped to `[0, 1]` via `score::pressure_fraction` against a
-  caller-supplied `(start, end)` threshold range; drives background quota
-  adjustment in `worker.rs`. Foreground/read-pool throttling does not use it —
-  it engages on a flag and steps by a fixed -15% per tick
-- Read-pool target CPU:
-  the scale-down ceiling `resource_group.rs::compute_read_pool_target_cpu`
-  hands to `src/read_pool.rs`; `INFINITY` means no pressure-driven ceiling
+  caller-supplied `(start, end)` threshold range for background throttling
+- Read group generation:
+  a stable scheduler identity spanning ordinary policy updates; deletion
+  retires it and a later create obtains a new identity
 
 ## Related Components
 
 - `src/server/service/kv.rs` consumes resource-group context at the RPC edge.
 - `src/storage` uses resource-control metadata and limiters during scheduling.
-- `src/read_pool.rs` consumes `ResourceGroupManager`'s pressure/target-CPU API
-  (see "Cross-Component Contract: Unified Read Pool Coupling" above) to scale
-  the unified read pool's thread count under foreground CPU pressure.
+- `src/read_pool.rs` consumes stable read policies and background admission
+  helpers from `ResourceGroupManager`; its queue owns read fairness and CPU
+  admission.
 - `components/batch-system` integrates with priority-aware execution.

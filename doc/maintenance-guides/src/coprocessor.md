@@ -60,7 +60,10 @@ It is a read-heavy hot path and directly impacts query latency.
   non-mergeable tasks keep normal per-task responses.
 - Final merging and serialization run in the read pool under the request's
   selected semaphore group and tracker, but without an execution deadline or
-  resource-group admission. Completed work is not discarded merely because the
+  background-limiter admission. Semaphore selection matches execution: fair
+  pools bypass the legacy shared semaphore, while an explicitly configured
+  Analyze semaphore still applies. Fair-pool live-task limits and the global CPU
+  gate still apply. Completed work is not discarded merely because the
   execution budget expires while waiting for the pool, acquiring a permit,
   merging, or serializing. Every result was already admitted and charged when
   produced; the merge's own CPU is not charged to the group's limiter.
@@ -69,14 +72,17 @@ It is a read-heavy hot path and directly impacts query latency.
   and with the highest resource-group override priority, which places it in
   the top scheduling tier so a throttled group's completed results are not
   starved behind other groups' scans in the priority queue. The request's
-  group name is kept, so the merge's CPU still advances that group's virtual
-  time and its later tasks are scheduled correspondingly later. Pool-full
+  group name is kept for CPU attribution. In the fair pool its CPU advances
+  that group's high-priority scheduling lane's virtual time; this does not
+  charge the virtual time of its other priority lanes. Pool-full
   rejection remains possible and returns no partial data.
   This applies to both serial and concurrent batches with merging enabled.
   Pool and semaphore waits have no time limit, so they may retain buffered
   results after the client times out. Dropping the caller cancels a merge still
-  queued in the pool. Once the pool task takes the results, dropping the caller
-  does not interrupt permit acquisition or finalization.
+  queued in the pool, releasing the fair-pool live-task slot as well as the
+  buffered results. Taking the results and their cancellation guard is one
+  atomic handoff; once the pool task takes them, dropping the caller does not
+  interrupt permit acquisition or finalization.
   Outputs are buffered until finalization, so they contribute to peak request
   memory; each buffered output rides in its memory-trace guard, and attachment
   rebuilds the combined response's guard (adopting a batch response's node when
@@ -101,18 +107,20 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
   `src/server/service/kv.rs` as the RPC entry path.
-- On the Yatp path, unary and streaming heavy tasks are admitted through
-  semaphores created in `Endpoint::new`: a shared semaphore for ordinary
-  coprocessor work and a dedicated semaphore for Analyze requests that are
-  intentionally throttled by the background quota limiter.
-- The shared semaphore is controlled by
-  `server.end-point-max-concurrency`. The dedicated background-limited
-  semaphore is enabled only when
+- `Endpoint::new` selects semaphores from the actual read-pool mode. Legacy
+  Yatp pools use a shared semaphore controlled by
+  `server.end-point-max-concurrency`. Resource-group fair pools omit it:
+  whole-request permits held across yields would prevent other groups from
+  reaching the fair scheduler. Fair-pool CPU and live-task limits still apply.
+- In both Yatp modes, the dedicated background-limited Analyze semaphore is
+  enabled only when
   `server.end-point-max-bg-concurrency` is explicitly set to a positive value;
   its capacity is then controlled by that value.
-- When the dedicated setting is absent or `0`, Analyze and ordinary Cop
-  requests share the legacy semaphore. When it is positive, the two semaphores
-  are independent and both lanes can make progress concurrently.
+- When the dedicated setting is absent or `0`, Analyze follows the ordinary
+  request policy: shared semaphore in legacy pools, no semaphore in fair pools.
+  A positive setting is independent of the ordinary request policy. Unary,
+  streaming, and batch finalization all use the same selection. FuturePools
+  retain their existing behavior without these semaphores.
 - The dedicated cap does not automatically track unified read-pool worker
   autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
@@ -121,6 +129,14 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - Online config is limited but real: `Endpoint::config_manager()` exposes
   `CopConfigManager`, which currently updates memory quota. If config scope
   expands, update lifecycle and operational sections in this guide together.
+- In an RC unified read pool, the unary response future and the entire
+  streaming response own a `ReadPoolCancellationGuard`. Dropping either
+  cancels its queued task without waiting for the CPU gate to reopen and
+  releases the task's live-capacity and memory permits. An IO-waiting inner
+  future can also be dropped without waiting for its external operation to
+  complete. A running poll sees cancellation when it returns; synchronous
+  execution is not forcibly interrupted. Non-RC pools keep their existing
+  detached behavior.
 
 ## Data Model And Metadata Contracts
 
@@ -209,6 +225,26 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 - enforce request deadlines, concurrency limits, and memory quotas
 - collect execution stats and produce coprocessor responses
 
+## Cooperative Read Scheduling
+
+- Boxed `BatchExecutor::next_batch` calls share a post-batch checkpoint in
+  `components/tidb_query_executors/src/interface.rs`. IndexLookup's concrete
+  table-scan child has the corresponding explicit checkpoint.
+- `RangesScanner` checks every 32 completed get/scan operations, including
+  empty ranges, when a poll-scoped cooperative context is installed. Other
+  callers retain the legacy scanner rescheduling policy.
+- The read-pool wrapper owns the poll time slice and CPU-budget context;
+  executor/scanner code owns safe-point placement. Never keep a poll guard
+  across an await. A synchronous storage operation or one compute batch can
+  still overrun the slice; this is not a hard execution-time bound.
+- Checkpoint changes must preserve streaming range accounting, row order and
+  execution/storage statistics, including empty ranges and resumed scans.
+- The fair wrapper checks CPU debt before every inner poll, including inline
+  repolls that bypass queue pop. Exhaustion must use a true scheduler yield.
+- Fair-task cancellation owns the inner future through a per-task
+  `FutureSlot`; cancel must not wait for a running poll or drop that future
+  while holding the scheduler or task-slot lock.
+
 ## Critical Invariants
 
 - Range bounds in `ReqContext` must stay aligned with the actual request.
@@ -219,24 +255,28 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   lookups or interval scans produce no rows, so empty multi-range requests do
   not monopolize a read-pool worker.
 - Memory quota and concurrency limiters must remain cheap and correct.
+- Keep cancellation attached to the complete streaming response, not only the
+  first future that submits it. A guard dropped before admission must also
+  prevent a later-polled submission from creating a live task.
 - Request parsing and admission must stay aligned: when the dedicated setting
   is enabled, a request class that reports quota samples to the background
   quota limiter should use the dedicated background-limited semaphore instead
-  of bypassing heavy-task admission. With the setting disabled, it intentionally
-  shares the ordinary semaphore.
+  of bypassing heavy-task admission. With the setting disabled, it follows the
+  ordinary request policy for the pool mode.
 - When enabled, the dedicated background-limited semaphore protects all
   Analyze variants, including index, common-handle, column, mixed, and
   full-sampling Analyze, from unlimited fan-out. It is not part of the ordinary
-  shared heavy-task budget; when disabled, these requests intentionally use the
-  shared semaphore.
+  shared heavy-task budget; when disabled, these requests use the shared
+  semaphore only in legacy Yatp pools.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 - Batched unary result merging must preserve task identity, retry semantics,
   response-byte accounting, and memory tracing. Execution deadlines stop scans
   and serial collection, not finalization of completed results. Finalization
   is delivery of admitted work, not new work: it neither waits for
-  resource-group admission nor queues below other groups' new scans, and its
-  CPU stays charged to the request's group.
+  background-limiter admission nor queues below lower-priority new scans. Its
+  CPU stays attributed to the request's group and, in the fair pool, is charged
+  to the high-priority lane. Fair-pool capacity and CPU gating still apply.
 - Serial batch execution must keep at most one task from the request active
   without changing result-merging or response-order semantics.
 
@@ -269,7 +309,8 @@ collection and finalization are in `src/coprocessor/batch.rs`.
   distinguish ordinary Cop request pressure from Analyze background-limited
   throttling. Dashboard queries should preserve this label when diagnosing an
   individual lane and aggregate it only when displaying total semaphore
-  pressure.
+  pressure. Fair-pool requests that bypass the semaphore do not contribute to
+  these metrics; explicitly capped Analyze requests still do.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
@@ -358,8 +399,8 @@ Companion docs:
   runtime request context shared through execution; immutable once the request
   is scheduled (a serial batch overrides its deadline before that)
 - Light task threshold:
-  the execution-time budget before a coprocessor future must acquire a
-  semaphore permit in the Yatp path
+  the execution-time budget before a unary coprocessor future must acquire a
+  permit, when its selected pool/request policy enables a semaphore
 - Snapshot wait:
   request time spent between scheduling and obtaining the storage snapshot
 

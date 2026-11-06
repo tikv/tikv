@@ -63,6 +63,7 @@ pub mod smoother;
 pub mod store;
 pub mod stream;
 pub mod sys;
+pub mod task_reschedule;
 pub mod thread_group;
 pub mod thread_name_prefix;
 pub mod time;
@@ -70,6 +71,26 @@ pub mod timer;
 pub mod topn;
 pub mod worker;
 pub mod yatp_pool;
+
+/// Reaches a cooperative scheduling safe point.
+///
+/// CPU-budget exhaustion is checked first. If it yields the task, skip the
+/// wall-time check so a timestamp sampled before the await is never reused in
+/// the next poll. Otherwise both checks share one lazily sampled instant.
+#[inline]
+pub async fn cooperative_checkpoint() {
+    let mut now = time::LazyInstant::default();
+    if yatp_pool::yield_if_fair_cpu_exhausted(&mut now).await {
+        return;
+    }
+    task_reschedule::reschedule_if_time_slice_exhausted(&mut now).await;
+}
+
+/// Returns whether this poll has cooperative scheduling safe points.
+#[inline]
+pub fn cooperative_safe_points_active() -> bool {
+    task_reschedule::is_reschedule_context_active() || yatp_pool::is_fair_cpu_dispatch_active()
+}
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 

@@ -178,6 +178,21 @@ impl UnixSecs {
     }
 }
 
+/// Lazily samples one standard monotonic instant for a cooperative safe point.
+///
+/// Independent wall-time and CPU-budget checks can share one clock read. No
+/// clock is sampled when neither capability is active. Do not reuse this value
+/// after a check yields: the future may resume in a different poll.
+#[derive(Debug, Default)]
+pub struct LazyInstant(Option<std::time::Instant>);
+
+impl LazyInstant {
+    #[inline]
+    pub(crate) fn now(&mut self) -> std::time::Instant {
+        *self.0.get_or_insert_with(std::time::Instant::now)
+    }
+}
+
 pub struct SlowTimer {
     slow_time: Duration,
     t: Instant,

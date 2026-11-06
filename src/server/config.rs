@@ -206,11 +206,14 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     #[online_config(skip)]
     pub end_point_request_max_handle_duration: Option<ReadableDuration>,
+    /// Shared heavy-task concurrency limit for the legacy Yatp read pool.
+    /// Resource-group fair queues do not use this whole-request limit.
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
     /// Optional maximum number of concurrently running background-limited
-    /// Analyze tasks. `None` or `Some(0)` keeps Analyze requests on the
-    /// shared semaphore.
+    /// Analyze tasks. A positive limit applies to both Yatp pool modes.
+    /// `None` or `Some(0)` uses the ordinary request policy: a shared semaphore
+    /// in legacy pools, or no semaphore in resource-group fair pools.
     #[online_config(skip)]
     pub end_point_max_bg_concurrency: Option<usize>,
     #[serde(with = "perf_level_serde")]

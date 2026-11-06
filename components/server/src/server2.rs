@@ -120,7 +120,7 @@ use tikv_util::{
     thread_name_prefix::{
         BACKGROUND_WORKER_THREAD, BACKUP_STREAM_THREAD, CDC_THREAD, CHECK_LEADER_THREAD,
         DEBUGGER_THREAD, GRPC_SERVER_THREAD, PD_WORKER_THREAD, RESOLVED_TS_WORKER_THREAD,
-        SST_RECOVERY_THREAD, UNIFIED_READ_POOL_THREAD,
+        SST_RECOVERY_THREAD,
     },
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
@@ -499,15 +499,10 @@ where
         );
 
         let unified_read_pool = if self.core.config.readpool.is_unified_pool_enabled() {
-            let resource_ctl = self
-                .resource_manager
-                .as_ref()
-                .map(|m| m.derive_controller(UNIFIED_READ_POOL_THREAD.into(), true));
             Some(build_yatp_read_pool(
                 &self.core.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                resource_ctl,
                 self.resource_manager.clone(),
                 CleanupMethod::Remote(self.core.background_worker.remote()),
                 true,

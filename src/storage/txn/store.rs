@@ -104,25 +104,8 @@ pub trait Scanner: Send {
         let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
-            match self.next() {
-                Ok(Some((k, v))) => {
-                    if sample_step > 0 {
-                        row_count += 1;
-                        if (row_count - 1) % sample_step != 0 {
-                            continue;
-                        }
-                    }
-                    results.push(Ok((k.to_raw()?, v)));
-                }
-                Ok(None) => break,
-                Err(
-                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
-                        ..
-                    }))),
-                ) => {
-                    results.push(Err(e));
-                }
-                Err(e) => return Err(e),
+            if !collect_scan_next(self.next(), sample_step, &mut row_count, &mut results)? {
+                break;
             }
         }
         Ok(results)
@@ -133,6 +116,64 @@ pub trait Scanner: Send {
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
+}
+
+// Keep the caller-owned cadence independent of the poll's time slice.
+const CHECKPOINT_KEYS: usize = 32;
+
+/// Runs the ordinary scan loop with cooperative checks between storage calls.
+/// A single synchronous `next` remains indivisible. Sampling skips and lock
+/// errors still count toward the cadence, even when they produce no value.
+pub(crate) async fn scan_with_reschedule<S: Scanner + ?Sized>(
+    scanner: &mut S,
+    limit: usize,
+    sample_step: usize,
+) -> Result<Vec<Result<KvPair>>> {
+    if !tikv_util::cooperative_safe_points_active() {
+        return scanner.scan(limit, sample_step);
+    }
+    let mut row_count = 0;
+    let mut keys_since_checkpoint = 0;
+    let mut results = Vec::with_capacity(limit);
+    while results.len() < limit {
+        if !collect_scan_next(scanner.next(), sample_step, &mut row_count, &mut results)? {
+            break;
+        }
+        keys_since_checkpoint += 1;
+        if keys_since_checkpoint >= CHECKPOINT_KEYS && results.len() < limit {
+            keys_since_checkpoint = 0;
+            tikv_util::cooperative_checkpoint().await;
+        }
+    }
+    Ok(results)
+}
+
+/// Collects one scan result. `false` means the scanner is drained.
+/// Both synchronous and cooperative drivers preserve TiKV's per-key lock
+/// errors, row sampling and result order through this common collector.
+fn collect_scan_next(
+    next: Result<Option<(Key, Value)>>,
+    sample_step: usize,
+    row_count: &mut usize,
+    results: &mut Vec<Result<KvPair>>,
+) -> Result<bool> {
+    match next {
+        Ok(Some((k, v))) => {
+            if sample_step > 0 {
+                *row_count += 1;
+                if !(*row_count - 1).is_multiple_of(sample_step) {
+                    return Ok(true);
+                }
+            }
+            results.push(Ok((k.to_raw()?, v)));
+        }
+        Ok(None) => return Ok(false),
+        Err(e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked { .. })))) => {
+            results.push(Err(e));
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(true)
 }
 
 pub trait TxnEntryStore: Send {
@@ -409,13 +450,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         load_commit_ts: bool,
         statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<ValueEntry>>>> {
-        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
-            .fill_cache(self.fill_cache)
-            .isolation_level(self.isolation_level)
-            .bypass_locks(self.bypass_locks.clone())
-            .access_locks(self.access_locks.clone())
-            .build()?;
-
+        let mut point_getter = self.batch_point_getter()?;
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
             let value = point_getter
@@ -488,6 +523,46 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
 }
 
 impl<S: Snapshot> SnapshotStore<S> {
+    fn batch_point_getter(&self) -> Result<PointGetter<S>> {
+        Ok(
+            PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+                .fill_cache(self.fill_cache)
+                .isolation_level(self.isolation_level)
+                .bypass_locks(self.bypass_locks.clone())
+                .access_locks(self.access_locks.clone())
+                .build()?,
+        )
+    }
+
+    /// Reuses the same point getter across keys, just like `Store::batch_get`,
+    /// with safe points between keys. The mutable borrow requires only `Send`
+    /// from the snapshot's iterator; it need not be `Sync` across an await.
+    pub(crate) async fn batch_get_with_reschedule(
+        &mut self,
+        keys: &[Key],
+        load_commit_ts: bool,
+        statistics: &mut Vec<Statistics>,
+    ) -> Result<Vec<Result<Option<ValueEntry>>>> {
+        if !tikv_util::cooperative_safe_points_active() {
+            return self.batch_get(keys, load_commit_ts, statistics);
+        }
+        let mut point_getter = self.batch_point_getter()?;
+        let mut values = Vec::with_capacity(keys.len());
+        for (index, key) in keys.iter().enumerate() {
+            values.push(
+                point_getter
+                    .get_entry(key, load_commit_ts)
+                    .map_err(Error::from),
+            );
+            statistics.push(point_getter.take_statistics());
+            let processed_keys = index + 1;
+            if processed_keys < keys.len() && processed_keys.is_multiple_of(CHECKPOINT_KEYS) {
+                tikv_util::cooperative_checkpoint().await;
+            }
+        }
+        Ok(values)
+    }
+
     pub fn new(
         snapshot: S,
         start_ts: TimeStamp,
@@ -1065,6 +1140,125 @@ mod tests {
                 item.unwrap().commit_ts,
                 Some(COMMIT_TS),
                 "commit ts should be loaded"
+            );
+        }
+    }
+
+    #[test]
+    fn test_batch_get_checkpoint_preserves_order_commit_ts_and_statistics() {
+        use std::{
+            future::Future,
+            task::{Context as TaskContext, Poll},
+            time::{Duration, Instant},
+        };
+
+        use tikv_util::task_reschedule::PollRescheduleContextGuard;
+
+        let store = TestStore::new(CHECKPOINT_KEYS as u64 + 1);
+        let mut snapshot_store = store.store();
+        let mut keys: Vec<_> = store
+            .keys
+            .iter()
+            .rev()
+            .map(|key| Key::from_raw(key.as_bytes()))
+            .collect();
+        keys.insert(1, Key::from_raw(b"missing"));
+        for load_commit_ts in [false, true] {
+            let mut expected_stats = Vec::new();
+            let expected: Vec<_> = snapshot_store
+                .batch_get(&keys, load_commit_ts, &mut expected_stats)
+                .unwrap()
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let mut statistics = Vec::new();
+            let mut future = Box::pin(snapshot_store.batch_get_with_reschedule(
+                &keys,
+                load_commit_ts,
+                &mut statistics,
+            ));
+            let mut cx = TaskContext::from_waker(futures::task::noop_waker_ref());
+            {
+                let _guard = PollRescheduleContextGuard::new(Instant::now(), Duration::ZERO);
+                assert!(future.as_mut().poll(&mut cx).is_pending());
+            }
+            let actual = {
+                let _guard =
+                    PollRescheduleContextGuard::new(Instant::now(), Duration::from_secs(60));
+                match future.as_mut().poll(&mut cx) {
+                    Poll::Ready(result) => result.unwrap(),
+                    Poll::Pending => panic!("batch get did not resume after its checkpoint"),
+                }
+            };
+            drop(future);
+            let actual: Vec<_> = actual.into_iter().map(Result::unwrap).collect();
+            assert_eq!(actual, expected);
+            assert_eq!(statistics.len(), keys.len());
+            for (actual, expected) in statistics.iter().zip(&expected_stats) {
+                assert_eq!(actual.processed_size, expected.processed_size);
+                assert_eq!(actual.write.processed_keys, expected.write.processed_keys);
+                assert_eq!(
+                    actual.write.total_op_count(),
+                    expected.write.total_op_count()
+                );
+                assert_eq!(actual.lock.total_op_count(), expected.lock.total_op_count());
+                assert_eq!(actual.data.total_op_count(), expected.data.total_op_count());
+            }
+        }
+    }
+
+    #[test]
+    fn test_scan_checkpoint_counts_sampled_out_rows_and_preserves_lock_errors() {
+        use std::{
+            future::Future,
+            task::{Context as TaskContext, Poll},
+            time::{Duration, Instant},
+        };
+
+        use tikv_util::task_reschedule::PollRescheduleContextGuard;
+
+        let make_scanner = || FixtureStoreScanner {
+            data: (0..CHECKPOINT_KEYS + 2)
+                .map(|index| {
+                    let key = format!("k{index:03}").into_bytes();
+                    let value = if index == 1 {
+                        Err(Error::from(MvccError::from(MvccErrorInner::KeyIsLocked(
+                            Default::default(),
+                        ))))
+                    } else {
+                        Ok(key.clone())
+                    };
+                    (Key::from_raw(&key), value)
+                })
+                .collect::<Vec<_>>()
+                .into_iter(),
+        };
+        let expected = make_scanner().scan(3, CHECKPOINT_KEYS).unwrap();
+        let mut scanner = make_scanner();
+        let mut future = Box::pin(scan_with_reschedule(&mut scanner, 3, CHECKPOINT_KEYS));
+        let mut cx = TaskContext::from_waker(futures::task::noop_waker_ref());
+        {
+            let _guard = PollRescheduleContextGuard::new(Instant::now(), Duration::ZERO);
+            assert!(future.as_mut().poll(&mut cx).is_pending());
+        }
+        let actual = {
+            let _guard = PollRescheduleContextGuard::new(Instant::now(), Duration::from_secs(60));
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(result) => result.unwrap(),
+                Poll::Pending => panic!("scan did not resume after its checkpoint"),
+            }
+        };
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual[0].as_ref().unwrap().0, b"k000");
+        assert!(matches!(
+            &actual[1],
+            Err(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))))
+        ));
+        assert_eq!(actual[2].as_ref().unwrap().0, b"k033");
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_eq!(
+                actual.map_err(|err| format!("{err:?}")),
+                expected.map_err(|err| format!("{err:?}"))
             );
         }
     }

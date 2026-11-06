@@ -1,7 +1,7 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Common resource-pressure scoring shared by background quota adjustment
-//! (`worker.rs`) and foreground/read-pool throttling (`resource_group.rs`).
+//! (`worker.rs`) and foreground write throttling (`resource_group.rs`).
 //!
 //! `compute_resource_scores` produces three independent 0-100 scores —
 //! `cpu_score`, `io_score`, `compaction_score` — each simply the resource's
@@ -12,10 +12,10 @@
 //! Background quota adjustment turns its score into a `[0, 1]` pressure
 //! fraction via [`pressure_fraction`], over its own
 //! `(bg_cpu_throttle_threshold, fg_cpu_throttle_threshold)` range.
-//! Foreground/read-pool throttling instead just tightens whatever's currently
-//! in effect by a fixed percentage per tick once engaged — see
-//! `resource_group.rs::adjust_group_throttling` and
-//! `compute_read_pool_target_cpu`.
+//! Foreground write throttling tightens the historical CPU rate by a fixed
+//! percentage per tick once engaged — see
+//! `resource_group.rs::adjust_group_throttling`. Unified read scheduling uses
+//! its own CPU budget and does not consume these pressure scores.
 
 use std::time::Duration;
 
