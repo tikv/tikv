@@ -336,6 +336,7 @@ raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
 resolved_ts = { path = "components/resolved_ts" }
 resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
+samefn-poc = { git = "https://github.com/mjonss/samefn-poc.git", rev = "99cc9d0a10139e1636d806aae710ba4f29a35cf9" }
 security = { path = "components/security" }
 server = { path = "components/server" }
 service = { path = "components/service" }

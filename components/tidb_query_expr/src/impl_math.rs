@@ -297,7 +297,8 @@ pub fn exp(arg: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn sin(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.sin()).ok())
+    // Correctly rounded, shared with TiDB and TiFlash.
+    Ok(Real::new(samefn::sin::v1(**arg)).ok())
 }
 
 #[inline]
