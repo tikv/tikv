@@ -1,6 +1,5 @@
 use engine_rocks::BlobRunMode;
 use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt};
-use futures::executor::block_on;
 use test_raftstore::*;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -128,16 +127,26 @@ fn test_titan() {
         .find(|p| p.get_store_id() == 3)
         .unwrap()
         .clone();
-    assert!(!is_error_response(&block_on(
-        cluster
-            .async_remove_peer(region1.get_id(), peer.clone())
-            .unwrap(),
-    )));
+    cluster
+        .pd_client
+        .must_remove_peer(region1.get_id(), peer.clone());
     cluster.must_remove_region(3, region1.get_id());
     // lv5: empty, file 1 got deleted, since it is fully covered by region1
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+    // Peer metadata is removed before asynchronous range cleanup finishes. Wait
+    // for DeleteFiles without compacting away the obsolete blob reference in L6.
+    for _ in 0..100 {
+        if db
+            .get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
+            .unwrap()
+            == 0
+        {
+            break;
+        }
+        sleep_ms(100);
+    }
     assert_eq!(
         0,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
@@ -151,12 +160,10 @@ fn test_titan() {
     // lv5: file1 got deleted, since it is fully covered by region1
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     // blob db: file0 [k1: v]
-    assert!(!is_error_response(&block_on(
-        cluster
-            .async_add_peer(region1.get_id(), peer.clone())
-            .unwrap(),
-    )));
-
+    cluster
+        .pd_client
+        .must_add_peer(region1.get_id(), peer.clone());
+    fail::remove("after_delete_files_in_range");
     cluster.must_transfer_leader(region1.get_id(), peer.clone());
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"v".repeat(20000));
     cluster.must_put(b"k11", &b"v".repeat(30000));

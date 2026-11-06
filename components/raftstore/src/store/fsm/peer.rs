@@ -88,8 +88,11 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
-        peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState, TransferLeaderContext},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage, PeerClearMetaStat},
+        peer::{
+            ConsistencyState, Peer, PendingRemoveReason, PersistSnapshotResult, StaleState,
+            TransferLeaderContext,
+        },
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
@@ -176,9 +179,12 @@ where
 
     trace: PeerMemoryTrace,
 
-    /// Destroy is delayed because of some unpersisted readies in Peer.
-    /// Should call `destroy_peer` again after persisting all readies.
+    /// Destroy is waiting for persisted readies or flushed log GC. Resume it
+    /// when the corresponding completion message arrives.
     delayed_destroy: Option<DelayDestroy>,
+    /// Metadata cleanup has started. The FSM stays alive until its completion
+    /// message arrives, but must not schedule another cleanup in the meantime.
+    destroy_scheduled: bool,
     /// Before actually destroying a peer, ensure all log gc tasks are finished,
     /// so we can start destroying without seeking.
     logs_gc_flushed: bool,
@@ -304,6 +310,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                destroy_scheduled: false,
                 logs_gc_flushed: false,
             }),
         ))
@@ -366,6 +373,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                destroy_scheduled: false,
                 logs_gc_flushed: false,
             }),
         ))
@@ -1062,14 +1070,14 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => applied_index,
-                "pending_remove" => self.fsm.peer.pending_remove,
+                "pending_remove" => ?self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
 
             // do some sanity check, for follower, leader already apply to last log,
             // case#1 if it is learner during backup and never vote before, vote is 0
             // case#2 if peer is suppose to remove
-            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove.is_some() {
                 info!(
                     "this peer is never vote before or pending remove, it should be skip to wait apply";
                     "region" => %self.region_id(),
@@ -1098,7 +1106,7 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return;
         }
         let mut self_report = pdpb::PeerReport::default();
@@ -1162,6 +1170,11 @@ where
     }
 
     fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            // It means that the peer will be asynchronously removed, it's no
+            // need to execute the consequentail CasualMessages.
+            return;
+        }
         match *msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -1485,7 +1498,7 @@ where
                 && (key.idx < compacted_idx
                     || key.idx == compacted_idx
                         && !is_applying_snap
-                        && !self.fsm.peer.pending_remove)
+                        && self.fsm.peer.pending_remove.is_none())
             {
                 info!(
                     "deleting applied snap file";
@@ -1650,6 +1663,25 @@ where
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::ReadyToDestroyPeer {
+                to_peer_id,
+                merged_by_target,
+                clear_stat,
+            } => {
+                if to_peer_id != self.fsm.peer_id() {
+                    // Ignore redundant or stale messages from an outdated peer for the same region.
+                    // This handles the corner case where a stale peer is being removed
+                    // asynchronously while a new peer for the region is added.
+                    // If the async cleanup thread returns a delayed message
+                    // aimed to the removed peer, skip it to avoid acting on stale state.
+                    // This is a corner case after introducing `async destroy peer` by PR#18805.
+                    info!("delayed destroy peer message";
+                        "old_peer_id" => to_peer_id,
+                        "peer_id" => self.fsm.peer_id());
+                    return;
+                }
+                self.on_ready_destroy_peer(merged_by_target, clear_stat);
+            }
         }
     }
 
@@ -2082,7 +2114,7 @@ where
         // state, or it is being destroyed, ignore the result.
         let cache_warmup_state = &self.fsm.peer.transfer_leader_state.cache_warmup_state;
         if !self.fsm.peer.is_leader() && cache_warmup_state.is_none()
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
@@ -2338,7 +2370,7 @@ where
             |_| {}
         );
 
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
@@ -2540,7 +2572,16 @@ where
                     return;
                 }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
-                if self.fsm.stopped {
+                if self.fsm.stopped
+                    || self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy)
+                {
+                    // In PR#18805 we introduced asynchronous peer destruction. A peer
+                    // with `PendingRemoveReason::ReadyToDestroy` is a stale peer that has been
+                    // marked for removal and will be cleaned up by an async worker.
+                    // Similarly, `stopped` means the peer is stopped. In either case we should
+                    // ignore subsequent apply results for this peer — this preserves the semantics
+                    // of the original synchronous-destroy path and avoids applying results for a
+                    // peer that is effectively slated for removal or already stopped.
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
@@ -2764,7 +2805,7 @@ where
             |_| Ok(())
         );
 
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove.is_some() || self.fsm.stopped {
             return Ok(());
         }
 
@@ -3984,6 +4025,9 @@ where
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return self.fsm.destroy_scheduled;
+        }
         // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
             // Destroy the apply fsm first, wait for the reply msg from apply fsm
@@ -4026,6 +4070,13 @@ where
             self.fsm.logs_gc_flushed = true;
         }
         if !self.fsm.logs_gc_flushed {
+            if self
+                .fsm
+                .delayed_destroy
+                .is_some_and(|delay| delay.reason == DelayReason::UnFlushLogGc)
+            {
+                return Some(DelayReason::UnFlushLogGc);
+            }
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
             if end_index == 0 {
@@ -4086,6 +4137,9 @@ where
     }
 
     fn on_raft_log_gc_flushed(&mut self) {
+        if self.fsm.destroy_scheduled {
+            return;
+        }
         self.fsm.logs_gc_flushed = true;
         let delay = match self.fsm.delayed_destroy {
             Some(delay) => delay,
@@ -4094,12 +4148,22 @@ where
         self.destroy_peer(delay.merged_by_target);
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
-        self.ctx.coprocessor_host.on_destroy_peer(self.region());
+        if self.fsm.destroy_scheduled {
+            return true;
+        }
+        // Keep the original data-cleanup decision across delayed retries.
+        let merged_by_target = self
+            .fsm
+            .delayed_destroy
+            .map_or(merged_by_target, |delay| delay.merged_by_target);
+        if self.fsm.peer.pending_remove != Some(PendingRemoveReason::ReadyToDestroy) {
+            self.ctx.coprocessor_host.on_destroy_peer(self.region());
+        }
         fail_point!("destroy_peer");
-        // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
+        // Mark itself `PendingRemoveReason::ReadyToDestroy` to represent that this peer
+        // is ready to be removed.
+        self.fsm.peer.pending_remove = Some(PendingRemoveReason::ReadyToDestroy);
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -4112,17 +4176,12 @@ where
                 .delayed_destroy
                 .is_some_and(|delay| delay.reason == reason)
             {
-                panic!(
-                    "{} destroy peer twice with same delay reason, original {:?}, now {}",
-                    self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
-                );
+                return false;
             }
             self.fsm.delayed_destroy = Some(DelayDestroy {
                 merged_by_target,
                 reason,
             });
-            // TODO: The destroy process can also be asynchronous as snapshot process,
-            // if so, all write db operations are removed in store thread.
             info!(
                 "delays destroy";
                 "region_id" => self.fsm.region_id(),
@@ -4178,6 +4237,9 @@ where
             return false;
         }
 
+        self.fsm.destroy_scheduled = true;
+        self.fsm.delayed_destroy = None;
+
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -4229,20 +4291,47 @@ where
                 "err" => %e,
             );
         }
-        if let Err(e) = self.fsm.peer.destroy(
+
+        // Drop the `StoreMeta` lock here to ensure that the asynchronous destroy task
+        // can execute safely without blocking other threads.
+        drop(meta);
+
+        let clear_stat = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
             merged_by_target,
-            &self.ctx.pending_create_peers,
-            &self.ctx.raft_metrics,
-        ) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
+            self.ctx.store_meta.clone(),
+            self.ctx.pending_create_peers.clone(),
+        );
+        // If clear_stat is valid, it means the destroy task above was executed
+        // synchronously. In this case, we should immediately perform the
+        // follow-up steps required to complete the peer destruction process.
+        if let Some(clear_stat) = clear_stat {
+            self.on_ready_destroy_peer(merged_by_target, clear_stat);
         }
 
+        true
+    }
+
+    fn on_ready_destroy_peer(
+        &mut self,
+        merged_by_target: bool,
+        clear_stat: PeerClearMetaStat,
+    ) -> bool {
+        assert_eq!(
+            self.fsm.peer.pending_remove,
+            Some(PendingRemoveReason::ReadyToDestroy),
+            "terminate the peer under pending_remove state, exepcted {:?} actual {:?} ",
+            Some(PendingRemoveReason::ReadyToDestroy),
+            self.fsm.peer.pending_remove,
+        );
+        // Clean remains if needs and notify all pending requests to exit.
+        self.fsm
+            .peer
+            .ready_to_destroy(merged_by_target, clear_stat, &self.ctx.raft_metrics);
+
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.
@@ -4263,28 +4352,16 @@ where
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        // Clear merge related structures.
-        if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
-            if need_atomic {
-                panic!(
-                    "{} should destroy with target region atomically",
-                    self.fsm.peer.tag
-                );
-            } else {
-                // Remove itself from atomic_snap_regions as it has cleaned both
-                // data and metadata.
-                let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                meta.atomic_snap_regions
-                    .get_mut(&target_region_id)
-                    .unwrap()
-                    .remove(&region_id);
-                meta.destroyed_region_for_snap.remove(&region_id);
-                info!("peer has destroyed, clean up for incoming overlapped snapshot";
-                    "region_id" => region_id,
-                    "peer_id" => self.fsm.peer_id(),
-                    "target_region_id" => target_region_id,
-                );
-            }
+        // Reconcile with snapshot registration under the same StoreMeta lock.
+        // Completion may precede Step1, which would otherwise clear need_atomic.
+        if let Some(target_region_id) =
+            meta.remove_destroyed_region_from_snapshot(region_id, merged_by_target)
+        {
+            info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => target_region_id,
+            );
         }
 
         meta.pending_merge_targets.remove(&region_id);
@@ -5035,7 +5112,7 @@ where
 
     fn on_check_merge(&mut self) {
         if self.fsm.stopped
-            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_remove.is_some()
             || self.fsm.peer.pending_merge_state.is_none()
         {
             return;
@@ -5116,6 +5193,9 @@ where
         }
 
         self.fsm.peer.pending_merge_state = Some(state);
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return;
+        }
         let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
 
         if let Some(ref catch_up_logs) = self.fsm.peer.catch_up_logs {
@@ -5123,7 +5203,7 @@ where
                 assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
                 // Indicate that `on_catch_up_logs_for_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
                 self.ctx.apply_router.schedule_task(
@@ -5138,6 +5218,9 @@ where
     }
 
     fn on_catch_up_logs_for_merge(&mut self, mut catch_up_logs: CatchUpLogs) {
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            return;
+        }
         let region_id = self.fsm.region_id();
         assert_eq!(region_id, catch_up_logs.merge.get_source().get_id());
 
@@ -5156,7 +5239,7 @@ where
                 );
                 // Indicate that `on_ready_prepare_merge` has already executed.
                 // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Just for saving memory.
                 catch_up_logs.merge.clear_entries();
                 // Send CatchUpLogs back to destroy source apply fsm,
@@ -5341,6 +5424,21 @@ where
         target: metapb::Peer,
         result: MergeResultKind,
     ) {
+        // Cleanup may still be running on the region worker. Late merge messages
+        // must not replace ReadyToDestroy or start another destruction.
+        if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
+            if let MergeResultKind::FromTargetSnapshotStep1 = result {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                if let Some(need_atomic) = meta.destroyed_region_for_snap.get_mut(&self.region_id())
+                {
+                    // This source is already being cleaned independently. The target
+                    // must wait for that cleanup; on_ready_destroy_peer will remove
+                    // it from atomic_snap_regions when cleanup finishes.
+                    *need_atomic = false;
+                }
+            }
+            return;
+        }
         let exists = self.fsm.peer.pending_merge_state.as_ref().is_none_or(|s| {
             s.get_target()
                 .get_peers()
@@ -5395,7 +5493,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_region_id" => target_region_id,
                 );
-                self.fsm.peer.pending_remove = true;
+                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
@@ -5415,7 +5513,7 @@ where
     }
 
     fn on_stale_merge(&mut self, target_region_id: u64) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
         info!(
@@ -5970,7 +6068,7 @@ where
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             apply::notify_req_region_removed(self.region_id(), cb);
             return;
         }
@@ -6101,7 +6199,16 @@ where
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
-        if !self.fsm.peer.is_leader() {
+        fail_point!(
+            "check_state_on_raft_gc_log_tick",
+            self.fsm.stopped || self.fsm.peer.pending_remove.is_some(),
+            |_| {}
+        );
+        if self.fsm.stopped || self.fsm.peer.pending_remove.is_some() || !self.fsm.peer.is_leader()
+        {
+            // If the peer is marked as `pending_remove`, it means the clearing might be
+            // executed by the region worker, or this peer is already stopped. In both
+            // scenarios, there is no need to execute log gc.
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
             // when the role becomes follower.
@@ -6303,7 +6410,7 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data {
+        if !self.fsm.peer.wait_data || self.fsm.peer.pending_remove.is_some() {
             return;
         }
         if self.fsm.peer.is_leader()
@@ -6380,7 +6487,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.fsm.peer.is_leader() {
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
@@ -6859,7 +6966,7 @@ where
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove.is_some() {
             return;
         }
 
