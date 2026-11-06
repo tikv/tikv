@@ -50,7 +50,10 @@ use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
     Error,
-    metrics::*,
+    metrics::{
+        BACKUP_RAW_EXPIRED_COUNT, BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM, BACKUP_SOFTLIMIT_GAUGE,
+        BACKUP_THREAD_POOL_SIZE_GAUGE, *,
+    },
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
     utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
