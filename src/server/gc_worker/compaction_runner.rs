@@ -142,6 +142,12 @@ pub struct CompactionCandidate {
 /// MVCC read-activity score to remain meaningful when the two are combined.
 const RECLAIMABLE_BYTES_PER_SCORE: f64 = 1024.0 * 1024.0;
 
+/// Base score of an admitted candidate whose range properties show no
+/// reclaimable bytes, e.g. a Region smaller than one range-properties sample.
+/// It equals the score of one reclaimable byte, so the Region stays a candidate
+/// but ranks below every Region with measured reclaimable bytes.
+const UNMEASURED_RECLAIMABLE_SCORE: f64 = 1.0 / RECLAIMABLE_BYTES_PER_SCORE;
+
 /// Minimum interval between split-failure-triggered full-store scans. Hints are
 /// coalesced, but this cooldown still bounds the metadata work caused by a
 /// burst of `NO_VALID_SPLIT_KEY` results.
@@ -441,11 +447,20 @@ pub struct CompactionRunner<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
 
 /// Calculates compaction score based on tombstones, estimated reclaimable
 /// bytes, and MVCC read intensity.
+///
+/// `missing_range_properties` is true when an SST in the Region has no range
+/// properties or holds only tombstones, or the default-CF size is unavailable,
+/// so its bytes can't be estimated. Only then does an admitted candidate with
+/// no measured bytes fall back to a version-count score; otherwise it gets
+/// `UNMEASURED_RECLAIMABLE_SCORE`. A positive estimate is used even when it
+/// misses some SSTs: it is a lower bound in the same units as other Regions,
+/// while the version count is SST-wide and would outrank them.
 fn calculate_compaction_score(
     num_tombstones: u64,
     num_discardable: u64,
     num_total_entries: u64,
     estimated_reclaimable_bytes: u64,
+    missing_range_properties: bool,
     mvcc_versions_scanned: u64,
     config: &GcConfig,
 ) -> f64 {
@@ -467,6 +482,8 @@ fn calculate_compaction_score(
             0.0
         } else if estimated_reclaimable_bytes > 0 {
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else if !missing_range_properties {
+            UNMEASURED_RECLAIMABLE_SCORE
         } else {
             // Keep candidates visible when old SSTs do not have range properties.
             num_tombstones as f64 * ratio
@@ -484,6 +501,11 @@ fn calculate_compaction_score(
             // Rank admitted candidates by physical impact instead of version count.
             // Use MiB-sized units so the additive MVCC-read score remains useful.
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else if !missing_range_properties {
+            // The Region's counts come from whole SSTs and may include keys outside
+            // it, so they can't rank it. The version-count fallback is in different
+            // units and would outrank every byte-scored Region.
+            UNMEASURED_RECLAIMABLE_SCORE
         } else {
             // Keep candidates visible when old SSTs do not have range properties.
             num_discardable as f64 * ratio
@@ -1012,17 +1034,26 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 box_err!("failed to get table properties: {:?}", e)
             })?;
 
+        // Whether the byte estimate is blind to part of this Region. Table and MVCC
+        // properties describe whole SSTs, so a Region's counts include keys outside
+        // it; only the range-limited byte estimate is safe to rank by.
+        let mut missing_range_properties = false;
         collection.iter_table_properties(|table_prop| {
             let num_entries = table_prop.get_num_entries();
             num_total_entries += num_entries;
             let user_properties = table_prop.get_user_collected_properties();
 
-            if let Some((size, _)) = user_properties.approximate_size_and_keys(&start_key, &end_key)
-            {
-                write_cf_bytes = write_cf_bytes.saturating_add(size as u64);
+            match user_properties.approximate_size_and_keys(&start_key, &end_key) {
+                Some((size, _)) => write_cf_bytes = write_cf_bytes.saturating_add(size as u64),
+                None => missing_range_properties = true,
             }
 
             if let Some(mvcc_properties) = user_properties.get_mvcc_properties() {
+                // Range properties size only Puts, so a tombstone-only SST has no bytes.
+                if num_entries > 0 && mvcc_properties.num_versions == 0 {
+                    missing_range_properties = true;
+                }
+
                 // Collect MVCC stats
                 num_rows += mvcc_properties.num_rows;
                 num_total_default_puts += mvcc_properties.num_default_puts;
@@ -1049,19 +1080,25 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 .table_properties_collection(CF_DEFAULT, &[Range::new(&start_key, &end_key)])
             {
                 Ok(collection) => collection.iter_table_properties(|table_prop| {
-                    if let Some((size, _)) = table_prop
+                    match table_prop
                         .get_user_collected_properties()
                         .approximate_size_and_keys(&start_key, &end_key)
                     {
-                        default_cf_bytes = default_cf_bytes.saturating_add(size as u64);
+                        Some((size, _)) => {
+                            default_cf_bytes = default_cf_bytes.saturating_add(size as u64)
+                        }
+                        None => missing_range_properties = true,
                     }
                     true
                 }),
-                Err(e) => warn!(
-                    "failed to get default CF table properties, scoring with write CF only";
-                    "region_id" => region.get_id(),
-                    "err" => ?e,
-                ),
+                Err(e) => {
+                    missing_range_properties = true;
+                    warn!(
+                        "failed to get default CF table properties, scoring with write CF only";
+                        "region_id" => region.get_id(),
+                        "err" => ?e,
+                    );
+                }
             }
         }
 
@@ -1091,6 +1128,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             num_discardable,
             num_total_entries,
             estimated_reclaimable_bytes,
+            missing_range_properties,
             mvcc_versions_scanned,
             config,
         );
@@ -1190,6 +1228,7 @@ mod tests {
             1,                  // discardable versions
             10,                 // total entries
             1024 * 1024 * 1024, // estimated reclaimable bytes: 1 GiB
+            false,              // missing range properties
             0,                  // MVCC versions scanned per request
             &config,
         );
@@ -1198,6 +1237,7 @@ mod tests {
             30,                // discardable versions
             100,               // total entries
             100 * 1024 * 1024, // estimated reclaimable bytes: 100 MiB
+            false,             // missing range properties
             0,                 // MVCC versions scanned per request
             &config,
         );
@@ -1205,6 +1245,45 @@ mod tests {
         assert!(large_region_score > small_region_score);
         assert_eq!(large_region_score, 1024.0);
         assert_eq!(small_region_score, 100.0);
+    }
+
+    #[test]
+    fn test_version_count_fallback_requires_missing_range_properties() {
+        let mut config = GcConfig::default();
+        let one_mib_score = calculate_compaction_score(0, 30, 100, 1024 * 1024, false, 0, &config);
+        assert_eq!(one_mib_score, 1.0);
+
+        // 30 of 100 entries are discardable, so the candidate passes the 20%
+        // admission gate, but it has no measurable reclaimable bytes. With range
+        // properties it stays a candidate and ranks below any measured Region; the
+        // version-count fallback would otherwise outrank every byte-scored Region.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 0, false, 0, &config),
+            UNMEASURED_RECLAIMABLE_SCORE
+        );
+        assert!(UNMEASURED_RECLAIMABLE_SCORE < one_mib_score);
+        // Without range properties, the version count keeps the Region visible.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 0, true, 0, &config),
+            9.0
+        );
+        // A positive estimate that misses some SSTs still ranks by bytes.
+        assert_eq!(
+            calculate_compaction_score(0, 30, 100, 2 * 1024 * 1024, true, 0, &config),
+            2.0
+        );
+
+        // Same with the compaction filter disabled, where 40 of 100 tombstones pass
+        // the 30% tombstone gate.
+        config.enable_compaction_filter = false;
+        assert_eq!(
+            calculate_compaction_score(40, 0, 100, 0, false, 0, &config),
+            UNMEASURED_RECLAIMABLE_SCORE
+        );
+        assert_eq!(
+            calculate_compaction_score(40, 0, 100, 0, true, 0, &config),
+            16.0
+        );
     }
 
     #[test]
@@ -1259,6 +1338,7 @@ mod tests {
             discardable.write_versions,
             properties.num_versions,
             reclaimable_bytes,
+            false,
             0,
             &config,
         );
@@ -1299,6 +1379,7 @@ mod tests {
                 discardable.write_versions,
                 properties.num_versions,
                 reclaimable_bytes,
+                false,
                 0,
                 &config,
             ) > 0.0
@@ -1343,6 +1424,7 @@ mod tests {
                 discardable.write_versions,
                 properties.num_versions,
                 reclaimable_bytes,
+                false,
                 0,
                 &config,
             ) > 0.0
