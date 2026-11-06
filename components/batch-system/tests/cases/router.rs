@@ -26,6 +26,7 @@ fn unreachable() -> Message {
 
 #[test]
 fn test_basic() {
+    let _serial = super::serialize_tests();
     let (control_tx, mut control_fsm) = Runner::new(10);
     let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
     control_fsm.sender = Some(control_drop_tx);
@@ -128,6 +129,7 @@ fn test_basic() {
 
 #[test]
 fn test_router_trace() {
+    let _serial = super::serialize_tests();
     let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm, None);

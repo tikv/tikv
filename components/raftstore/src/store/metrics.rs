@@ -57,6 +57,28 @@ make_auto_flush_static_metric! {
         compute,
     }
 
+    pub label_enum StorePoolType {
+        normal,
+        low,
+    }
+
+    pub label_enum NoisyMarkReason {
+        no_manager,
+        no_group,
+        not_blamed,
+        no_table,
+        key_not_in_region,
+        marked,
+    }
+
+    pub struct NoisyMarkVec: LocalIntCounter {
+        "reason" => NoisyMarkReason,
+    }
+
+    pub struct StorePoolMsgsVec: LocalIntCounter {
+        "pool" => StorePoolType,
+    }
+
     pub label_enum RegionHashResult {
         miss,
         matched,
@@ -387,6 +409,38 @@ make_static_metric! {
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
         "type" => SnapshotGenerateBytesType,
     }
+}
+
+lazy_static! {
+    pub static ref NOISY_TABLE_MARKS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_noisy_table_marks_total",
+        "Outcome of attributing a proposal to a noisy table",
+        &["reason"]
+    )
+    .unwrap();
+    // Thread-local: every proposal hits one, so a shared atomic would be
+    // contended across pollers.
+    pub static ref NOISY_MARK: NoisyMarkVec = auto_flush_from!(NOISY_TABLE_MARKS_VEC, NoisyMarkVec);
+
+    pub static ref STORE_POOL_MSGS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_store_pool_msgs_total",
+        "Peer messages handled by the store batch system, by poller pool",
+        &["pool"]
+    )
+    .unwrap();
+    pub static ref STORE_POOL_MSGS: StorePoolMsgsVec =
+        auto_flush_from!(STORE_POOL_MSGS_VEC, StorePoolMsgsVec);
+
+    pub static ref NOISY_REGION_DEMOTIONS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_noisy_region_demotions_total",
+        "Raft FSMs moved between store poller pools by noisy-tenant demotion, by destination pool",
+        &["to"]
+    )
+    .unwrap();
+    pub static ref NOISY_REGION_TO_LOW: IntCounter =
+        NOISY_REGION_DEMOTIONS_VEC.with_label_values(&["low"]);
+    pub static ref NOISY_REGION_TO_NORMAL: IntCounter =
+        NOISY_REGION_DEMOTIONS_VEC.with_label_values(&["normal"]);
 }
 
 lazy_static! {

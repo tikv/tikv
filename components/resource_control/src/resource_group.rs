@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::{max, min},
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     sync::{
         Arc, LockResult, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
@@ -494,6 +494,17 @@ pub struct ResourceGroupManager {
     // Last tick's `loaded` verdict, so both control loops can pick their period
     // without recomputing the score on the read pool's own clock.
     overloaded: AtomicBool,
+    // TiDB tables a noisy group has proposed to; their regions run on the
+    // low-priority store pool. Tables rather than regions so demotion survives
+    // split and merge. Marks land in `noisy_tables_pending` and the control
+    // tick publishes them.
+    // Ordered so a region's table span is answered by a range lookup.
+    noisy_tables: RwLock<BTreeSet<i64>>,
+    noisy_tables_pending: RwLock<BTreeSet<i64>>,
+    // `!noisy_tables.is_empty()`, readable without the lock.
+    has_noisy_tables: AtomicBool,
+    // Bumped when the set changes, so readers can cache their verdict.
+    noisy_tables_gen: AtomicU64,
 }
 
 impl Default for ResourceGroupManager {
@@ -623,6 +634,10 @@ impl ResourceGroupManager {
             noisy_groups: RwLock::new(HashSet::new()),
             has_noisy_groups: AtomicBool::new(false),
             overloaded: AtomicBool::new(false),
+            noisy_tables: RwLock::new(BTreeSet::new()),
+            noisy_tables_pending: RwLock::new(BTreeSet::new()),
+            has_noisy_tables: AtomicBool::new(false),
+            noisy_tables_gen: AtomicU64::new(0),
         };
 
         // init the default resource group by default.
@@ -999,7 +1014,8 @@ impl ResourceGroupManager {
         if under_pressure {
             self.set_noisy_groups(self.select_noisy_groups(cpu_score));
         }
-
+        // Not gated on `under_pressure`: `noisy_groups` is sticky across ticks.
+        self.publish_noisy_tables();
         self.adjust_group_throttling(cpu_score, under_pressure);
         self.adjust_group_scheduling_at(cpu_score, under_pressure, now);
     }
@@ -1055,6 +1071,33 @@ impl ResourceGroupManager {
         self.noisy_groups.read().iter().cloned().collect()
     }
 
+    /// Whether the last tick blamed `name`. Lock-free when nothing is blamed.
+    pub fn is_noisy_group(&self, name: &str) -> bool {
+        if !self.has_noisy_groups.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.noisy_groups.read().contains(name)
+    }
+
+    /// Sets the blamed groups without driving a control tick.
+    #[cfg(feature = "testexport")]
+    pub fn set_noisy_groups_for_test(&self, groups: HashSet<String>) {
+        self.set_noisy_groups(groups);
+    }
+
+    /// Publishes (`keep`) or clears the marked tables without a control tick.
+    #[cfg(feature = "testexport")]
+    pub fn publish_noisy_tables_for_test(&self, keep: bool) {
+        if keep {
+            self.publish_noisy_tables();
+        } else {
+            self.clear_noisy_tables();
+        }
+    }
+
+    /// Stores the set and the flag together, so `has_noisy_groups` cannot
+    /// drift from it; `clear_noisy_groups` is the other writer.
+    ///
     /// The flag is stored while the set's write lock is held, with release
     /// ordering: the detection tick and the read pool's reset run on different
     /// threads, and a reader that sees the flag must then find a set that
@@ -1064,6 +1107,7 @@ impl ResourceGroupManager {
     fn set_noisy_groups(&self, groups: HashSet<String>) {
         let mut set = self.noisy_groups.write();
         let empty = groups.is_empty();
+        metrics::NOISY_GROUPS_GAUGE.set(groups.len() as i64);
         *set = groups;
         self.has_noisy_groups.store(!empty, Ordering::Release);
     }
@@ -1073,6 +1117,120 @@ impl ResourceGroupManager {
         let mut set = self.noisy_groups.write();
         set.clear();
         self.has_noisy_groups.store(false, Ordering::Release);
+        metrics::NOISY_GROUPS_GAUGE.set(0);
+        // Released before the tables are touched: two locks, one order.
+        drop(set);
+        // The only path that releases demoted tables.
+        self.clear_noisy_tables();
+    }
+
+    /// Records that `group`, which the caller found blamed, proposed to
+    /// `table_id`. Takes effect at the next publish.
+    pub fn mark_noisy_table(&self, group: &str, table_id: i64) {
+        // Hot path: an already-demoted table has nothing to add, and marking
+        // it again would have every tick re-merge it; the pending case stays
+        // off the write lock.
+        if self.is_noisy_table(table_id) || self.noisy_tables_pending.read().contains(&table_id) {
+            return;
+        }
+        fail_point!("noisy_tables_mark_before_insert");
+        let mut pending = self.noisy_tables_pending.write();
+        // Re-checked under the pending lock. `clear_noisy_groups` empties the
+        // groups before it takes this lock, so a proposal that saw the group
+        // blamed before the episode ended cannot carry its table into the
+        // next one.
+        if !self.is_noisy_group(group) {
+            return;
+        }
+        pending.insert(table_id);
+    }
+
+    /// Marks without a blamed group, for tests of the publish path.
+    #[cfg(feature = "testexport")]
+    pub fn mark_noisy_table_for_test(&self, table_id: i64) {
+        self.noisy_tables_pending.write().insert(table_id);
+    }
+
+    /// Whether `table_id` is in the published set. Lock-free when empty.
+    pub fn is_noisy_table(&self, table_id: i64) -> bool {
+        if !self.has_noisy_tables.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.noisy_tables.read().contains(&table_id)
+    }
+
+    /// Whether any published table lies in `first..=last`. Lock-free when
+    /// empty, a logarithmic lookup otherwise.
+    pub fn any_noisy_table_in(&self, first: i64, last: i64) -> bool {
+        if !self.has_noisy_tables.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.noisy_tables
+            .read()
+            .range(first..=last)
+            .next()
+            .is_some()
+    }
+
+    /// Changes whenever [`Self::is_noisy_table`] may answer differently.
+    ///
+    /// Acquire pairs with the Release in `publish_noisy_tables` and
+    /// `clear_noisy_tables`, so a reader that sees a new generation also sees
+    /// the flag and set that generation describes.
+    pub fn noisy_tables_gen(&self) -> u64 {
+        self.noisy_tables_gen.load(Ordering::Acquire)
+    }
+
+    /// Adds the marks since the last tick to the published set.
+    ///
+    /// Adds rather than replaces: a demoted region's reads stop reaching
+    /// `propose`, so it stops being marked, and replacing made demotion
+    /// oscillate. [`Self::clear_noisy_tables`] is the only release.
+    fn publish_noisy_tables(&self) {
+        // The pending lock is held until the merge is done, in the same
+        // pending-then-current order as `clear_noisy_tables`, so a clear from
+        // the read pool's reset cannot slip in between the take and the merge
+        // and have the taken marks republished after the episode ended.
+        let mut pending = self.noisy_tables_pending.write();
+        if pending.is_empty() {
+            return;
+        }
+        fail_point!("noisy_tables_publish_before_merge");
+        let mut current = self.noisy_tables.write();
+        // `mark_noisy_table` skips published tables, so pending is new work;
+        // the merge is the only thing done under both locks.
+        let added = std::mem::take(&mut *pending);
+        let before = current.len();
+        current.extend(added.iter().copied());
+        let total = current.len();
+        drop(current);
+        drop(pending);
+        metrics::NOISY_TABLES_GAUGE.set(total as i64);
+        if total != before {
+            self.has_noisy_tables.store(true, Ordering::Relaxed);
+            self.noisy_tables_gen.fetch_add(1, Ordering::Release);
+            const LOGGED: usize = 32;
+            info!(
+                "noisy tables extended";
+                "added" => added.len(),
+                "first" => ?added.iter().take(LOGGED).collect::<Vec<_>>(),
+                "total" => total,
+            );
+        }
+    }
+
+    /// Releases every demoted table when the episode ends.
+    fn clear_noisy_tables(&self) {
+        // Same lock order as `publish_noisy_tables`.
+        self.noisy_tables_pending.write().clear();
+        let mut current = self.noisy_tables.write();
+        metrics::NOISY_TABLES_GAUGE.set(0);
+        if !current.is_empty() {
+            info!("releasing noisy tables"; "count" => current.len());
+            current.clear();
+            self.has_noisy_tables.store(false, Ordering::Relaxed);
+            self.noisy_tables_gen.fetch_add(1, Ordering::Release);
+        }
     }
 
     /// The biggest movers, taken until they cover the overshoot.
@@ -2704,6 +2862,174 @@ pub(crate) mod tests {
 
     // seed_tracker builds a 30-bucket tracker, so one window is 15 minutes.
     const TEST_WINDOW_SECS: u64 = 30 * RU_BUCKET_SECS;
+
+    #[test]
+    fn test_noisy_table_is_only_visible_after_a_publish() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        mgr.mark_noisy_table_for_test(7);
+        assert!(!mgr.is_noisy_table(7), "a mark is not live until published");
+
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+        assert!(!mgr.is_noisy_table(8));
+    }
+
+    #[test]
+    fn test_a_held_groups_marks_survive_a_tick_that_is_not_under_pressure() {
+        // A blamed group under scheduler backpressure is held, so its episode
+        // is not released and its marks must still be published.
+        let mgr = ResourceGroupManager::new(Config::default());
+        let t0 = RuTracker::now_secs();
+        seed_tracker(&mgr, "steady", 0.0, 900.0, t0);
+        mgr.set_noisy_groups(["steady".to_owned()].into_iter().collect());
+        mgr.ru_trackers
+            .get("steady")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .0
+            .set_scheduler_backpressure(true);
+
+        mgr.mark_noisy_table_for_test(127);
+        // Loaded but `under_pressure` is false, while the group stays blamed.
+        mgr.set_bg_cpu_at_floor(false);
+        mgr.online_adjust_resource_quota_at(80.0, t0);
+
+        assert!(
+            mgr.is_noisy_table(127),
+            "a held episode's marks must be published, not discarded"
+        );
+    }
+
+    #[test]
+    fn test_noisy_tables_are_released_when_pressure_clears() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        mgr.mark_noisy_table_for_test(7);
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+
+        mgr.clear_noisy_tables();
+        assert!(!mgr.is_noisy_table(7));
+    }
+
+    #[test]
+    fn test_a_table_stays_demoted_across_ticks_that_mark_nothing() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        mgr.mark_noisy_table_for_test(7);
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+
+        // A tick with no marks must not release it.
+        mgr.publish_noisy_tables();
+        assert!(
+            mgr.is_noisy_table(7),
+            "an unmarked tick must not release a demoted table"
+        );
+
+        mgr.clear_noisy_tables();
+        assert!(!mgr.is_noisy_table(7));
+    }
+
+    #[test]
+    fn test_noisy_tables_gen_moves_only_when_the_set_changes() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        let start = mgr.noisy_tables_gen();
+
+        // No change, no bump.
+        mgr.publish_noisy_tables();
+        assert_eq!(mgr.noisy_tables_gen(), start);
+        mgr.clear_noisy_tables();
+        assert_eq!(mgr.noisy_tables_gen(), start);
+
+        mgr.mark_noisy_table_for_test(7);
+        mgr.publish_noisy_tables();
+        let after_add = mgr.noisy_tables_gen();
+        assert!(after_add > start, "adding a region must invalidate readers");
+
+        // Re-publishing the identical set is not a change.
+        mgr.mark_noisy_table_for_test(7);
+        mgr.publish_noisy_tables();
+        assert_eq!(mgr.noisy_tables_gen(), after_add);
+
+        mgr.clear_noisy_tables();
+        assert!(
+            mgr.noisy_tables_gen() > after_add,
+            "releasing must invalidate readers too"
+        );
+    }
+
+    #[test]
+    fn test_reset_group_priorities_releases_noisy_tables() {
+        let mgr = ResourceGroupManager::new(Config::default());
+        mgr.mark_noisy_table_for_test(7);
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+
+        mgr.reset_group_priorities();
+        assert!(!mgr.is_noisy_table(7));
+    }
+
+    /// A clear that lands between the take and the merge of a publish must
+    /// not have the taken marks republished after the episode ended.
+    #[test]
+    fn test_clear_during_publish_does_not_republish_stale_marks() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config::default()));
+        mgr.mark_noisy_table_for_test(7);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mgr2 = mgr.clone();
+        fail::cfg_callback("noisy_tables_publish_before_merge", move || {
+            let mgr = mgr2.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                mgr.clear_noisy_tables();
+                tx.send(()).unwrap();
+            });
+            // Long enough for the clear to run if nothing serializes it.
+            std::thread::sleep(Duration::from_millis(100));
+        })
+        .unwrap();
+        mgr.publish_noisy_tables();
+        fail::remove("noisy_tables_publish_before_merge");
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("the clear finishes once the publish releases its locks");
+
+        assert!(
+            !mgr.is_noisy_table(7),
+            "the clear ran after the publish, so nothing is left demoted"
+        );
+        assert!(mgr.noisy_tables_pending.read().is_empty());
+    }
+
+    /// A proposal that saw its group blamed, then paused while the episode
+    /// ended, must not mark its table into a clean pending set.
+    #[test]
+    fn test_mark_after_the_episode_cleared_is_dropped() {
+        let mgr = Arc::new(ResourceGroupManager::new(Config::default()));
+        mgr.set_noisy_groups_for_test(HashSet::from(["a".to_string()]));
+        assert!(mgr.is_noisy_group("a"), "the caller's check passes");
+
+        let mgr2 = mgr.clone();
+        fail::cfg_callback("noisy_tables_mark_before_insert", move || {
+            mgr2.clear_noisy_groups();
+        })
+        .unwrap();
+        mgr.mark_noisy_table("a", 7);
+        fail::remove("noisy_tables_mark_before_insert");
+
+        assert!(mgr.noisy_tables_pending.read().is_empty());
+        mgr.publish_noisy_tables();
+        assert!(!mgr.is_noisy_table(7));
+
+        // Marked while blamed, the table is pending once and, once published,
+        // is not re-marked.
+        mgr.set_noisy_groups_for_test(HashSet::from(["a".to_string()]));
+        mgr.mark_noisy_table("a", 7);
+        mgr.publish_noisy_tables();
+        assert!(mgr.is_noisy_table(7));
+        mgr.mark_noisy_table("a", 7);
+        assert!(mgr.noisy_tables_pending.read().is_empty());
+    }
 
     #[test]
     fn test_held_load_counts_toward_the_target_instead_of_inflating_it() {
