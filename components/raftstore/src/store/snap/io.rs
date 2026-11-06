@@ -222,7 +222,10 @@ where
 
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        if file_length + entry_len > raw_size_per_file as usize {
+        // Avoid producing an empty SST file, which can make RocksDB panic when
+        // ingested. Allow a single large entry to occupy one SST that exceeds
+        // the target size.
+        if file_length > 0 && file_length + entry_len > raw_size_per_file as usize {
             cf_file.add_file(file_id); // add previous file
             file_length = 0;
             file_id += 1;
@@ -522,7 +525,7 @@ mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
     use engine_test::kv::KvTestEngine;
-    use engine_traits::CF_DEFAULT;
+    use engine_traits::{CF_DEFAULT, Peekable, SyncMutable};
     use tempfile::Builder;
     use tikv_util::time::Limiter;
 
@@ -688,6 +691,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_cf_build_sst_file_with_large_entry() {
+        let limiter = Limiter::new(f64::INFINITY);
+        let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
+        let db: KvTestEngine = open_test_empty_db(dir.path(), None, None).unwrap();
+        let key = keys::data_key(b"large");
+        let value = vec![b'v'; 256];
+        db.put_cf(CF_DEFAULT, &key, &value).unwrap();
+
+        let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
+        let mut cf_file = CfFile {
+            cf: CF_DEFAULT,
+            path: PathBuf::from(snap_cf_dir.path().to_str().unwrap()),
+            file_prefix: "test_sst".to_string(),
+            file_suffix: SST_FILE_SUFFIX.to_string(),
+            ..Default::default()
+        };
+        let stats = build_sst_cf_file_list::<KvTestEngine>(
+            &mut cf_file,
+            &db,
+            &db.snapshot(),
+            &keys::data_key(b"a"),
+            &keys::data_key(b"z"),
+            100,
+            &limiter,
+            None,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(stats.key_count, 1);
+        assert_eq!(stats.total_kv_size, key.len() + value.len());
+        assert_eq!(cf_file.file_paths().len(), 1);
+
+        let dir1 = Builder::new()
+            .prefix("test-snap-cf-db-apply")
+            .tempdir()
+            .unwrap();
+        let db1: KvTestEngine = open_test_empty_db(dir1.path(), None, None).unwrap();
+        let tmp_file_paths = cf_file.tmp_file_paths();
+        let tmp_file_paths = tmp_file_paths
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>();
+        apply_sst_cf_files_by_ingest(&tmp_file_paths, &db1, CF_DEFAULT, vec![], vec![]).unwrap();
+
+        let applied_value = db1.get_value_cf(CF_DEFAULT, &key).unwrap().unwrap();
+        assert_eq!(&*applied_value, value.as_slice());
     }
 
     // This test verifies that building SST files is effectively limited by the I/O
