@@ -8,7 +8,7 @@ use std::{
     result,
     sync::{
         Arc, RwLock as SyncRwLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -972,8 +972,8 @@ pub struct StreamTaskHandler {
     flushing_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// flushing_meta_files contains meta files pending flush.
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
-    /// last_flush_ts represents last time this task flushed to storage.
-    last_flush_time: AtomicPtr<Instant>,
+    /// last_flush_time represents last time this task flushed to storage.
+    last_flush_time: SyncRwLock<Instant>,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
@@ -1053,7 +1053,7 @@ impl StreamTaskHandler {
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
-            last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
+            last_flush_time: SyncRwLock::new(Instant::now()),
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
@@ -1085,7 +1085,7 @@ impl StreamTaskHandler {
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
-            last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
+            last_flush_time: SyncRwLock::new(Instant::now()),
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
@@ -1149,7 +1149,10 @@ impl StreamTaskHandler {
     }
 
     pub fn get_last_flush_time(&self) -> Instant {
-        unsafe { *(self.last_flush_time.load(Ordering::SeqCst) as *const Instant) }
+        *self
+            .last_flush_time
+            .read()
+            .expect("last_flush_time lock poisoned")
     }
 
     pub fn total_size(&self) -> u64 {
@@ -1217,13 +1220,10 @@ impl StreamTaskHandler {
     }
 
     pub fn update_flush_time(&self) {
-        let ptr = self
+        *self
             .last_flush_time
-            .swap(Box::into_raw(Box::new(Instant::now())), Ordering::SeqCst);
-        // manual gc last instant
-        unsafe {
-            let _ = Box::from_raw(ptr);
-        };
+            .write()
+            .expect("last_flush_time lock poisoned") = Instant::now();
     }
 
     pub fn should_flush(&self, flush_interval: &Duration) -> bool {
