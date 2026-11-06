@@ -177,7 +177,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     Ok(())
 }
 
-fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
+pub fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftLocalState> {
