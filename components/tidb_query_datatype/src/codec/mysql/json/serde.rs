@@ -116,7 +116,14 @@ impl Serialize for JsonRef<'_> {
             },
             JsonType::String => match self.get_str() {
                 Ok(s) => serializer.serialize_str(s),
-                Err(_) => Err(SerError::custom("json contains invalid UTF-8 characters")),
+                Err(_) => {
+                    // The string value contains bytes that are not valid UTF-8
+                    // (e.g. from cast_string_as_json with non-UTF-8 input).
+                    // Use lossy conversion to avoid panicking in
+                    // to_string_value() which calls serialize().unwrap().
+                    let bytes = self.get_str_bytes().unwrap_or(&[]);
+                    serializer.serialize_str(&String::from_utf8_lossy(bytes))
+                }
             },
             JsonType::Double => serializer.serialize_f64(self.get_double()),
             JsonType::I64 => serializer.serialize_i64(self.get_i64()),
@@ -127,7 +134,17 @@ impl Serialize for JsonRef<'_> {
                 for i in 0..elem_count {
                     let key = self.object_get_key(i);
                     let val = self.object_get_val(i).map_err(SerError::custom)?;
-                    map.serialize_entry(str::from_utf8(key).unwrap(), &val)?;
+                    // Object keys may contain invalid UTF-8. Use lossy
+                    // conversion rather than panicking.
+                    let key_owned;
+                    let key_str = match str::from_utf8(key) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            key_owned = String::from_utf8_lossy(key).into_owned();
+                            key_owned.as_str()
+                        }
+                    };
+                    map.serialize_entry(key_str, &val)?;
                 }
                 map.end()
             }
@@ -371,5 +388,28 @@ mod tests {
         for (json, json_str) in legal_cases {
             assert_eq!(json.to_string_value(), json_str);
         }
+    }
+
+    #[test]
+    fn test_to_string_value_invalid_utf8() {
+        // Regression: JSON string values containing non-UTF-8 bytes (which
+        // cast_string_as_json can now produce via from_str_bytes) must not
+        // panic during serialization (to_string_value).
+        // Previously: serialize().unwrap() panicked when get_str() returned
+        // Err on invalid UTF-8.
+        let invalid_utf8: &[u8] = &[0xff, 0xfe, 0xfd];
+        let json = Json::from_str_bytes(invalid_utf8).unwrap();
+
+        // Must not panic — lossy conversion produces U+FFFD replacement chars.
+        let result = json.to_string_value();
+        assert!(
+            !result.is_empty(),
+            "expected non-empty serialization result"
+        );
+        assert!(
+            result.contains('\u{FFFD}'),
+            "expected U+FFFD replacement char in lossy serialization: {}",
+            result
+        );
     }
 }

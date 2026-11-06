@@ -1408,10 +1408,12 @@ fn cast_string_as_json(
                 let val: Json = s.parse()?;
                 Ok(Some(val))
             } else {
-                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8
-                // string
-                let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
-                Ok(Some(Json::from_string(val)?))
+                // TiDB (Go) treats strings as raw byte sequences with no UTF-8
+                // requirement. `String::from_utf8_unchecked` was UB on invalid
+                // input. Write bytes directly to the JSON binary string format,
+                // bypassing Rust's `String` type (which requires valid UTF-8).
+                // The binary format (varint(len) + bytes) is identical either way.
+                Ok(Some(Json::from_str_bytes(val)?))
             }
         }
     }
@@ -1630,6 +1632,7 @@ mod tests {
                 Decimal, Duration, Json, MAX_FSP, MIN_FSP, RoundMode, Time, TimeType, Tz,
                 charset::*,
                 decimal::{max_decimal, max_or_min_dec},
+                json::JsonType,
             },
         },
         expr::{EvalConfig, EvalContext, Flag},
@@ -7068,6 +7071,34 @@ mod tests {
                 input, parse_to_json, expect, result_str
             );
             check_result(Some(&expect), &result, log.as_str());
+        }
+
+        // Soundness regression: invalid UTF-8 in the non-PARSE_TO_JSON path
+        // must not cause UB (was `String::from_utf8_unchecked` before fix).
+        // Bytes are written directly to JSON binary string format.
+        {
+            let arg_type = FieldType::default(); // not binary-string-like
+            let invalid_utf8: &[u8] = &[0xff, 0xfe, 0xfd, 0x00, 0x80];
+            let args = [RpnStackNode::Scalar {
+                value: &ScalarValue::Bytes(Some(invalid_utf8.to_vec())),
+                field_type: &arg_type,
+            }];
+            let rft = FieldType::default(); // no PARSE_TO_JSON flag
+            let extra = make_extra(&rft);
+            let result = cast_string_as_json(&args, &extra, Some(invalid_utf8));
+            assert!(
+                result.is_ok(),
+                "cast_string_as_json with invalid UTF-8 must not error: {:?}",
+                result
+            );
+            let json = result.unwrap().unwrap();
+            // Must be JsonType::String (not Opaque) — TiDB treats cast strings
+            // as JSON strings regardless of UTF-8 validity.
+            assert_eq!(
+                json.as_ref().get_type(),
+                JsonType::String,
+                "expected JsonType::String for cast string as json"
+            );
         }
     }
 
