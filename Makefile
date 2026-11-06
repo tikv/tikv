@@ -83,14 +83,11 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
-# Disable SSE on ARM
-ifeq ($(shell uname -p),aarch64)
-ROCKSDB_SYS_SSE=0
-endif
-ifeq ($(shell uname -p),arm)
-ROCKSDB_SYS_SSE=0
-endif
-ifeq ($(shell uname -p),arm64)
+# Enable SSE only on x86/x86_64
+# Use rustc to detect arch as uname -p is not portable (can return "unknown" on some distros)
+ifneq ($(findstring 86,$(shell rustc -vV | grep host)),)
+ROCKSDB_SYS_SSE=1
+else
 ROCKSDB_SYS_SSE=0
 endif
 
@@ -99,9 +96,9 @@ ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
 endif
 
-# Enable sse4.2 by default unless disable explicitly
+# Enable sse4.2 if on x86/x86_64 unless disabled explicitly
 # Note this env var is also tested by scripts/check-sse4_2.sh
-ifneq ($(ROCKSDB_SYS_SSE),0)
+ifeq ($(ROCKSDB_SYS_SSE),1)
 ENABLE_FEATURES += sse
 endif
 
