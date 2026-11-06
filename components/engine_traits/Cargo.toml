@@ -31,3 +31,8 @@ txn_types = { workspace = true }
 [dev-dependencies]
 rand = "0.8.5"
 toml = "0.5"
+
+# Keep the benchmark out of the unit-test suite.
+[[bench]]
+name = "sequence_number_window"
+test = false
