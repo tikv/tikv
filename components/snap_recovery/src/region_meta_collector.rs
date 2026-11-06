@@ -8,6 +8,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
     recoverdatapb::*,
 };
+use raftstore::store::init_raft_state;
 use thiserror::Error;
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 
@@ -142,7 +143,7 @@ where
         }));
 
         for region_id in regions {
-            let region_state = self.get_local_region(region_id)?;
+            let mut region_state = self.get_local_region(region_id)?;
 
             // It's safe to unwrap region_local_state here, since region_id  guarantees that
             // the region state exists
@@ -150,9 +151,17 @@ where
                 continue;
             }
 
-            region_state.raft_local_state.as_ref().ok_or_else(|| {
-                Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
-            })?;
+            if region_state.raft_local_state.is_none() {
+                // A disk snapshot can capture a split region before its initial raft state
+                // is persisted. Reuse the startup fallback without writing it to disk.
+                let region = region_state
+                    .region_local_state
+                    .as_ref()
+                    .unwrap()
+                    .get_region();
+                region_state.raft_local_state =
+                    Some(box_try!(init_raft_state(&self.engines, region)));
+            }
             region_state.raft_apply_state.as_ref().ok_or_else(|| {
                 Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
             })?;
@@ -241,5 +250,83 @@ impl LocalRegion {
         region_meta.last_index = self.raft_local_state.as_ref().unwrap().last_index;
 
         region_meta
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_rocks::util::new_temp_engine;
+    use engine_traits::{RaftEngineReadOnly, RaftLogBatch, WriteBatch, WriteBatchExt};
+    use futures::{StreamExt, channel::mpsc, executor::block_on};
+    use raftstore::store::{
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, initial_region, write_initial_apply_state,
+        write_peer_state,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_collect_region_meta_with_lazy_raft_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let engines = new_temp_engine(&dir);
+        let mut region = initial_region(1, 1, 1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"z".to_vec());
+
+        // A split can persist region and apply states before any RaftLocalState.
+        let mut wb = engines.kv.write_batch();
+        write_peer_state(&mut wb, &region, PeerState::Normal, None).unwrap();
+        write_initial_apply_state(&mut wb, region.id).unwrap();
+        wb.write().unwrap();
+        engines.sync_kv().unwrap();
+
+        // Tombstone regions can also lack RaftLocalState and should be skipped.
+        let tombstone = initial_region(1, 2, 2);
+        let mut wb = engines.kv.write_batch();
+        write_peer_state(&mut wb, &tombstone, PeerState::Tombstone, None).unwrap();
+        wb.write().unwrap();
+
+        let mut persisted = RaftLocalState::default();
+        persisted.set_last_index(RAFT_INIT_LOG_INDEX + 10);
+        persisted.mut_hard_state().set_term(RAFT_INIT_LOG_TERM + 1);
+        persisted
+            .mut_hard_state()
+            .set_commit(RAFT_INIT_LOG_INDEX + 10);
+
+        for raft_state in [None, Some(persisted)] {
+            if let Some(state) = &raft_state {
+                let mut batch = engines.raft.log_batch(0);
+                batch.put_raft_state(region.id, state).unwrap();
+                engines.raft.consume(&mut batch, true).unwrap();
+            }
+
+            let (tx, rx) = mpsc::unbounded();
+            let worker = CollectWorker::new(engines.clone(), tx);
+            assert!(worker.collect_report().unwrap());
+            drop(worker);
+
+            let reports = block_on(rx.collect::<Vec<_>>());
+            assert_eq!(reports.len(), 1);
+            let report = &reports[0];
+            assert_eq!(report.region_id, region.id);
+            assert_eq!(report.peer_id, 1);
+            assert_eq!(report.version, region.get_region_epoch().version);
+            assert_eq!(report.start_key, region.start_key);
+            assert_eq!(report.end_key, region.end_key);
+            assert_eq!(
+                report.last_index,
+                raft_state
+                    .as_ref()
+                    .map_or(RAFT_INIT_LOG_INDEX, |s| s.last_index)
+            );
+            assert_eq!(
+                report.last_log_term,
+                raft_state
+                    .as_ref()
+                    .map_or(RAFT_INIT_LOG_TERM, |s| s.get_hard_state().term)
+            );
+            // Collecting metadata preserves lazy persistence.
+            assert_eq!(engines.raft.get_raft_state(region.id).unwrap(), raft_state);
+        }
     }
 }

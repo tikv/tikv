@@ -68,6 +68,12 @@ High-risk contracts:
   build the split request from its current Region and peer; a local follower
   rejects the candidate rather than forwarding it to the current leader
 - persisted apply/raft state alignment in `peer_storage.rs`
+- Split-created regions can have persisted `RegionLocalState` and
+  `RaftApplyState` before their initial `RaftLocalState` is persisted.
+  `init_raft_state` supplies the fixed initial state in memory during startup.
+  The snapshot recovery metadata collector in
+  `components/snap_recovery/src/region_meta_collector.rs` reuses this fallback
+  for missing Raft state and preserves lazy persistence.
 - callback/result semantics in `store/msg.rs` and `store/fsm/apply.rs`
 
 ## Start Here
