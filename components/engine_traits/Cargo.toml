@@ -35,4 +35,5 @@ toml = "0.5"
 # Keep the benchmark out of the unit-test suite.
 [[bench]]
 name = "sequence_number_window"
+path = "benches/sequence_number_window.rs"
 test = false
