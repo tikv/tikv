@@ -92,6 +92,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let rows = key_locks.len();
         let mut released_locks = ReleasedLocks::new();
         let mut known_txn_status = vec![];
+        if let Some(adjacent) = key_locks
+            .windows(2)
+            .find(|adjacent| adjacent[0].0 == adjacent[1].0)
+        {
+            let (first_key, first_lock) = &adjacent[0];
+            let (_, next_lock) = &adjacent[1];
+            debug!("resolve lock write phase processing multiple holders for one key";
+                "region_id" => ctx.get_region_id(),
+                "key" => log_wrappers::Value::key(first_key.as_encoded()),
+                "first_start_ts" => first_lock.ts,
+                "first_commit_ts" => ?txn_status.get(&first_lock.ts),
+                "first_lock_type" => ?first_lock.lock_type,
+                "next_start_ts" => next_lock.ts,
+                "next_commit_ts" => ?txn_status.get(&next_lock.ts),
+                "next_lock_type" => ?next_lock.lock_type,
+            );
+        }
         for (current_key, current_lock) in key_locks {
             // No special casing for shared locks here, `cleanup` and `commit` will handle
             // them.
