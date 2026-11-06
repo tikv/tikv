@@ -770,6 +770,56 @@ where
                 // there might be a coprocessor request related to this range
                 self.insert_pending_delete_range(region_id, start_key, end_key);
                 self.clean_stale_ranges();
+<<<<<<< HEAD
+=======
+                fail_point!("after_region_worker_destroy");
+            }
+            Task::ClearPeerMeta {
+                peer,
+                region,
+                raft_state,
+                merge_state,
+                keep_data,
+                initialized,
+                local_first_replicate,
+                first_index,
+                pending_create_peers,
+            } => {
+                let peer_id = peer.get_id();
+                let region_id = region.get_id();
+                fail_point!("before_clear_peer_meta");
+                match self.handle_clear_peer_meta(
+                    peer,
+                    region,
+                    raft_state,
+                    merge_state,
+                    initialized,
+                    local_first_replicate,
+                    first_index,
+                    pending_create_peers,
+                ) {
+                    Err(e) => {
+                        // If not panic here, the peer will be recreated in the next restart,
+                        // then it will be gc again. But if some overlap region is created
+                        // before restarting, the gc action will delete the overlap region's
+                        // data too.
+                        panic!(
+                            "peer_id: {}, region_id: {} failed to destroy err {:?}",
+                            peer_id, region_id, e
+                        );
+                    }
+                    Ok(clear_stat) => {
+                        let _ = self.router.significant_send(
+                            region_id,
+                            SignificantMsg::ReadyToDestroyPeer {
+                                to_peer_id: peer_id,
+                                merged_by_target: keep_data,
+                                clear_stat,
+                            },
+                        );
+                    }
+                }
+>>>>>>> 055c284ed3 (raftstore: make asynchronous peer destruction idempotent (#20329))
             }
         }
     }
