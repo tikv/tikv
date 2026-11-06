@@ -353,6 +353,7 @@ mod tests {
     #[cfg(feature = "failpoints")]
     #[tokio::test]
     async fn test_default_provider() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
         let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;

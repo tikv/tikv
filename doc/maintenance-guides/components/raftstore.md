@@ -150,6 +150,15 @@ High-risk contracts:
 
 ## Critical Invariants
 
+- Peer destruction can wait for persisted readies and flushed log GC before
+  scheduling metadata cleanup. Once scheduled, cleanup and destruction observers
+  must not run again, and late merge messages must preserve `ReadyToDestroy`
+  until the region worker's completion message stops the peer FSM.
+  A late target snapshot must wait for the source's existing cleanup. Cleanup
+  completion reconciles its dependency under the `StoreMeta` lock even if it
+  precedes the snapshot's Step1 notification. An independently destroyed source
+  can release a `need_atomic` dependency only while its readiness flag is false;
+  a ready source must finish through the atomic snapshot protocol.
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
 - Normal load-based split keys must be validated against the current Region's
@@ -173,6 +182,28 @@ High-risk contracts:
   Ready leader/term transitions.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
+- The PD worker and split-check workers must be constructed from clones of the
+  same `CoprocessorHost`, so they share one `SplitValidator`. If they use
+  separate validators, PD's automatic-split disable notifications do not reach
+  the split-check worker and the early scan guard silently stops working.
+- Disabled automatic splits must still refresh approximate statistics and keep
+  idle checks eligible for size/key or table-boundary splits, so re-enabling or
+  validator expiry can resume splitting without additional writes. Small size
+  and key estimates alone cannot rule out a table-boundary split. Once normal
+  checks resume, an automatic whole-Region check with no applicable checkers,
+  or no approximate split keys and both estimates below their split thresholds,
+  must clear both retry hints so idle in-table Regions stop checking even with
+  bucket-only checkers. An empty approximate result alone cannot rule out a
+  split: size/key estimates include memtables, but split candidates require SST
+  properties. For empty approximate results, retain retry hints if either
+  estimate is missing or at or above its threshold, so a later flush can resume
+  splitting without new writes. A partial key-range check cannot establish that
+  the entire Region is unsplittable. During disabled refreshes, low estimates
+  must not clear split hints established by earlier full scans.
+- Approximate checks selected for buckets must still honor table-boundary
+  splits. The table checker returns an already known boundary or requests a
+  scan fallback when the boundary requires examining keys; disabled automatic
+  splits must return before either checker construction or that fallback.
 - Store-to-peer broadcasts can fan out one peer message per region. Keep this
   work bounded on the store FSM. `StoreUnreachable` must only do its per-store
   backoff check, snapshot the target region IDs, and enqueue the first

@@ -340,6 +340,15 @@ Useful engine-specific files:
 
 - `components/backup` owns backup request processing and writing backup output.
 - `components/backup-stream` owns log backup / continuous backup surfaces.
+- Both backup paths pass the full protobuf storage backend through
+  `components/external_storage` to `components/cloud/aws` for S3 writes.
+  `S3.sse_kms_encryption_context` carries the Base64-encoded JSON supplied by BR;
+  TiKV preserves it without parsing or encoding it again. The AWS writer sets
+  it only on PutObject and CreateMultipartUpload. An empty field preserves the
+  previous behavior. Log task metadata retains the field when tasks are loaded
+  at startup or resumed, so subsequent uploads use the same context.
+  S3 configuration debug output redacts the context and session token; encoding
+  the context as Base64 does not make it safe to log.
 - `src/import` and `components/sst_importer` own ingest/import/restore-adjacent
   SST flows.
 

@@ -10,7 +10,7 @@
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, atomic::AtomicUsize},
+    sync::{Arc, Mutex, Once, atomic::AtomicUsize},
     thread::{self, JoinHandle, ThreadId, current},
     time::Duration,
 };
@@ -22,8 +22,11 @@ use resource_control::{
     channel::{Receiver, Sender, unbounded},
 };
 use tikv_util::{
-    debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
+    debug, error, info, mpsc, safe_panic,
+    sys::thread::{self as sys_thread, StdThreadBuildWrapper},
+    thd_name,
     time::Instant,
+    warn,
 };
 
 use crate::{
@@ -530,7 +533,25 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
+    thread_priority: Option<i32>,
     pool_state_builder: Option<PoolStateBuilder<N, C>>,
+}
+
+/// Sets the nice value of the calling thread if `priority` is given.
+///
+/// It must be called from the poller thread itself, because the nice value is
+/// a per-thread attribute on Linux. Failures, e.g. lacking `CAP_SYS_NICE`, are
+/// only logged once per process as the priority is a best-effort hint.
+pub fn set_poller_thread_priority(priority: Option<i32>) {
+    static WARN_ONCE: Once = Once::new();
+    let Some(pri) = priority else {
+        return;
+    };
+    if let Err(e) = sys_thread::set_priority(pri) {
+        WARN_ONCE.call_once(|| {
+            warn!("set poller thread priority failed"; "priority" => pri, "error" => ?e);
+        });
+    }
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -542,6 +563,13 @@ where
         &self.router
     }
 
+    /// Sets the nice value of normal priority pollers, including those added
+    /// later via [`PoolState`]. Must be called before [`BatchSystem::spawn`]
+    /// and [`BatchSystem::build_pool_state`].
+    pub fn set_thread_priority(&mut self, priority: i32) {
+        self.thread_priority = Some(priority);
+    }
+
     pub fn build_pool_state<H: HandlerBuilder<N, C>>(
         &mut self,
         handler_builder: H,
@@ -550,6 +578,7 @@ where
         pool_state_builder.build(
             self.name_prefix.as_ref().unwrap().clone(),
             self.low_priority_pool_size,
+            self.thread_priority,
             self.workers.clone(),
             self.joinable_workers.clone(),
             handler_builder,
@@ -579,11 +608,16 @@ where
                 None
             },
         };
+        let thread_priority = match priority {
+            Priority::Normal => self.thread_priority,
+            Priority::Low => None,
+        };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
             .name(name)
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
+                set_poller_thread_priority(thread_priority);
                 set_io_type(IoType::ForegroundWrite);
                 poller.poll();
             })
@@ -650,6 +684,7 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
         self,
         name_prefix: String,
         low_priority_pool_size: usize,
+        thread_priority: Option<i32>,
         workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
         joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
         handler_builder: H,
@@ -661,6 +696,7 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
             fsm_receiver: self.fsm_receiver,
             fsm_sender: self.fsm_sender,
             low_priority_pool_size,
+            thread_priority,
             workers,
             joinable_workers,
             expected_pool_size: self.pool_size,
@@ -677,6 +713,9 @@ pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub fsm_receiver: Receiver<FsmTypes<N, C>>,
     pub fsm_sender: Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
+    /// Nice value of normal priority pollers, see
+    /// [`BatchSystem::set_thread_priority`].
+    pub thread_priority: Option<i32>,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
@@ -727,6 +766,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         joinable_workers: Arc::new(Mutex::new(Vec::new())),
         reschedule_duration: cfg.reschedule_duration.0,
         low_priority_pool_size: cfg.low_priority_pool_size,
+        thread_priority: None,
         pool_state_builder: Some(pool_state_builder),
     };
     (router, system)

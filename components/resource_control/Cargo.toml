@@ -7,6 +7,7 @@ license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
+testexport = []
 
 [dependencies]
 collections = { workspace = true }

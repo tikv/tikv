@@ -1309,12 +1309,16 @@ where
         use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
         init_mvcc_read_tracker(self.config_manager.clone());
 
+        let engine = self.engine.clone();
         let compaction_runner = CompactionRunner::new_with_control(
             safe_point_provider,
             region_info_provider,
             kv_engine,
             self.config_manager.clone(),
             self.compaction_control.clone(),
+            Box::new(move |start_key: Vec<u8>, end_key: Vec<u8>| {
+                engine.hint_change_in_range(start_key, end_key)
+            }),
         );
 
         let new_handle = compaction_runner

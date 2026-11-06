@@ -188,6 +188,7 @@ fn test_serde_custom_tikv_config() {
         capacity: ReadableSize(123),
         raft_base_tick_interval: ReadableDuration::secs(12),
         raft_heartbeat_ticks: 1,
+        raft_bcast_commit: true,
         raft_election_timeout_ticks: 12,
         raft_min_election_timeout_ticks: 14,
         raft_max_election_timeout_ticks: 20,
@@ -859,6 +860,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
         memory_use_ratio: 0.3,
+        use_direct_io_for_ingest: true,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -930,6 +932,7 @@ fn test_serde_custom_tikv_config() {
         bg_compaction_pressure_threshold: 70.0,
         bg_write_io_ceiling: ReadableSize::gb(100),
         bg_write_io_floor: ReadableSize::mb(10),
+        bg_egress_limit: ReadableSize::mb(50),
         enable_fair_scheduling: false,
         enable_read_admission_control: false,
         enable_write_admission_control: false,
@@ -937,6 +940,8 @@ fn test_serde_custom_tikv_config() {
         baseline_burst_pct: 20.0,
         admission_max_delayed_count: 10_000,
         request_base_cost_micros: 40,
+        normal_control_interval: ReadableDuration::secs(20),
+        overloaded_control_interval: ReadableDuration::secs(3),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -953,6 +958,7 @@ fn test_serde_custom_tikv_config() {
 fn test_serde_default_config() {
     let cfg: TikvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TikvConfig::default());
+    assert_eq!(cfg.security.redact_info_log, log_wrappers::RedactOption::On);
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
     let cfg: TikvConfig = toml::from_str(&content).unwrap();

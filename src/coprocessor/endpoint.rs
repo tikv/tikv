@@ -23,7 +23,9 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, update_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -40,6 +42,7 @@ use tikv_util::{
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    resource_control::group_label,
     store::find_peer,
     time::Instant,
 };
@@ -267,7 +270,6 @@ impl<E: Engine> Endpoint<E> {
         } else {
             None
         };
-
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
@@ -552,6 +554,7 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
         output_mode: UnaryOutputMode,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
@@ -647,10 +650,9 @@ impl<E: Engine> Endpoint<E> {
                 // is committed, so bytes are neither charged twice nor
                 // charged for a response that is never returned.
                 if matches!(output_mode, UnaryOutputMode::Materialize) {
-                    record_coprocessor_response_size(
-                        output.response.get_data().len() as u64,
-                        get_tls_tracker_token(),
-                    );
+                    let resp_size = output.response.get_data().len() as u64;
+                    record_coprocessor_response_size(resp_size, get_tls_tracker_token());
+                    update_background_egress(&resource_limiter, resp_size, true);
                 }
                 output
             }
@@ -675,10 +677,17 @@ impl<E: Engine> Endpoint<E> {
 
     /// Schedules a unary request on the read pool with the requested output
     /// materialization policy.
+    ///
+    /// With `charge_egress`, a materialized response is charged to the
+    /// background egress limiter as soon as it is built. Requests with batch
+    /// tasks pass `false` for the top task and every child, because their
+    /// responses are only buffered until the outer response is committed,
+    /// which charges them once instead.
     fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
         output_mode: UnaryOutputMode,
+        charge_egress: bool,
     ) -> impl Future<Output = Result<HandlerOutput>> {
         let ParseCopRequestResult {
             req_tag,
@@ -712,8 +721,21 @@ impl<E: Engine> Endpoint<E> {
                     .get_override_priority(),
             )
         });
+        let deadline = req_ctx.deadline;
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
@@ -723,6 +745,11 @@ impl<E: Engine> Endpoint<E> {
             tracker,
             handler_builder,
             output_mode,
+            if charge_egress {
+                resource_limiter.clone()
+            } else {
+                None
+            },
         )
         .in_resource_metering_tag(resource_tag)
         .map(move |res| {
@@ -737,7 +764,13 @@ impl<E: Engine> Endpoint<E> {
             resource_limiter,
         );
         async move {
-            spawn_fut_result?.await?;
+            // Admission can delay the submission for as long as the limiter is in
+            // debt, so bound it by the request deadline. Dropping the submission
+            // releases its admission delay slot and memory quota.
+            match async_timeout(spawn_fut_result?, deadline.remaining_duration()).await {
+                Ok(res) => res?,
+                Err(_) => return Err(Error::DeadlineExceeded),
+            }
             rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
         }
     }
@@ -748,7 +781,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<TracedResponse>> {
-        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize);
+        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize, true);
         async move {
             let HandlerOutput { response, state } = future.await?;
             match state {
@@ -806,46 +839,65 @@ impl<E: Engine> Endpoint<E> {
         };
         let execute_batch_tasks_serially =
             req.get_execute_batch_tasks_serially() && has_batch_tasks;
-        // Serial collection and result merging bound their waits by the top
-        // task's deadline. The fallback starts before parsing so a failure
-        // cannot reset the timeout.
-        let fallback_deadline =
-            super::deadline_from_request_context(req.get_context(), self.max_handle_duration);
         let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
+        // Start the shared execution deadline before parsing. Reserve time to
+        // return completed results, but finalization itself has no deadline.
+        let serial_deadline = execute_batch_tasks_serially.then(|| {
+            let request_budget =
+                super::max_execution_duration(req.get_context(), self.max_handle_duration);
+            let budget = serial_batch_task_budget(request_budget, req.get_tasks().len());
+            req.mut_context()
+                .set_max_execution_duration_ms(budget.as_millis() as u64);
+            Deadline::from_now(budget)
+        });
+        // Without merging, the batched response is assembled below and its
+        // egress is charged there, once it is committed (see
+        // `schedule_unary_request`).
+        let batch_egress_limiter = (has_batch_tasks && !merge_batch_tasks)
+            .then(|| {
+                let ctx = req.get_context();
+                self.resource_ctl.as_ref().and_then(|r| {
+                    r.get_resource_limiter(
+                        ctx.get_resource_control_context().get_resource_group_name(),
+                        ctx.get_request_source(),
+                        ctx.get_resource_control_context().get_override_priority(),
+                    )
+                })
+            })
+            .flatten();
         // Preselect the admission lane so a parse failure still runs batch
         // finalization under the right semaphore; parse success overwrites it.
         let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
         // Boxed so only batched requests carry the per-task machinery.
         let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
             has_batch_tasks.then(|| {
-                self.process_batch_tasks(&mut req, &peer, output_mode, execute_batch_tasks_serially)
+                self.process_batch_tasks(&mut req, &peer, output_mode, serial_deadline)
                     .boxed()
             });
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
-        let mut top_task_deadline = None;
         // A parse failure creates no top read-pool ID. The finalizer then uses a
         // random ID below so unrelated failures do not share Yatp runtime accounting.
         let mut top_task_id = None;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| {
-                top_task_deadline = Some(r.req_ctx.deadline);
+            .map(|mut r| {
+                if let Some(deadline) = serial_deadline {
+                    Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                }
                 top_task_id = Some(r.req_ctx.build_task_id());
                 top_task_semaphore_group = r.semaphore_group;
-                self.schedule_unary_request(r, output_mode)
+                self.schedule_unary_request(r, output_mode, !has_batch_tasks)
             });
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
-        let batch_deadline = top_task_deadline.unwrap_or(fallback_deadline);
         let batch_finalizer = batch_finalizer_context.map(|request_context| {
             self.build_batch_merge_finalizer(
                 request_context,
-                batch_deadline,
                 top_task_id.unwrap_or_else(rand::random),
                 top_task_semaphore_group,
             )
@@ -868,13 +920,9 @@ impl<E: Engine> Endpoint<E> {
                 // Boxed: the collector holds the top future and the stream
                 // twice over in its layout.
                 Some(batch_outputs) => {
-                    let collect = if execute_batch_tasks_serially {
-                        collect_batch_task_outputs_sequentially(
-                            top_output,
-                            batch_outputs,
-                            batch_deadline,
-                        )
-                        .boxed()
+                    let collect = if let Some(deadline) = serial_deadline {
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
+                            .boxed()
                     } else {
                         collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
                     };
@@ -906,7 +954,16 @@ impl<E: Engine> Endpoint<E> {
                             partial_response,
                         }) => (*partial_response).map(|_| make_error_response(error)),
                     };
-                    attach_batch_responses(response, batch_responses)
+                    let response = attach_batch_responses(response, batch_responses);
+                    // Charge only the data this response returns, so neither a
+                    // later task of the same request nor a timed-out request
+                    // pays for output that is never sent.
+                    update_background_egress(
+                        &batch_egress_limiter,
+                        returned_response_bytes(&response),
+                        true,
+                    );
+                    response
                 }
             };
             if collect_top_details {
@@ -922,15 +979,16 @@ impl<E: Engine> Endpoint<E> {
     }
 
     // All batched coprocessor tasks are prepared up front. Serial execution
-    // streams them lazily so `ReadPoolHandle::spawn` enqueues only one child at
-    // a time; otherwise `FuturesOrdered` preserves the legacy concurrent
-    // scheduling behavior. Output materialization is controlled independently.
+    // runs them one at a time within `serial_deadline`, so
+    // `ReadPoolHandle::spawn` enqueues only one child at a time; otherwise
+    // `FuturesOrdered` preserves the legacy concurrent scheduling behavior.
+    // Output materialization is controlled independently.
     fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
         output_mode: UnaryOutputMode,
-        execute_serially: bool,
+        serial_deadline: Option<Deadline>,
     ) -> impl Stream<Item = BatchTaskOutput> {
         // Without merging, every task serializes its result inside its own
         // read pool task; with it, results stay unserialized for
@@ -961,13 +1019,16 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok(r) => {
+                Ok(mut r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     let tracker_guard = DeferContext::new(move || {
                         GLOBAL_TRACKERS.remove(cur_tracker);
                     });
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.schedule_unary_request(r, output_mode);
+                    if let Some(deadline) = serial_deadline {
+                        Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                    }
+                    let fut = self.schedule_unary_request(r, output_mode, false);
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
                         let res = fut.await;
@@ -1017,21 +1078,25 @@ impl<E: Engine> Endpoint<E> {
                         }
                     };
 
-                    batch_futs.push(future::Either::Left(fut));
+                    batch_futs.push((task_id, future::Either::Left(fut)));
                 }
-                Err(e) => batch_futs.push(future::Either::Right(async move {
-                    make_error_batch_response(&mut response, e);
-                    BatchTaskOutput {
-                        response: response.into(),
-                        mergeable_result: None,
-                    }
-                })),
+                Err(e) => {
+                    let fut = async move {
+                        make_error_batch_response(&mut response, e);
+                        BatchTaskOutput {
+                            response: response.into(),
+                            mergeable_result: None,
+                        }
+                    };
+                    batch_futs.push((task_id, future::Either::Right(fut)));
+                }
             }
         }
-        if execute_serially {
-            Either::Left(stream::iter(batch_futs).then(|task| task))
-        } else {
-            Either::Right(stream::FuturesOrdered::from_iter(batch_futs))
+        match serial_deadline {
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            None => Either::Right(stream::FuturesOrdered::from_iter(
+                batch_futs.into_iter().map(|(_, fut)| fut),
+            )),
         }
     }
 
@@ -1045,6 +1110,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -1108,6 +1174,13 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        // Streaming responses are not charged to the background egress
+                        // limiter: a stream is admitted once and cannot pay debt between
+                        // chunks without holding its read-pool slot, and TiDB no longer
+                        // sends streaming coprocessor requests. `bg-egress-limit` covers
+                        // unary coprocessor and transactional KV reads only. The bytes are
+                        // still counted, so that the uncovered traffic is visible.
+                        update_background_egress(&resource_limiter, resp_size, false);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
@@ -1170,13 +1243,27 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let deadline = req_ctx.deadline;
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let future = Self::handle_stream_request_impl(
             self.request_semaphore(semaphore_group),
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .then(futures::future::ok::<_, mpsc::SendError>)
@@ -1195,12 +1282,13 @@ impl<E: Engine> Endpoint<E> {
         )?;
         // Transparent to caller: embed admission delay into the stream itself.
         // On first poll, drives spawn_fut (sleep if delayed, then submit to
-        // yatp). On error yields one error item. Then chains with rx items.
+        // yatp), bounded by the request deadline as in the unary path. On error
+        // yields one error item. Then chains with rx items.
         let stream = futures::stream::once(Box::pin(async move {
-            spawn_fut
-                .await
-                .err()
-                .map(|_| Err(Error::MaxPendingTasksExceeded))
+            match async_timeout(spawn_fut, deadline.remaining_duration()).await {
+                Ok(res) => res.err().map(Err),
+                Err(_) => Some(Err(Error::DeadlineExceeded)),
+            }
         }))
         .filter_map(futures::future::ready)
         .chain(rx);
@@ -1267,7 +1355,6 @@ impl<E: Engine> Endpoint<E> {
     fn build_batch_merge_finalizer(
         &self,
         ctx: kvrpcpb::Context,
-        deadline: Deadline,
         task_id: u64,
         semaphore_group: SemaphoreGroup,
     ) -> BatchMergeFinalizer {
@@ -1276,16 +1363,14 @@ impl<E: Engine> Endpoint<E> {
             semaphore: self.request_semaphore(semaphore_group),
             merge_execution_tag: self.resource_tag_factory.new_tag(&ctx),
             returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
-            priority: ctx.get_priority(),
-            metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
-            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
+            resource_control_ctx: ctx.get_resource_control_context().clone(),
+            egress_limiter: self.resource_ctl.as_ref().and_then(|r| {
                 r.get_resource_limiter(
                     ctx.get_resource_control_context().get_resource_group_name(),
                     ctx.get_request_source(),
                     ctx.get_resource_control_context().get_override_priority(),
                 )
             }),
-            deadline,
             task_id,
         }
     }
@@ -2069,6 +2154,167 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_index_ranges_yield_to_short_request() {
+        use futures::task::noop_waker;
+        use tidb_query_datatype::{FieldTypeTp, codec::table};
+
+        struct RecordCompletion {
+            inner: Box<dyn RequestHandler>,
+            name: &'static str,
+            completed: mpsc::Sender<&'static str>,
+        }
+
+        #[async_trait]
+        impl RequestHandler for RecordCompletion {
+            async fn handle_request(&mut self) -> Result<HandlerOutput> {
+                let response = self.inner.handle_request().await;
+                // Record on the worker, not on the threads waiting for responses.
+                self.completed.send(self.name).unwrap();
+                response
+            }
+
+            fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+                self.inner.collect_scan_statistics(dest);
+            }
+
+            fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
+                self.inner.collect_scan_summary(dest);
+            }
+        }
+
+        fn index_request(range_count: usize, start_ts: u64) -> coppb::Request {
+            let mut column = tipb::ColumnInfo::default();
+            column.set_column_id(1);
+            column.set_tp(FieldTypeTp::LongLong as i32);
+            let mut executor = Executor::default();
+            executor.set_tp(ExecType::TypeIndexScan);
+            executor.mut_idx_scan().set_table_id(1);
+            executor.mut_idx_scan().set_index_id(1);
+            executor.mut_idx_scan().mut_columns().push(column);
+            let mut dag = DagRequest::default();
+            dag.mut_executors().push(executor);
+            dag.mut_output_offsets().push(0);
+
+            let mut request = coppb::Request::default();
+            request.set_tp(REQ_TYPE_DAG);
+            request.set_start_ts(start_ts);
+            request.set_data(dag.write_to_bytes().unwrap());
+            for i in 0..range_count {
+                let start = table::encode_index_seek_key(1, 1, &(i as u64).to_be_bytes());
+                let mut end = start.clone();
+                end.push(0);
+                let mut range = coppb::KeyRange::default();
+                range.set_start(start);
+                range.set_end(end);
+                request.mut_ranges().push(range);
+            }
+            request
+        }
+
+        // Both requests use the real DAG/index executor and an empty RocksDB.
+        // One active worker makes a missed cooperative yield observable.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                min_thread_count: 1,
+                max_thread_count: 1,
+                ..Default::default()
+            },
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+
+        let mut large_request = copr
+            .parse_request_and_check_memory_locks(index_request(25_000, 10), None, false)
+            .unwrap();
+        let large_builder = large_request.handler_builder;
+        let completed = completed_tx.clone();
+        large_request.handler_builder = Box::new(move |snap, ctx| {
+            let inner = large_builder(snap, ctx)?;
+            // The actual scanner has been constructed on the worker. Keep it
+            // here until the short request has been queued behind this request.
+            started_tx.send(()).unwrap();
+            resume_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(RecordCompletion {
+                inner,
+                name: "large",
+                completed,
+            }
+            .into_boxed())
+        });
+        let large = copr.handle_unary_request(large_request);
+        futures::pin_mut!(large);
+        let waker = noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        // Submission is lazy: first poll enqueues the request on the worker.
+        assert!(large.as_mut().poll(&mut cx).is_pending());
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let mut small_request = copr
+            .parse_request_and_check_memory_locks(index_request(1, 20), None, false)
+            .unwrap();
+        let small_builder = small_request.handler_builder;
+        small_request.handler_builder = Box::new(move |snap, ctx| {
+            Ok(RecordCompletion {
+                inner: small_builder(snap, ctx)?,
+                name: "small",
+                completed: completed_tx,
+            }
+            .into_boxed())
+        });
+        let small = copr.handle_unary_request(small_request);
+        futures::pin_mut!(small);
+        assert!(small.as_mut().poll(&mut cx).is_pending());
+        // Expire the constructed scanner's 1 ms scheduling budget. Completion
+        // order, rather than a wall-clock latency threshold, is the assertion.
+        thread::sleep(Duration::from_millis(10));
+        resume_tx.send(()).unwrap();
+
+        let (large_response, small_response) = block_on(futures::future::join(large, small));
+        for (range_count, response) in [
+            (25_000, large_response.unwrap()),
+            (1, small_response.unwrap()),
+        ] {
+            assert!(!response.has_region_error(), "{:?}", response);
+            assert!(response.get_other_error().is_empty(), "{:?}", response);
+            let mut result = tipb::SelectResponse::default();
+            result.merge_from_bytes(response.get_data()).unwrap();
+            assert!(!result.has_error(), "{:?}", result);
+            assert!(
+                result
+                    .get_chunks()
+                    .iter()
+                    .all(|c| c.get_rows_data().is_empty())
+            );
+            let scan = response.get_exec_details_v2().get_scan_detail_v2();
+            assert_eq!(scan.get_processed_versions(), 0);
+            assert_eq!(scan.get_total_versions(), range_count);
+        }
+        let first = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let second = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            [first, second],
+            ["small", "large"],
+            "the empty multi-range scan blocked the short Coprocessor request"
+        );
+    }
+
+    #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
@@ -2284,9 +2530,11 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::analyze_full_sampling,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 background_handler,
                 UnaryOutputMode::Materialize,
+                None,
             );
             background_tx.send(block_on(background_future)).unwrap();
         });
@@ -2311,9 +2559,11 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::test,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 shared_handler,
                 UnaryOutputMode::Materialize,
+                None,
             );
             shared_tx.send(block_on(shared_future)).unwrap();
         });
@@ -2418,6 +2668,7 @@ mod tests {
         let output = block_on(copr.schedule_unary_request(
             ParseCopRequestResult::default_for_test(handler_builder),
             UnaryOutputMode::PreserveMergeable,
+            true,
         ))
         .unwrap();
         assert!(matches!(&output.state, HandlerOutputState::Mergeable(_)));
@@ -2463,17 +2714,13 @@ mod tests {
         let output = block_on(copr.schedule_unary_request(
             ParseCopRequestResult::default_for_test(handler_builder),
             UnaryOutputMode::PreserveMergeable,
+            true,
         ))
         .unwrap();
 
         // Preserve mode defers accounting even when the handler returns ready data.
         assert_eq!(tracked_response_bytes(), 0);
-        let finalizer = copr.build_batch_merge_finalizer(
-            context,
-            Deadline::from_now(Duration::from_secs(60)),
-            0,
-            SemaphoreGroup::Shared,
-        );
+        let finalizer = copr.build_batch_merge_finalizer(context, 0, SemaphoreGroup::Shared);
         let batch_output = BatchTaskOutput {
             response: coppb::StoreBatchTaskResponse::default().into(),
             mergeable_result: Some(Box::new(ConcatMergeable::new(vec![9]))),
@@ -2627,6 +2874,192 @@ mod tests {
     }
 
     // TODO: Test panic?
+
+    // Background unary responses are charged to the background egress limiter,
+    // streaming responses are not: `bg-egress-limit` does not cover streaming
+    // coprocessor requests.
+    #[test]
+    fn test_background_egress_charged_for_unary_not_streaming() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // `ddl` is a background task type of the default group, with a
+        // background egress limit of 1 KiB/s.
+        let manager = Arc::new(ResourceGroupManager::default());
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        // Each response is much larger than one second of the egress limit.
+        let new_resp = || {
+            let mut resp = coppb::Response::default();
+            resp.set_data(vec![0; 64 * 1024]);
+            resp
+        };
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        fn uncharged_egress_bytes() -> u64 {
+            prometheus::gather()
+                .iter()
+                .find(|f| {
+                    f.get_name() == "tikv_resource_control_background_egress_uncharged_bytes_total"
+                })
+                .map_or(0, |f| f.get_metric()[0].get_counter().get_value() as u64)
+        }
+
+        // A background stream of several chunks builds no egress debt, but its
+        // bytes are counted as uncharged background egress.
+        let uncharged_before = uncharged_egress_bytes();
+        let chunks = vec![Ok(new_resp()), Ok(new_resp()), Ok(new_resp())];
+        let handler_builder = Box::new(move |_, _: &_| Ok(StreamFixture::new(chunks).into_boxed()));
+        let resp_vec = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+        assert_eq!(resp_vec.len(), 3);
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        // Other tests may add to the global counter concurrently, so only a
+        // lower bound can be checked.
+        assert!(uncharged_egress_bytes() - uncharged_before >= 3 * 64 * 1024);
+
+        // The same response sent as a background unary request builds debt.
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(new_resp())).into_boxed()));
+        let resp =
+            block_on(copr.handle_unary_request(background_request(handler_builder))).unwrap();
+        assert_eq!(resp.get_data().len(), 64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
+
+    // A background request whose admission is delayed by egress debt fails
+    // with `DeadlineExceeded` once its deadline passes, instead of waiting out
+    // the debt before entering the read pool, for both unary and streaming
+    // requests.
+    #[test]
+    fn test_background_admission_respects_deadline() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // One delayed request at a time, so a leaked delay slot would make the
+        // next delayed request be rejected instead.
+        let manager = Arc::new(ResourceGroupManager::new(
+            resource_control::config::Config {
+                admission_max_delayed_count: 1,
+                ..Default::default()
+            },
+        ));
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        // About a minute of background egress debt at 1 KiB/s.
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+        bg_limiter.consume_egress(64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::from_secs(30));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            Some(manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            req_ctx.deadline = Deadline::from_now(Duration::from_millis(100));
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        for _ in 0..2 {
+            let started_at = Instant::now();
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+            let res = block_on(copr.handle_unary_request(background_request(handler_builder)));
+            assert!(matches!(res, Err(Error::DeadlineExceeded)), "{res:?}");
+            assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+        }
+
+        let started_at = Instant::now();
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(StreamFixture::new(vec![Ok(coppb::Response::default())]).into_boxed())
+        });
+        let items = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(items[0], Err(Error::DeadlineExceeded)),
+            "{items:?}"
+        );
+        assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn test_special_streaming_handlers() {

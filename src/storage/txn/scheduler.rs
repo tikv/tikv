@@ -528,6 +528,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
     }
 
+    fn fail_with_deadline_exceeded(callback: SchedulerTaskCallback) {
+        callback.execute(ProcessResult::Failed {
+            err: StorageError::from(StorageErrorInner::DeadlineExceeded),
+        });
+    }
+
     /// Returns true if admission control consumed the command (reject or
     /// delay); the caller should return without further processing.
     fn apply_admission_control(
@@ -545,7 +551,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Spawns an async task on the sched pool that sleeps for `delay` then
     /// calls `schedule_command`. The latch is acquired only after the sleep so
-    /// the delay does not block concurrent writers with overlapping keys.
+    /// the delay does not block concurrent writers with overlapping keys. A
+    /// command whose deadline passes first is never scheduled: like a read
+    /// that misses its admission deadline, it waits until the deadline and
+    /// then fails as timed out.
     fn schedule_after_admission_delay(
         &self,
         cmd: Command,
@@ -562,8 +571,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let rm = self.inner.resource_manager.as_ref().unwrap().clone();
         let execution = async move {
             let mut guard = rm.delay_slot_guard();
-            futures_timer::Delay::new(delay).await;
+            let deadline = cmd.deadline();
+            futures_timer::Delay::new(delay.min(deadline.remaining_duration())).await;
             guard.release();
+            if deadline.check().is_err() {
+                Self::fail_with_deadline_exceeded(cb);
+                return;
+            }
             let cid = sched.inner.gen_id();
             if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
                 sched.schedule_command(task, cb, None);

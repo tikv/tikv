@@ -3878,6 +3878,24 @@ impl TikvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
+    /// Returns the read pools whose background reads `bg-egress-limit` does
+    /// not throttle. Background reads pay egress debt at the admission gate of
+    /// the unified read pool, which the legacy (non-unified) read pools do not
+    /// have, so the limit does not apply to modules that use them.
+    fn bg_egress_limit_unenforced_read_pools(&self) -> Vec<&'static str> {
+        if !self.resource_control.enabled || self.resource_control.bg_egress_limit.0 == 0 {
+            return vec![];
+        }
+        let mut pools = vec![];
+        if !self.readpool.storage.use_unified_pool() {
+            pools.push("storage");
+        }
+        if !self.readpool.coprocessor.use_unified_pool() {
+            pools.push("coprocessor");
+        }
+        pools
+    }
+
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
         if self.cfg_path.is_empty() {
@@ -4194,6 +4212,13 @@ impl TikvConfig {
         // Validate sub-components.
         self.log.validate()?;
         self.readpool.validate()?;
+        for pool in self.bg_egress_limit_unenforced_read_pools() {
+            warn!(
+                "resource-control.bg-egress-limit does not apply to background reads served by \
+                the legacy read pool, set use-unified-pool of this read pool to true to enforce it";
+                "readpool" => pool,
+            );
+        }
         self.storage.validate()?;
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
@@ -7117,6 +7142,36 @@ mod tests {
             config.compaction_guard_max_output_file_size.0,
             cf_opts.get_target_file_size_base()
         );
+    }
+
+    #[test]
+    fn test_bg_egress_limit_unenforced_read_pools() {
+        let mut cfg = TikvConfig::default();
+        // Disabled by default, nothing to report.
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
+
+        // Enabled with the default unified read pools: enforced everywhere.
+        cfg.resource_control.bg_egress_limit = ReadableSize::mb(50);
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
+
+        // A module explicitly on the legacy read pool is reported.
+        cfg.readpool.storage.use_unified_pool = Some(false);
+        assert_eq!(cfg.bg_egress_limit_unenforced_read_pools(), vec!["storage"]);
+
+        // Customizing a module's read pool without setting use-unified-pool
+        // falls back to the legacy read pool, which is reported too.
+        cfg.readpool.coprocessor.high_concurrency += 1;
+        assert_eq!(
+            cfg.bg_egress_limit_unenforced_read_pools(),
+            vec!["storage", "coprocessor"]
+        );
+
+        // Only a warning: the configuration is still valid.
+        cfg.validate().unwrap();
+
+        // Nothing to report when resource control is disabled.
+        cfg.resource_control.enabled = false;
+        assert!(cfg.bg_egress_limit_unenforced_read_pools().is_empty());
     }
 
     #[test]

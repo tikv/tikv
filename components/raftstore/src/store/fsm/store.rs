@@ -6,7 +6,7 @@ use std::{
     cmp::{self, Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
-        Bound::{Excluded, Included, Unbounded},
+        Bound::{Excluded, Unbounded},
     },
     mem,
     ops::{Deref, DerefMut},
@@ -306,6 +306,32 @@ impl StoreMeta {
             busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: Some(0),
         }
+    }
+
+    /// Release a completed source's dependency on a target snapshot.
+    pub(super) fn remove_destroyed_region_from_snapshot(
+        &mut self,
+        region_id: u64,
+        merged_by_target: bool,
+    ) -> Option<u64> {
+        let need_atomic = *self.destroyed_region_for_snap.get(&region_id)?;
+        let target_region_id = *self.targets_map.get(&region_id).unwrap();
+        let sources = self.atomic_snap_regions.get_mut(&target_region_id).unwrap();
+        let is_ready = *sources.get(&region_id).unwrap();
+        if need_atomic {
+            // Step1 can be queued behind the independent cleanup completion.
+            // A false readiness flag guarantees the target has not included
+            // this source in its snapshot's destroy_regions. Once ready, the
+            // source must finish through the atomic snapshot protocol instead.
+            assert!(
+                !merged_by_target && !is_ready,
+                "[region {}] should destroy with target region atomically",
+                region_id,
+            );
+        }
+        sources.remove(&region_id);
+        self.destroyed_region_for_snap.remove(&region_id);
+        Some(target_region_id)
     }
 
     #[inline]
@@ -2125,6 +2151,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let tag = format!("{}-{}", RAFTSTORE_THREAD, store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
+        // The nice value is per thread, so it has to be set by every raftstore
+        // poller itself rather than by the thread starting the system.
+        self.system.set_thread_priority(sys_util::HIGH_PRI);
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -2191,9 +2220,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         assert!(workers.pd_worker.start(pd_runner));
 
-        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
         self.workers = Some(workers);
         Ok(())
     }
@@ -3428,18 +3454,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     }
 
     fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
-        let start_key = data_key(start_key);
-        let end_key = data_end_key(end_key);
-
         let mut regions = vec![];
         {
             let meta = self.ctx.store_meta.lock().unwrap();
-            for (_, region_id) in meta
-                .region_ranges
-                .range((Excluded(start_key), Included(end_key)))
-            {
-                regions.push(*region_id);
-            }
+            // Include the Region containing `end_key`. Its boundaries may have
+            // changed since the caller looked up the range, e.g. by a merge, so
+            // it can extend past `end_key` while still covering changed data.
+            meta.search_region(start_key, end_key, |region| regions.push(region.get_id()));
         }
         for region_id in regions {
             let _ = self.ctx.router.send(
@@ -3656,7 +3677,59 @@ mod tests {
     use engine_traits::CompactedEvent;
     use kvproto::raft_serverpb::ExtraMessageType;
 
-    use super::ExtraMessageFullLogLimiter;
+    use super::{ExtraMessageFullLogLimiter, StoreMeta};
+
+    fn snapshot_source_meta(is_ready: bool) -> StoreMeta {
+        let mut meta = StoreMeta::new(0);
+        meta.targets_map.insert(1, 2);
+        meta.destroyed_region_for_snap.insert(1, true);
+        meta.atomic_snap_regions
+            .entry(2)
+            .or_default()
+            .insert(1, is_ready);
+        meta
+    }
+
+    #[test]
+    fn test_remove_destroyed_region_from_snapshot() {
+        let mut meta = snapshot_source_meta(false);
+        // Another source can already be ready for atomic destruction. Removing
+        // the independently destroyed source must preserve that dependency.
+        meta.atomic_snap_regions
+            .get_mut(&2)
+            .unwrap()
+            .insert(3, true);
+        assert_eq!(
+            meta.remove_destroyed_region_from_snapshot(1, false),
+            Some(2)
+        );
+        assert!(!meta.destroyed_region_for_snap.contains_key(&1));
+        assert_eq!(meta.atomic_snap_regions[&2].len(), 1);
+        assert_eq!(meta.atomic_snap_regions[&2].get(&3), Some(&true));
+        assert_eq!(meta.remove_destroyed_region_from_snapshot(1, false), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_ready_source() {
+        let mut meta = snapshot_source_meta(true);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_atomic_cleanup() {
+        let mut meta = snapshot_source_meta(false);
+        meta.remove_destroyed_region_from_snapshot(1, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_destroyed_region_from_snapshot_requires_source_dependency() {
+        let mut meta = snapshot_source_meta(false);
+        meta.atomic_snap_regions.get_mut(&2).unwrap().remove(&1);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
 
     #[test]
     fn test_extra_message_full_log_limiter() {

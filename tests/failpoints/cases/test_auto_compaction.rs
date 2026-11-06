@@ -716,3 +716,263 @@ fn test_mvcc_aware_compaction_prioritization() {
         tracker.get_mvcc_versions_scanned(region3_id)
     );
 }
+
+#[test]
+fn test_auto_compaction_refreshes_region_approximate_size() {
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+
+    let (cluster, client, ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+        // Neither the written bytes nor RocksDB compaction events reach this
+        // threshold, so only auto-compaction can trigger a size recheck.
+        cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize::gb(1));
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(1);
+        cluster.cfg.gc.auto_compaction.redundant_bytes_threshold = ReadableSize(1);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+    let region_id = ctx.get_region_id();
+
+    // Let the initial split check record the size of the empty Region.
+    thread::sleep(Duration::from_millis(500));
+
+    // Write two versions of each key with large values. The older versions are
+    // below the GC safe point, so the Region is an auto-compaction candidate.
+    for i in 0..16 {
+        let key = format!("k{:02}", i);
+        for commit_ts in [10, 30] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(
+                Op::Put,
+                key.as_bytes(),
+                &vec![b'x'; 512 * 1024],
+            )];
+            must_kv_prewrite(
+                &client,
+                ctx.clone(),
+                mutations,
+                key.as_bytes().to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                ctx.clone(),
+                vec![key.as_bytes().to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+
+    thread::sleep(Duration::from_millis(500));
+    let size_before = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    assert!(
+        size_before < ReadableSize::mb(1).0,
+        "the size reported to PD should still be stale, got {size_before}"
+    );
+
+    fail::remove(fp_compaction_start);
+
+    // Each key keeps at least one 512 KiB version, so the refreshed size should
+    // be at least 16 * 512 KiB.
+    let expected_min_size = ReadableSize::mb(4).0;
+    let mut size_after = size_before;
+    for _ in 0..100 {
+        size_after = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        if size_after >= expected_min_size {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        size_after >= expected_min_size,
+        "auto-compaction should trigger a Region size recheck, got {size_after}"
+    );
+}
+
+#[test]
+fn test_auto_compaction_refreshes_size_of_region_merged_after_collection() {
+    use tikv::server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION;
+
+    let _guard = lock_auto_compaction_test();
+
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    let fp_first_candidate = "gc_worker_auto_compaction_first_candidate";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+    fail::cfg(fp_first_candidate, "pause").unwrap();
+    FIRST_COMPACTION_CANDIDATE_REGION.store(0, Ordering::SeqCst);
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(50);
+        // Neither the written bytes nor RocksDB compaction events reach this
+        // threshold, so only the merge and auto-compaction recheck the size.
+        // The test cluster does not run GC, so no data is reclaimed either.
+        cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize::gb(1));
+        // Run a single round. A later round would collect the merged Region
+        // itself and refresh its size regardless of the candidate's bounds.
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(30);
+        cluster.cfg.gc.auto_compaction.redundant_bytes_threshold = ReadableSize(1);
+    });
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.set_gc_safe_point(100);
+
+    let region = cluster.get_region(b"k50");
+    cluster.must_split(&region, b"k50");
+    let left = cluster.get_region(b"k00");
+    let right = cluster.get_region(b"k50");
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(left.get_id());
+    ctx.set_region_epoch(left.get_region_epoch().clone());
+    ctx.set_peer(left.get_peers()[0].clone());
+
+    // Only the left Region has stale versions, so it is the only candidate.
+    for i in 0..16 {
+        let key = format!("k{:02}", i);
+        for commit_ts in [10, 30] {
+            let start_ts = commit_ts - 3;
+            let mutations = vec![new_mutation(
+                Op::Put,
+                key.as_bytes(),
+                &vec![b'x'; 512 * 1024],
+            )];
+            must_kv_prewrite(
+                &client,
+                ctx.clone(),
+                mutations,
+                key.as_bytes().to_vec(),
+                start_ts,
+            );
+            must_kv_commit(
+                &client,
+                ctx.clone(),
+                vec![key.as_bytes().to_vec()],
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
+        }
+    }
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+
+    fail::remove(fp_compaction_start);
+    for _ in 0..100 {
+        if FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) != 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst),
+        left.get_id()
+    );
+
+    // Merge after the candidate was collected, so the merged Region extends
+    // past the candidate's end key.
+    cluster.pd_client.must_merge(right.get_id(), left.get_id());
+
+    // The merge rechecks the size of the merged Region.
+    let size_after_merge = ReadableSize::mb(12).0;
+    let mut size = 0;
+    for _ in 0..100 {
+        size = cluster
+            .pd_client
+            .get_region_approximate_size(left.get_id())
+            .unwrap_or_default();
+        if size >= size_after_merge {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        size >= size_after_merge,
+        "the merge should recheck the Region size, got {size}"
+    );
+
+    // Grow the merged Region beyond the candidate's end key. These writes stay
+    // below `region_split_check_diff`, so the size reported to PD goes stale.
+    let merged = cluster.get_region(b"k60");
+    assert_eq!(merged.get_id(), left.get_id());
+    let mut ctx = Context::new();
+    ctx.set_region_id(merged.get_id());
+    ctx.set_region_epoch(merged.get_region_epoch().clone());
+    ctx.set_peer(merged.get_peers()[0].clone());
+    for i in 0..16 {
+        let key = format!("k{:02}", 60 + i);
+        let (start_ts, commit_ts) = (37, 40);
+        let mutations = vec![new_mutation(
+            Op::Put,
+            key.as_bytes(),
+            &vec![b'x'; 512 * 1024],
+        )];
+        must_kv_prewrite(
+            &client,
+            ctx.clone(),
+            mutations,
+            key.as_bytes().to_vec(),
+            start_ts,
+        );
+        must_kv_commit(
+            &client,
+            ctx.clone(),
+            vec![key.as_bytes().to_vec()],
+            start_ts,
+            commit_ts,
+            commit_ts,
+        );
+    }
+    for cf in [CF_WRITE, CF_DEFAULT] {
+        cluster.engines[&1].kv.flush_cf(cf, true).unwrap();
+    }
+    thread::sleep(Duration::from_millis(500));
+    let stale_size = cluster
+        .pd_client
+        .get_region_approximate_size(left.get_id())
+        .unwrap_or_default();
+    assert!(
+        stale_size < ReadableSize::mb(20).0,
+        "the size reported to PD should still be stale, got {stale_size}"
+    );
+
+    fail::remove(fp_first_candidate);
+
+    // The refreshed size covers both halves: 16 MiB on the left and 8 MiB on
+    // the right.
+    let refreshed_size = ReadableSize::mb(22).0;
+    for _ in 0..100 {
+        size = cluster
+            .pd_client
+            .get_region_approximate_size(left.get_id())
+            .unwrap_or_default();
+        if size >= refreshed_size {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        size >= refreshed_size,
+        "auto-compaction should recheck the size of the merged Region, got {size}"
+    );
+}

@@ -131,14 +131,22 @@ fn test_titan() {
         .pd_client
         .must_remove_peer(region1.get_id(), peer.clone());
     cluster.must_remove_region(3, region1.get_id());
-    cluster.engines[&3]
-        .kv
-        .compact_files_in_range_cf(CF_DEFAULT, None, None, None)
-        .unwrap();
     // lv5: empty, file 1 got deleted, since it is fully covered by region1
     // lv6: file0 [k1: ref_to_blob_file, k3: v]
     let db = cluster.engines[&3].kv.as_inner();
     let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+    // Peer metadata is removed before asynchronous range cleanup finishes. Wait
+    // for DeleteFiles without compacting away the obsolete blob reference in L6.
+    for _ in 0..100 {
+        if db
+            .get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")
+            .unwrap()
+            == 0
+        {
+            break;
+        }
+        sleep_ms(100);
+    }
     assert_eq!(
         0,
         db.get_property_int_cf(defaultcf, "rocksdb.num-files-at-level5")

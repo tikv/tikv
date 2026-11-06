@@ -40,6 +40,7 @@ use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, group_label},
     sys::memory_usage_reaches_high_water,
     time::{Instant, nanos_to_secs},
     worker::Scheduler,
@@ -49,7 +50,7 @@ use tracker::{
 };
 use txn_types::{self, Key};
 
-use super::batch::{BatcherBuilder, ReqBatcher};
+use super::batch::{BatchKey, BatcherBuilder, ReqBatcher};
 use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
@@ -294,6 +295,7 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
+            let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -303,6 +305,9 @@ macro_rules! handle_request {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .get(resource_group_priority)
+                    .observe(elapsed.as_secs_f64());
+                GRPC_MSG_DURATION_BY_GROUP
+                    .with_label_values(&[&resource_group])
                     .observe(elapsed.as_secs_f64());
                 record_request_source_metrics(source, elapsed);
                 ServerResult::Ok(())
@@ -607,6 +612,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
+        let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -616,6 +622,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            GRPC_MSG_DURATION_BY_GROUP
+                .with_label_values(&[&resource_group])
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -654,6 +663,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
+        let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -663,6 +673,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
                 .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            GRPC_MSG_DURATION_BY_GROUP
+                .with_label_values(&[&resource_group])
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -1058,6 +1071,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             self.health_controller.clone(),
             self.health_feedback_seq.clone(),
             self.health_feedback_interval,
+            self.resource_manager.clone(),
         );
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
@@ -1087,11 +1101,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     return future::err(GrpcError::RpcFailure(e));
                 }
                 if let Some(batch) = batcher.as_mut() {
-                    batch.maybe_commit(&storage, &tx);
+                    batch.maybe_commit(&storage, &tx, &resource_manager);
                 }
             }
             if let Some(batch) = batcher {
-                batch.commit(&storage, &tx);
+                batch.commit(&storage, &tx, &resource_manager);
             }
             future::ok(())
         });
@@ -1289,6 +1303,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             self.health_controller.clone(),
             self.health_feedback_seq.clone(),
             self.health_feedback_interval,
+            self.resource_manager.clone(),
         );
 
         let mut resp = GetHealthFeedbackResponse::default();
@@ -1311,6 +1326,7 @@ fn response_batch_commands_request<F, T>(
     label: GrpcTypeKind,
     source: String,
     resource_priority: ResourcePriority,
+    resource_group: String,
 ) where
     MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     F: Future<Output = Result<T, Error>> + Send + 'static,
@@ -1321,7 +1337,8 @@ fn response_batch_commands_request<F, T>(
         // GrpcRequestDuration must be initialized after the response is ready,
         // because it measures the grpc_wait_time, which is the time from
         // receiving the response to sending it.
-        let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
+        let measure =
+            GrpcRequestDuration::new(begin, label, source, resource_priority, resource_group);
         match resp_res {
             Ok(resp) => {
                 let task = MeasuredSingleResponse::new(id, resp, measure, None);
@@ -1365,7 +1382,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 let fut_resp = future::err::<batch_commands_response::Response, Error>(
                     Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
                 response_batch_commands_request(id, fut_resp, tx.clone(), begin_instant, GrpcTypeKind::invalid,
-                String::default(), ResourcePriority::unknown);
+                String::default(), ResourcePriority::unknown, DEFAULT_RESOURCE_GROUP_NAME.to_owned());
                 return Err(Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
             }
         };
@@ -1388,7 +1405,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     // For some invalid requests.
                     let begin_instant = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default(), ResourcePriority::unknown);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default(), ResourcePriority::unknown, DEFAULT_RESOURCE_GROUP_NAME.to_owned());
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
@@ -1402,17 +1419,19 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                         .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id);
+                        let key = BatchKey::of(resource_manager, req.get_context());
+                        batcher.as_mut().unwrap().add_get_request(key, req, id);
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority, resource_group);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
@@ -1426,17 +1445,19 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     if batcher.as_mut().is_some_and(|req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_raw_get_request(req, id);
+                        let key = BatchKey::of(resource_manager, req.get_context());
+                        batcher.as_mut().unwrap().add_raw_get_request(key, req, id);
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.raw_get.inc(); e});
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source, resource_group_priority);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source, resource_group_priority, resource_group);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
@@ -1450,6 +1471,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1457,7 +1479,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority, resource_group);
                 },
                 Some(batch_commands_request::request::Cmd::GetHealthFeedback(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
@@ -1466,7 +1488,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     // The response is empty at this place, and will be filled when collected to
                     // the batch response. See `HealthFeedbackAttacher::attach_if_needed`.
                     let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown, DEFAULT_RESOURCE_GROUP_NAME.to_owned());
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
@@ -1484,6 +1506,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         GrpcTypeKind::invalid,
                         String::default(),
                         ResourcePriority::unknown,
+                        DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
@@ -1497,12 +1520,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                         .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
+                    let resource_group = group_label(resource_control_ctx.get_resource_group_name()).to_owned();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.$metric_name.inc(); e});
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source, resource_group_priority);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source, resource_group_priority, resource_group);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -1558,6 +1582,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             begin,
             source,
             resource_priority,
+            resource_group,
             sent,
         } = measure;
         let elapsed = now.saturating_duration_since(begin);
@@ -1565,6 +1590,9 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .get(resource_priority)
+            .observe(elapsed.as_secs_f64());
+        GRPC_MSG_DURATION_BY_GROUP
+            .with_label_values(&[&resource_group])
             .observe(elapsed.as_secs_f64());
         GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM.observe(wait.as_secs_f64());
         record_request_source_metrics(source, elapsed);
@@ -2628,6 +2656,9 @@ pub struct GrpcRequestDuration {
     pub label: GrpcTypeKind,
     pub source: String,
     pub resource_priority: ResourcePriority,
+    /// Already bounded to a configured group, so it is safe to use directly as
+    /// a metric label.
+    pub resource_group: String,
     pub sent: Instant,
 }
 
@@ -2637,12 +2668,14 @@ impl GrpcRequestDuration {
         label: GrpcTypeKind,
         source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     ) -> Self {
         GrpcRequestDuration {
             begin,
             label,
             source,
             resource_priority,
+            resource_group,
             sent: Instant::now(),
         }
     }
@@ -2729,6 +2762,7 @@ struct HealthFeedbackAttacher {
     last_feedback_time: Option<Instant>,
     seq: Arc<AtomicU64>,
     feedback_interval: Option<Duration>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl HealthFeedbackAttacher {
@@ -2737,6 +2771,7 @@ impl HealthFeedbackAttacher {
         health_controller: HealthController,
         seq: Arc<AtomicU64>,
         feedback_interval: Option<Duration>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         Self {
             store_id,
@@ -2744,6 +2779,7 @@ impl HealthFeedbackAttacher {
             last_feedback_time: None,
             seq,
             feedback_interval,
+            resource_manager,
         }
     }
 
@@ -2802,6 +2838,15 @@ impl HealthFeedbackAttacher {
         feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
         feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
         // TODO: set network slow score?
+        // Deliberately left unset without a resource manager rather than set
+        // empty: the client is allowed to clear what it knows about this store
+        // on an empty list, so "nobody is noisy" and "this store does not
+        // report noisy groups" must not look alike.
+        if let Some(resource_manager) = &self.resource_manager {
+            let mut noisy_groups = NoisyGroups::default();
+            noisy_groups.set_names(resource_manager.noisy_group_names().into());
+            feedback.set_noisy_groups(noisy_groups);
+        }
         feedback
     }
 }
@@ -2930,24 +2975,60 @@ mod tests {
     }
 
     #[test]
+    fn test_health_feedback_attacher_reports_noisy_groups() {
+        let health_controller = HealthController::new();
+        let seq = Arc::new(AtomicU64::new(1));
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+
+        let mut a = HealthFeedbackAttacher::new(
+            1,
+            health_controller,
+            seq,
+            Some(Duration::from_secs(1)),
+            Some(resource_manager),
+        );
+        let mut resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+
+        // A store that reports noisy groups and currently blames nobody must
+        // say so positively, so that a client can clear what it knows. That is
+        // a present-but-empty message, not an absent one.
+        assert!(resp.get_health_feedback().has_noisy_groups());
+        assert!(
+            resp.get_health_feedback()
+                .get_noisy_groups()
+                .get_names()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn test_health_feedback_attacher() {
         let health_controller = HealthController::new();
         let test_reporter = health_controller::reporters::TestReporter::new(&health_controller);
         let seq = Arc::new(AtomicU64::new(1));
 
-        let mut a = HealthFeedbackAttacher::new(1, health_controller.clone(), seq.clone(), None);
+        let mut a =
+            HealthFeedbackAttacher::new(1, health_controller.clone(), seq.clone(), None, None);
         let mut resp = BatchCommandsResponse::default();
         a.attach_if_needed(&mut resp);
         assert!(!resp.has_health_feedback());
 
-        let mut a =
-            HealthFeedbackAttacher::new(1, health_controller, seq, Some(Duration::from_secs(1)));
+        let mut a = HealthFeedbackAttacher::new(
+            1,
+            health_controller,
+            seq,
+            Some(Duration::from_secs(1)),
+            None,
+        );
         resp = BatchCommandsResponse::default();
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
         assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 1);
         assert_eq!(resp.get_health_feedback().get_slow_score(), 1);
+        // No resource manager, so the field stays absent rather than empty.
+        assert!(!resp.get_health_feedback().has_noisy_groups());
 
         // Skips attaching feedback because last attaching was just done.
         test_reporter.set_raftstore_slow_score(50.);
