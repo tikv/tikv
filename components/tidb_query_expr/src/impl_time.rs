@@ -3653,6 +3653,64 @@ mod tests {
     }
 
     #[test]
+    fn test_add_sub_date_compound_interval_overflow() {
+        use ScalarFuncSig::{
+            AddDateDatetimeString, AddDateStringString, StringIsNull, SubDateDatetimeString,
+            SubDateStringString, TimeIsNull,
+        };
+
+        for sig in [
+            AddDateStringString,
+            SubDateStringString,
+            AddDateDatetimeString,
+            SubDateDatetimeString,
+        ] {
+            for (interval, expected) in [
+                ("1:1", 0),
+                ("9223372036854775808:1", 1),
+                ("1:9223372036854775808", 1),
+            ] {
+                for interval in [interval.to_owned(), format!("-{}", interval)] {
+                    let mut ctx = EvalContext::default();
+                    let (time_type, _, result_type) = get_add_sub_date_expr_types(sig);
+                    let time = if time_type == FieldTypeTp::String {
+                        ExprDefBuilder::constant_bytes(b"2024-01-01".to_vec())
+                    } else {
+                        let time = Time::parse_datetime(&mut ctx, "2024-01-01", 0, true).unwrap();
+                        ExprDefBuilder::constant_time(
+                            time.to_packed_u64(&mut ctx).unwrap(),
+                            time.get_time_type(),
+                        )
+                    };
+                    let date_expr = ExprDefBuilder::scalar_func(sig, result_type)
+                        .push_child(time)
+                        .push_child(ExprDefBuilder::constant_bytes(interval.as_bytes().to_vec()))
+                        .push_child(ExprDefBuilder::constant_bytes(b"YEAR_MONTH".to_vec()));
+                    let is_null = if result_type == FieldTypeTp::String {
+                        StringIsNull
+                    } else {
+                        TimeIsNull
+                    };
+                    let node = ExprDefBuilder::scalar_func(is_null, FieldTypeTp::Long)
+                        .push_child(date_expr)
+                        .build();
+                    let expr =
+                        RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+                    let mut columns = LazyBatchColumnVec::empty();
+                    let result = expr.eval(&mut ctx, &[], &mut columns, &[0], 1).unwrap();
+                    assert_eq!(
+                        result.get_logical_scalar_ref(0).as_int(),
+                        Some(&expected),
+                        "sig: {:?}, interval: {}",
+                        sig,
+                        interval
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_add_sub_date() {
         let cases = {
             use ScalarFuncSig::*;
