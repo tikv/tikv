@@ -50,14 +50,14 @@ pub trait Peekable {
 
     /// Read a value and return it as a protobuf message.
     fn get_msg<M: protobuf::Message + Default>(&self, key: &[u8]) -> Result<Option<M>> {
-        let value = self.get_value(key)?;
-        if value.is_none() {
-            return Ok(None);
+        match self.get_value(key)? {
+            Some(value) => {
+                let mut m = M::default();
+                m.merge_from_bytes(&value)?;
+                Ok(Some(m))
+            }
+            None => Ok(None),
         }
-
-        let mut m = M::default();
-        m.merge_from_bytes(&value.unwrap())?;
-        Ok(Some(m))
     }
 
     /// Read a value and return it as a protobuf message.
@@ -66,13 +66,13 @@ pub trait Peekable {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<M>> {
-        let value = self.get_value_cf(cf, key)?;
-        if value.is_none() {
-            return Ok(None);
+        match self.get_value_cf(cf, key)? {
+            Some(value) => {
+                let mut m = M::default();
+                m.merge_from_bytes(&value)?;
+                Ok(Some(m))
+            }
+            None => Ok(None),
         }
-
-        let mut m = M::default();
-        m.merge_from_bytes(&value.unwrap())?;
-        Ok(Some(m))
     }
 }

@@ -64,19 +64,9 @@ impl<E: KvEngine> Mvcc<E> {
 impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
     fn update_context(&self, context: &mut Vec<u8>) -> bool {
         context.push(ConsistencyCheckMethod::Mvcc as u8);
-        context.reserve(8);
-        let len = context.len();
-
         let mut safe_point = self.local_safe_point.load(AtomicOrdering::Acquire);
         safe_point = get_safe_point_for_check(safe_point);
-        unsafe {
-            context.set_len(len + 8);
-            std::ptr::copy_nonoverlapping(
-                safe_point.to_le_bytes().as_ptr(),
-                &mut context[len] as _,
-                8,
-            );
-        }
+        context.extend_from_slice(&safe_point.to_le_bytes());
         // Skiped all other observers.
         true
     }
