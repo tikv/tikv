@@ -105,7 +105,7 @@ pub struct SequenceNumberWindow {
     ack_start_counter: u64,
     // (end_counter, sequence number)
     pending_sequence: BTreeMap<u64, SequenceNumber>,
-    // max corresponding sequence number before ack_start_counter.
+    // Max sequence number among all acknowledged end-counter groups.
     committed_seqno: u64,
     max_received_seqno: u64,
 }
@@ -153,13 +153,9 @@ impl SequenceNumberWindow {
             .split_off(&(self.ack_start_counter + 1));
         std::mem::swap(&mut sequences, &mut self.pending_sequence);
         if let Some(sequence) = sequences.values().max() {
-            assert!(
-                self.committed_seqno <= sequence.number,
-                "committed_seqno {}, seqno{}",
-                self.committed_seqno,
-                sequence.number
-            );
-            self.committed_seqno = sequence.number;
+            // Concurrent writes may record their end counters out of sequence-number
+            // order, so newly committed groups can have smaller sequence numbers.
+            self.committed_seqno = self.committed_seqno.max(sequence.number);
         }
     }
 
@@ -211,5 +207,51 @@ mod tests {
         assert_eq!(window.committed_seqno(), 7);
         window.push(sn8);
         assert_eq!(window.committed_seqno(), 8);
+    }
+
+    #[test]
+    fn test_sequence_number_window_out_of_order_seqno() {
+        // Write 2 allocates seqno 1 first, but records its end counter after
+        // write 1 (seqno 2) and after write 3 has started. Write 3 records
+        // its end counter after write 4 has started.
+        let seqnos = [
+            SequenceNumber {
+                number: 2,
+                memtable_version: 0,
+                start_counter: 1,
+                end_counter: 2,
+            },
+            SequenceNumber {
+                number: 1,
+                memtable_version: 0,
+                start_counter: 2,
+                end_counter: 3,
+            },
+            SequenceNumber {
+                number: 3,
+                memtable_version: 0,
+                start_counter: 3,
+                end_counter: 4,
+            },
+            SequenceNumber {
+                number: 4,
+                memtable_version: 0,
+                start_counter: 4,
+                end_counter: 4,
+            },
+        ];
+
+        for (order, expected) in [
+            ([0, 1, 2, 3], [0, 2, 2, 4]),
+            // Receiving the largest seqno first must still wait for missing writes.
+            ([3, 0, 1, 2], [0, 0, 2, 4]),
+        ] {
+            let mut window = SequenceNumberWindow::default();
+            for (index, expected_seqno) in order.into_iter().zip(expected) {
+                window.push(seqnos[index]);
+                assert_eq!(window.committed_seqno(), expected_seqno);
+            }
+            assert_eq!(window.pending_count(), 0);
+        }
     }
 }
