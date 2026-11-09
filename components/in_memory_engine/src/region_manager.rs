@@ -802,7 +802,10 @@ impl RegionManager {
     // Mark the regions that are still ready to be evicted as `Evicting` and
     // return them. The readiness must be checked again after acquiring the
     // write lock of `regions_map`, because the same region may have been
-    // marked by another thread after the read lock was released.
+    // marked by another thread after the read lock was released. The region
+    // may even have been evicted and loaded again with a newer epoch, in
+    // which case it's skipped, as the new one is handled by whoever makes it
+    // ready to be evicted.
     fn mark_evicting_if_ready(&self, mut regions: Vec<CacheRegion>) -> Vec<CacheRegion> {
         let mut regions_map = self.regions_map.write();
         let historical_regions = self.historical_regions.lock().unwrap();
@@ -810,6 +813,9 @@ impl RegionManager {
             let Some(meta) = regions_map.mut_region_meta(r.id) else {
                 return false;
             };
+            if meta.region != *r {
+                return false;
+            }
             let ready = {
                 let snapshot_list = meta.region_snapshot_list.lock().unwrap();
                 Self::region_ready_to_evict(meta, &snapshot_list, &historical_regions)
@@ -1291,6 +1297,66 @@ mod tests {
             RegionState::Evicting
         );
         assert!(region_mgr.historical_regions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_mark_evicting_if_ready_skips_reloaded_region() {
+        let region_mgr = RegionManager::default();
+        let old_region = CacheRegion::new(1, 1, b"k00", b"k10");
+        region_mgr.new_region(old_region.clone());
+        let deletable_regions = region_mgr.evict_region(&old_region, EvictReason::AutoEvict, None);
+        assert_eq!(deletable_regions, vec![old_region.clone()]);
+        region_mgr.on_delete_regions(&deletable_regions);
+
+        // The same region is loaded again with a newer epoch, and becomes
+        // ready to be evicted once its last snapshot is released.
+        let new_region = CacheRegion::new(1, 2, b"k00", b"k10");
+        region_mgr.new_region(new_region.clone());
+        region_mgr.region_snapshot(new_region.id, 2, 10).unwrap();
+        assert!(
+            region_mgr
+                .evict_region(&new_region, EvictReason::AutoEvict, None)
+                .is_empty()
+        );
+        region_mgr
+            .regions_map
+            .read()
+            .region_meta(new_region.id)
+            .unwrap()
+            .region_snapshot_list
+            .lock()
+            .unwrap()
+            .remove_snapshot(10);
+
+        // A stale candidate of the old generation must not mark the new one.
+        assert!(
+            region_mgr
+                .mark_evicting_if_ready(vec![old_region.clone()])
+                .is_empty()
+        );
+        assert_eq!(
+            region_mgr
+                .regions_map
+                .read()
+                .region_meta(new_region.id)
+                .unwrap()
+                .get_state(),
+            RegionState::PendingEvict
+        );
+
+        assert_eq!(
+            region_mgr.mark_evicting_if_ready(vec![new_region.clone()]),
+            vec![new_region.clone()]
+        );
+        assert_eq!(
+            region_mgr
+                .regions_map
+                .read()
+                .region_meta(new_region.id)
+                .unwrap()
+                .get_state(),
+            RegionState::Evicting
+        );
     }
 
     #[test]
