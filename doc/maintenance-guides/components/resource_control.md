@@ -65,6 +65,7 @@ Hot contracts to review carefully:
 - `components/resource_control/src/future.rs`
 - `components/resource_control/src/channel.rs`
 - `src/read_pool.rs` (external caller coupled to the read-pool contract below)
+- `components/tikv_util/src/yatp_pool/fair_queue/mod.rs`
 
 ## Must-Read File Order
 
@@ -133,8 +134,50 @@ Hot contracts to review carefully:
 `ResourceGroupManager` implements `tikv_util::yatp_pool::fair_queue::GroupProvider`.
 The provider returns an `Arc<GroupPolicy>` containing canonical name, identity,
 configured priority, positive weight, and retirement state. It does not read or
-mutate scheduling VT. The fair queue owns each priority lane's committed VT,
-reservations, idle placement, task history, and CPU gate.
+mutate scheduling VT. The fair queue owns each group queue's committed VT,
+reservations and idle placement, plus RG task history and the shared CPU gate.
+
+`GroupState` stores one RG's shared policy, task history and admission count.
+`GroupQueue`, identified by `QueueKey = (priority, resource_group_id)`, stores
+one priority's queued tasks, VT, reservations and active dispatch count.
+`group_states` and `group_queues` index these separately. Each `GroupQueue`
+contains `TaskQueues` in its `task_queues` field: the three task subqueues,
+with FIFO ordering, level selection and targeted removal. This follows the
+organization of CSE's `KeyspaceInnerQueue` and `KeyspaceTaskQueues` while
+keeping RG history shared across priorities. `FairTaskCell` wraps the original
+YATP task cell and its task record, matching CSE's `KeyspaceFairTaskCell`.
+
+Read the implementation under `components/tikv_util/src/yatp_pool/fair_queue/`
+in this order:
+
+- `mod.rs`: public interfaces and the YATP push/pop adapter.
+- `scheduler.rs`: locked state transitions, VT, capacity and ready indexes.
+- `task_queues.rs`: `TaskQueues` orders tasks within a `GroupQueue`;
+  task history stays with the resource group's `TaskLevelManager`.
+- `task.rs`: TaskRecord, permit, future slot and cancellation ownership.
+- `execution.rs`: TLS dispatch context, per-poll accounting and checkpoints.
+- `cpu_budget.rs`: the independently locked CPU bucket and retry decisions.
+
+`GroupState`, `GroupQueue` and `State` are private to the scheduler. White-box
+scheduling and lifecycle regressions live in the inline `#[cfg(test)] mod tests`
+at the end of `scheduler.rs`. This child module can inspect the ledger without
+exposing fields to production callers.
+The adapter passes a scheduling result to `execution::prepare_dispatch`; only execution
+owns the prepared/active TLS and initializes dispatch clocks. CPU tests use
+test-only balance helpers rather than exposing a bucket mutex guard. Keep
+the remaining `pub(super)` operations scoped to this fair-queue component;
+avoid adding field getters that merely duplicate shared internal records.
+
+Keep policy constants in their owning modules: priority bounds in `mod.rs`,
+VT/capacity in `scheduler.rs`, level thresholds/probabilities in `task_queues.rs`,
+CPU checkpoint timing in `execution.rs`, and refill/credit limits in
+`cpu_budget.rs`. Equal durations with different purposes remain independent.
+Comments should state units, ownership and concurrency constraints.
+
+VT amounts use the `_vt` suffix; `committed_index` is an ordered group queue index.
+`PollChargeGuard` settles one poll on drop, while `needs_settlement` also
+covers the pre-poll fallback. The adapter's `drain` calls `close_and_drain`,
+which permanently closes the scheduler to further enqueues.
 
 Identity and update rules:
 
@@ -185,29 +228,47 @@ Read admission and accounting:
   to the current runner for preemption. Online growth retains YATP's wake
   behavior: new submissions or worker turnover activate the additional threads.
 - A ready `BTreeSet` indexes current committed-plus-reserved VT per nonempty
-  priority lane. Selection and the initial precharge share one scheduler
+  priority group queue. Selection and the initial precharge share one scheduler
   critical section. A separate committed index advances each priority's
   monotonic reference; the new queue does not use periodic legacy VT calibration.
 - RG generations share live capacity and task-id history across their priority
-  lanes. The internal scheduler task ID identifies one live task for lookup and
+  group queues. The internal scheduler task ID identifies one live task for lookup and
   cancellation; it is distinct from the reusable MLFQ history task ID.
 - CPU ratio, per-RG base capacity, precharge, and time slice are startup
   settings. Global capacity follows configured workers times tasks per worker;
   online changes update the queue shared by existing handles.
+- The atomic queued-nonempty hint is only for YATP preemption. Publish its
+  final value under the scheduler lock after queue changes, without exposing
+  the temporary empty state of a retirement transfer. `pop` and parking
+  validation still inspect locked state; a false hint cannot justify Empty.
+  `has_ready_task` keeps its CPU-first check and ignores the dispatch limit.
+  Derive empty/nonempty transitions from locked task locations, without an
+  atomic read on each queue operation. The publication helpers assume one
+  successful insertion/removal; reconsider their conditions for batch changes.
+- A synchronous requeue may reuse its TaskRecord from ACTIVE only when both the
+  scheduler ID and pool identity match. Release TLS borrows before touching
+  wakers/history; the final locked enqueue still checks closed, cancelled and
+  released. External and asynchronous submissions retain the registry lookup.
+- CPU checkpoints combine consume and retry under one CPU lock, preserving
+  both refill observations with fresh timestamps sampled inside that lock.
+  CPU and scheduler locks remain unnested. ThreadTime boundaries, per-poll
+  tail charges and inline-poll gates are unchanged; the pop fallback still
+  accounts for internal tasks and cancellation before PollChargeGuard begins.
 
 Cancellation ownership lives in `tikv_util::yatp_pool::fair_queue`. The queue
-registry owns Records, permits weakly reference Records, and a Record weakly
+registry owns TaskRecords, permits weakly reference TaskRecords, and a TaskRecord weakly
 references the task's `FutureSlot`. A slot owns a boxed pinned future behind a
 per-task mutex. Cancel uses `try_lock`, never waits for a running poll, and
 drops extracted futures outside locks to break IO-waker retention cycles.
-Do not replace this with a strong Record-to-future ownership cycle or run
+Do not replace this with a strong TaskRecord-to-future ownership cycle or run
 future destructors under the scheduler lock.
 
 YATP may call `FairQueue::pop` inside `park.validate` while holding a
 `parking_lot` bucket lock. Releasing the scheduler lock does not release that
 outer lock. `pop` must not invoke the provider, task-history helpers, cancellation,
 or task/waker destructors. Retired queued entries move directly to the cached
-default group's lane, retaining their Record, original live-capacity ownership,
+default RG's queue at the effective priority, retaining their TaskRecord and
+original live-capacity ownership,
 MLFQ level/history, and schedule time. They rejoin priority/VT selection before
 dispatch. A canceled entry is cleaned up by its cancellation owner or runner
 outside the parking callback.
