@@ -7,7 +7,7 @@ use std::{
     iter::FromIterator,
 };
 
-use kvproto::brpb::{Noop, StorageBackend};
+use kvproto::brpb::{Noop, S3, StorageBackend};
 use tokio_stream::StreamExt;
 
 use super::{MetadataClient, StreamTask, keys::MetaKey};
@@ -55,6 +55,58 @@ async fn test_basic() -> Result<()> {
     let remote_ranges = cli.ranges_of_task(name).await?.inner;
     assert_range_matches(remote_ranges, ranges);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_s3_encryption_context_reload() -> Result<()> {
+    for context in ["", "eyJ0ZW5hbnQiOiJ0ZW5hbnQtYSJ9"] {
+        let cli = test_meta_cli();
+        let mut task = simple_task("s3_context");
+        let mut s3 = S3::new();
+        s3.set_bucket("backup-bucket".to_owned());
+        s3.set_sse_kms_encryption_context(context.to_owned());
+        task.info.mut_storage().set_s3(s3);
+        let assert_context = |task: &StreamTask| {
+            assert_eq!(
+                task.info
+                    .get_storage()
+                    .get_s3()
+                    .get_sse_kms_encryption_context(),
+                context,
+            );
+        };
+
+        let revision = cli.get_tasks().await?.revision;
+        let watcher = cli.events_from(revision).await?;
+        cli.insert_task_with_range(&task, &[]).await?;
+        watcher.cancel.await;
+        let events = watcher.stream.collect::<Vec<_>>().await;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            MetadataEvent::AddTask { task } => assert_context(task),
+            event => panic!("expected a task addition, got {:?}", event),
+        }
+
+        // A fresh client reloads the protobuf bytes persisted in the mock store.
+        let reloaded = MetadataClient::new(cli.meta_store.clone(), 43);
+        drop(cli);
+        let tasks = reloaded.get_tasks().await?.inner;
+        assert_eq!(tasks.len(), 1);
+        assert_context(&tasks[0]);
+        assert!(!tasks[0].is_paused);
+        let name = task.info.get_name();
+        assert_context(&reloaded.get_task(name).await?.unwrap());
+
+        reloaded.pause(name).await?;
+        let paused = reloaded.get_task(name).await?.unwrap();
+        assert!(paused.is_paused);
+        assert_context(&paused);
+        reloaded.resume(name).await?;
+        let resumed = reloaded.get_task(name).await?.unwrap();
+        assert!(!resumed.is_paused);
+        assert_context(&resumed);
+    }
     Ok(())
 }
 
