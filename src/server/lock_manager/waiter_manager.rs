@@ -616,17 +616,6 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
-<<<<<<< HEAD
-=======
-            if waiter.wait_info.lock_info.is_shared_lock() {
-                // When deadlock detected on a shared lock, some wait-for entries might have
-                // been registered to the detect table. So do clean up here to avoid those
-                // entries causing false-positive deadlock errors.
-                if let Some(edge) = waiter.registered_edge.clone() {
-                    self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
-                }
-            }
->>>>>>> 1ef0a1961c (lock_manager: skip detect on fair waiter owner change (#20002))
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
     }
