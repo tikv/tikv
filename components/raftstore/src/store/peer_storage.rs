@@ -761,6 +761,7 @@ where
         &mut self,
         peer: metapb::Peer,
         region: metapb::Region,
+        fsm_id: u64,
         keep_data: bool,
         local_first_replicate: bool,
         first_index: u64,
@@ -775,6 +776,7 @@ where
                 .schedule_force(RegionTask::ClearPeerMeta {
                     peer,
                     region,
+                    fsm_id,
                     raft_state: self.raft_state().clone(),
                     initialized: self.is_initialized(),
                     keep_data,

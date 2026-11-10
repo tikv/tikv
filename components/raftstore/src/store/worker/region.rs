@@ -75,6 +75,7 @@ pub enum Task {
     ClearPeerMeta {
         peer: Peer,
         region: Region,
+        fsm_id: u64,
         raft_state: RaftLocalState,
         merge_state: Option<MergeState>,
         keep_data: bool,
@@ -855,6 +856,7 @@ where
             Task::ClearPeerMeta {
                 peer,
                 region,
+                fsm_id,
                 raft_state,
                 merge_state,
                 keep_data,
@@ -891,6 +893,7 @@ where
                             region_id,
                             SignificantMsg::ReadyToDestroyPeer {
                                 to_peer_id: peer_id,
+                                to_fsm_id: fsm_id,
                                 merged_by_target: keep_data,
                                 clear_stat,
                             },

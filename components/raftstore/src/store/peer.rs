@@ -1411,6 +1411,7 @@ where
         &mut self,
         engines: &Engines<EK, ER>,
         keep_data: bool,
+        fsm_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> Option<PeerClearMetaStat> {
@@ -1437,6 +1438,7 @@ where
             .schedule_destroy_peer(
                 peer.clone(),
                 region.clone(),
+                fsm_id,
                 keep_data,
                 local_first_replicate,
                 last_compacted_idx,

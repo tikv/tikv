@@ -448,32 +448,38 @@ fn test_async_destroy_peer_delayed() {
     // Transfer leader to peer (2, 2).
     cluster.must_transfer_leader(r1, new_peer(2, 2));
 
-    // Pause destroy peer
-    let (tx, rx) = mpsc::sync_channel(1);
-    let pause_destroy_peer_fp = "destroy_peer_after_pending_move";
+    // Block the region worker rather than the raftstore thread, so adding the
+    // replacement through the other replicas can still finish.
+    let (tx, rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    let pause_destroy_peer_fp = "before_clear_peer_meta";
     fail::cfg_callback(pause_destroy_peer_fp, move || {
-        tx.send(pause_destroy_peer_fp).unwrap();
+        tx.send(()).unwrap();
+        let _ = resume_rx.lock().unwrap().recv();
     })
     .unwrap();
 
     // Remove the peer 3 and the relevant destroying handling should be
     // paused
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    assert_eq!(
-        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-        pause_destroy_peer_fp
-    );
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     // Add a new peer 4 to store 3, and remove the failpoint to enable
     // the racing condition that the pending region has been added
     // a new peer while the destroying task of the old peer is executing
     // concurrentl.
     pd_client.must_add_peer(r1, new_peer(3, 4));
+    drop(resume_tx);
     fail::remove(pause_destroy_peer_fp);
+
+    // Confirm that the replacement has actually caught up before removing it.
+    cluster.must_transfer_leader(r1, new_peer(3, 4));
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
 
     // Again, remove the peer, and check the data should be cleared.
     pd_client.must_remove_peer(r1, new_peer(3, 4));
-    sleep_ms(100); // wait for clearing data asynchronously.
+    must_get_none(&cluster.get_engine(3), key);
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
     must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
 }
