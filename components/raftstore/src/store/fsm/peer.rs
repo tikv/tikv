@@ -176,6 +176,7 @@ fn validate_split_region_for_source(
 }
 
 static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
+static NEXT_PEER_FSM_ID: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -207,6 +208,8 @@ where
     ER: RaftEngine,
 {
     pub peer: Peer<EK, ER>,
+    /// Identifies this FSM even when split replaces it with the same peer ID.
+    instance_id: u64,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
     tick_registry: [bool; PeerTick::VARIANT_COUNT],
@@ -241,8 +244,8 @@ where
     /// Destroy is waiting for persisted readies or flushed log GC. Resume it
     /// when the corresponding completion message arrives.
     delayed_destroy: Option<DelayDestroy>,
-    /// Metadata cleanup has started. The FSM stays alive until its completion
-    /// message arrives, but must not schedule another cleanup in the meantime.
+    /// Metadata cleanup has started. This FSM must not schedule another cleanup
+    /// while waiting for completion, even if split replaces it in the router.
     destroy_scheduled: bool,
     /// Before actually destroying a peer, ensure all log gc tasks are finished,
     /// so we can start destroying without seeking.
@@ -350,6 +353,7 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
+                instance_id: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
                 peer: Peer::new(
                     store_id,
                     cfg,
@@ -413,6 +417,7 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
+                instance_id: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
                 peer: Peer::new(
                     store_id,
                     cfg,
@@ -1804,19 +1809,20 @@ where
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
             SignificantMsg::ReadyToDestroyPeer {
                 to_peer_id,
+                to_fsm_id,
                 merged_by_target,
                 clear_stat,
             } => {
-                if to_peer_id != self.fsm.peer_id() {
-                    // Ignore redundant or stale messages from an outdated peer for the same region.
-                    // This handles the corner case where a stale peer is being removed
-                    // asynchronously while a new peer for the region is added.
-                    // If the async cleanup thread returns a delayed message
-                    // aimed to the removed peer, skip it to avoid acting on stale state.
-                    // This is a corner case after introducing `async destroy peer` by PR#18805.
+                if to_peer_id != self.fsm.peer_id() || to_fsm_id != self.fsm.instance_id {
+                    // Split can replace an uninitialized FSM without changing
+                    // its Region or peer ID. Completion belongs to the FSM that
+                    // scheduled cleanup, even if another FSM now has those IDs.
                     info!("delayed destroy peer message";
                         "old_peer_id" => to_peer_id,
-                        "peer_id" => self.fsm.peer_id());
+                        "peer_id" => self.fsm.peer_id(),
+                        "old_fsm_id" => to_fsm_id,
+                        "fsm_id" => self.fsm.instance_id);
+                    fail_point!("on_stale_destroy_peer_completion");
                     return;
                 }
                 self.on_ready_destroy_peer(merged_by_target, clear_stat);
@@ -4454,6 +4460,7 @@ where
         let clear_stat = self.fsm.peer.destroy(
             &self.ctx.engines,
             merged_by_target,
+            self.fsm.instance_id,
             self.ctx.store_meta.clone(),
             self.ctx.pending_create_peers.clone(),
         );
@@ -4487,6 +4494,23 @@ where
         let region_id = self.region_id();
         let is_peer_initialized = self.fsm.peer.is_initialized();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        // Split can replace this FSM while completion is being handled. Check
+        // the actual mailbox under StoreMeta, which also serializes replacement.
+        let is_current_fsm = self.fsm.mailbox.as_ref().is_some_and(|own_mailbox| {
+            self.ctx
+                .router
+                .mailbox(region_id)
+                .is_some_and(|current| current.is_same_fsm(own_mailbox))
+        });
+        if !is_current_fsm {
+            self.fsm.stop();
+            info!("skip finalizing replaced peer";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "fsm_id" => self.fsm.instance_id);
+            fail_point!("on_stale_destroy_peer_completion");
+            return true;
+        }
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the
         // router.

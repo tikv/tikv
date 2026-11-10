@@ -582,6 +582,8 @@ where
     /// and data in kvdb.
     ReadyToDestroyPeer {
         to_peer_id: u64,
+        /// Split can reuse a peer ID, so completion also identifies its FSM.
+        to_fsm_id: u64,
         merged_by_target: bool,
         clear_stat: PeerClearMetaStat,
     },
