@@ -4510,8 +4510,12 @@ where
         let region_id = self.region_id();
         let is_peer_initialized = self.fsm.peer.is_initialized();
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        // Split can replace this FSM while completion is being handled. Check
-        // the actual mailbox under StoreMeta, which also serializes replacement.
+        // The `uid` check in `handle_msgs` only proves the completion targets
+        // this FSM instance; it cannot tell whether the FSM is still the owner
+        // here, because the parent FSM installs a replacement on another
+        // poller thread. Re-check the actual mailbox under StoreMeta, which
+        // also serializes replacement, so "check + close/remove" is atomic
+        // w.r.t. it.
         let is_current_fsm = self.fsm.mailbox.as_ref().is_some_and(|own_mailbox| {
             self.ctx
                 .router
