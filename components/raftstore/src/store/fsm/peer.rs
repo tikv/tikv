@@ -176,6 +176,16 @@ fn validate_split_region_for_source(
 }
 
 static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Hands out a process-local unique ID for every `PeerFsm`.
+///
+/// The ID identifies the FSM instance rather than the peer. It is needed to
+/// tell apart two FSM instances that share the same region ID and peer ID,
+/// which happens when a split replaces an uninitialized peer with a newly
+/// created FSM. The value is never persisted and is reset on restart, so it
+/// must not be compared across processes.
+///
+/// `Relaxed` ordering is sufficient because the counter only has to hand out
+/// distinct values; it does not synchronize any other memory.
 static NEXT_PEER_FSM_ID: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -208,8 +218,14 @@ where
     ER: RaftEngine,
 {
     pub peer: Peer<EK, ER>,
-    /// Identifies this FSM even when split replaces it with the same peer ID.
-    instance_id: u64,
+    /// Unique ID of this FSM instance, assigned from `NEXT_PEER_FSM_ID` at
+    /// creation.
+    ///
+    /// It identifies the FSM instance rather than the peer: after a split
+    /// replaces an uninitialized peer, the new FSM keeps the same region ID
+    /// and peer ID but gets a different `uid`, so stale messages and async
+    /// destroy completions cannot be applied to it.
+    uid: u64,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
     tick_registry: [bool; PeerTick::VARIANT_COUNT],
@@ -353,7 +369,7 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                instance_id: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
+                uid: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
                 peer: Peer::new(
                     store_id,
                     cfg,
@@ -417,7 +433,7 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                instance_id: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
+                uid: NEXT_PEER_FSM_ID.fetch_add(1, Ordering::Relaxed),
                 peer: Peer::new(
                     store_id,
                     cfg,
@@ -1813,7 +1829,7 @@ where
                 merged_by_target,
                 clear_stat,
             } => {
-                if to_peer_id != self.fsm.peer_id() || to_fsm_id != self.fsm.instance_id {
+                if to_peer_id != self.fsm.peer_id() || to_fsm_id != self.fsm.uid {
                     // Split can replace an uninitialized FSM without changing
                     // its Region or peer ID. Completion belongs to the FSM that
                     // scheduled cleanup, even if another FSM now has those IDs.
@@ -1821,7 +1837,7 @@ where
                         "old_peer_id" => to_peer_id,
                         "peer_id" => self.fsm.peer_id(),
                         "old_fsm_id" => to_fsm_id,
-                        "fsm_id" => self.fsm.instance_id);
+                        "fsm_id" => self.fsm.uid);
                     fail_point!("on_stale_destroy_peer_completion");
                     return;
                 }
@@ -4460,7 +4476,7 @@ where
         let clear_stat = self.fsm.peer.destroy(
             &self.ctx.engines,
             merged_by_target,
-            self.fsm.instance_id,
+            self.fsm.uid,
             self.ctx.store_meta.clone(),
             self.ctx.pending_create_peers.clone(),
         );
@@ -4507,7 +4523,7 @@ where
             info!("skip finalizing replaced peer";
                 "region_id" => region_id,
                 "peer_id" => self.fsm.peer_id(),
-                "fsm_id" => self.fsm.instance_id);
+                "fsm_id" => self.fsm.uid);
             fail_point!("on_stale_destroy_peer_completion");
             return true;
         }
