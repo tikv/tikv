@@ -1023,6 +1023,13 @@ impl TestPdClient {
         self.cluster.wl().enable_peer_count_check = false;
     }
 
+    pub fn send_region_heartbeat_response(&self, store_id: u64, resp: RegionHeartbeatResponse) {
+        self.cluster.rl().stores[&store_id]
+            .sender
+            .unbounded_send(resp)
+            .unwrap();
+    }
+
     pub fn enable_default_operator(&self) {
         self.cluster.wl().enable_peer_count_check = true;
     }
