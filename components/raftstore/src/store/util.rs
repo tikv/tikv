@@ -29,6 +29,7 @@ use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
 };
 use raft_proto::ConfChangeI;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::{
     Either, box_err,
     codec::number::{NumberEncoder, decode_u64},
@@ -39,7 +40,7 @@ use tikv_util::{
 };
 use time::Duration;
 use tokio::sync::Notify;
-use txn_types::WriteBatchFlags;
+use txn_types::{Key, WriteBatchFlags};
 
 use super::{Config, metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage};
 use crate::{
@@ -1985,6 +1986,64 @@ pub fn validate_split_region(
     Ok(())
 }
 
+/// The TiDB table a memcomparable-encoded key belongs to, or `None` if it is
+/// not table data. A trailing timestamp is ignored.
+///
+/// Runs on the proposal path, so it does not decode the key. The encoding
+/// writes the raw key in groups of eight bytes, each followed by a marker of
+/// `0xFF` minus the group's padding. The table prefix is `t` plus an 8-byte
+/// id, nine raw bytes: all of the first group and the first byte of the
+/// second, so only the first eighteen encoded bytes are read.
+pub fn encoded_key_table_id(encoded_key: &[u8]) -> Option<i64> {
+    const GROUP: usize = 8;
+    const MARKER: u8 = 0xFF;
+    const ENCODED_GROUP: usize = GROUP + 1;
+    if encoded_key.len() < 2 * ENCODED_GROUP {
+        return None;
+    }
+    let (first, second) = encoded_key.split_at(ENCODED_GROUP);
+    // The first group is full; the second holds at least one raw byte.
+    if first[GROUP] != MARKER || second[GROUP] < MARKER - (GROUP as u8 - 1) {
+        return None;
+    }
+    let mut prefix = [0u8; table_codec::TABLE_PREFIX_KEY_LEN];
+    prefix[..GROUP].copy_from_slice(&first[..GROUP]);
+    prefix[GROUP] = second[0];
+    table_codec::decode_table_id(&prefix).ok()
+}
+
+/// The inclusive range of TiDB table ids the region's keys can belong to, or
+/// `None` if it holds no table data.
+pub fn region_table_range(region: &metapb::Region) -> Option<(i64, i64)> {
+    // Encoded start of the `t` and `u` keyspaces, bounding all table data.
+    let space = |prefix: &[u8]| Key::from_raw(prefix).into_encoded();
+
+    let start = region.get_start_key();
+    let first = match encoded_key_table_id(start) {
+        Some(table) => table,
+        None if start < space(b"u").as_slice() => i64::MIN,
+        None => return None,
+    };
+
+    let end = region.get_end_key();
+    let last = if end.is_empty() {
+        i64::MAX
+    } else {
+        let raw = Key::from_encoded_slice(end).to_raw().ok();
+        match raw
+            .as_deref()
+            .map(|r| (r.len(), table_codec::decode_table_id(r)))
+        {
+            // Exactly `t{table}`: the end is exclusive, so `table` is outside.
+            Some((table_codec::TABLE_PREFIX_KEY_LEN, Ok(table))) => table.checked_sub(1)?,
+            Some((_, Ok(table))) => table,
+            _ if end <= space(b"t").as_slice() => return None,
+            _ => i64::MAX,
+        }
+    };
+    (first <= last).then_some((first, last))
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -3009,5 +3068,38 @@ mod tests {
         let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
         rrp.merge_safe_ts(40, 10, &coprocessor_host);
         assert_eq!(rrp.read_index_safe_ts(), 0);
+    }
+
+    #[test]
+    fn test_encoded_key_table_id_matches_a_full_decode() {
+        let full = |encoded: &[u8]| -> Option<i64> {
+            let raw = Key::from_encoded_slice(encoded).to_raw().ok()?;
+            table_codec::decode_table_id(&raw).ok()
+        };
+        let mut boundary = table_codec::TABLE_PREFIX.to_vec();
+        boundary.encode_i64(104).unwrap();
+        let cases: Vec<Vec<u8>> = vec![
+            Key::from_raw(&table_codec::encode_row_key(104, 1)).into_encoded(),
+            Key::from_raw(&table_codec::encode_row_key(-5, 7)).into_encoded(),
+            Key::from_raw(&table_codec::encode_row_key(104, 1))
+                .append_ts(10.into())
+                .into_encoded(),
+            Key::from_raw(&boundary).into_encoded(),
+            Key::from_raw(&table_codec::encode_index_seek_key(104, 2, &[1u8; 40])).into_encoded(),
+            Key::from_raw(b"t").into_encoded(),
+            Key::from_raw(b"t1234").into_encoded(),
+            Key::from_raw(b"m_meta").into_encoded(),
+            Key::from_raw(b"u12345678xyz").into_encoded(),
+            Vec::new(),
+            vec![0u8; 5],
+            vec![0xFFu8; 18],
+        ];
+        for key in cases {
+            assert_eq!(encoded_key_table_id(&key), full(&key), "{:?}", key);
+        }
+        assert_eq!(
+            encoded_key_table_id(&Key::from_raw(&boundary).into_encoded()),
+            Some(104)
+        );
     }
 }

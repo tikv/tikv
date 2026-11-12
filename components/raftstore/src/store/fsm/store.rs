@@ -759,6 +759,9 @@ where
 
     pub process_stat: Option<ProcessStat>,
     pub extra_message_full_log_limiter: ExtraMessageFullLogLimiter,
+
+    /// Attributes proposals to noisy groups. `None` without resource control.
+    pub resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1138,6 +1141,8 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
     need_flush_events: bool,
+    /// This poller's pool. Without it a demoted FSM reschedules forever.
+    priority: Priority,
 
     // previous metrics count
     previous_append: u64,
@@ -1267,6 +1272,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             |_| panic!("should not use return")
         );
 
+        peer.refresh_noisy_priority(
+            self.poll_ctx.resource_manager.as_ref(),
+            self.poll_ctx.cfg.enable_noisy_tenant_demotion,
+        );
+
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
@@ -1288,6 +1298,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
+            }
+        }
+
+        if !self.peer_msg_buf.is_empty() {
+            // Thread-local and auto-flushed, like the other per-poller counters.
+            let msgs = self.peer_msg_buf.len() as u64;
+            match self.priority {
+                Priority::Normal => STORE_POOL_MSGS.normal.inc_by(msgs),
+                Priority::Low => STORE_POOL_MSGS.low.inc_by(msgs),
             }
         }
 
@@ -1443,6 +1462,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
     }
+
+    fn get_priority(&self) -> Priority {
+        self.priority
+    }
 }
 
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
@@ -1476,6 +1499,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     // raft and kv respectively.
     pub(crate) last_raft_append_success_at_millis: Arc<AtomicU64>,
     pub(crate) last_kv_sync_success_at_millis: Arc<AtomicU64>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1670,7 +1694,7 @@ where
 {
     type Handler = RaftPoller<EK, ER, T>;
 
-    fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
+    fn build(&mut self, priority: Priority) -> RaftPoller<EK, ER, T> {
         let sync_write_worker = if self.write_senders.is_empty() {
             let (_, rx) = unbounded(None);
             Some(WriteWorker::new(
@@ -1744,6 +1768,7 @@ where
             gc_safe_point: self.gc_safe_point.clone(),
             process_stat: None,
             extra_message_full_log_limiter: ExtraMessageFullLogLimiter::default(),
+            resource_manager: self.resource_manager.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1761,6 +1786,7 @@ where
             previous_append: 0,
             previous_message: 0,
             previous_snapshot: 0,
+            priority,
         }
     }
 }
@@ -1801,6 +1827,7 @@ where
             gc_safe_point: self.gc_safe_point.clone(),
             last_raft_append_success_at_millis: self.last_raft_append_success_at_millis.clone(),
             last_kv_sync_success_at_millis: self.last_kv_sync_success_at_millis.clone(),
+            resource_manager: self.resource_manager.clone(),
         }
     }
 }
@@ -1838,6 +1865,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     workers: Option<Workers<EK>>,
     store_writers: StoreWriters<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -2085,6 +2113,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             last_kv_sync_success_at_millis,
             node_start_time: self.node_start_time,
             gc_safe_point,
+            resource_manager: self.resource_manager.clone(),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -2289,6 +2318,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
                 .map(|m| m.derive_controller(STORE_WRITER_THREAD.to_owned(), false)),
         ),
         node_start_time: monotonic_raw_now(),
+        resource_manager: resource_manager.clone(),
     };
     (raft_router, system)
 }

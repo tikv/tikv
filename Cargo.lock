@@ -6184,6 +6184,7 @@ dependencies = [
  "tikv_util",
  "time 0.2.27",
  "tokio",
+ "toml",
  "tracker",
  "txn_types",
  "uuid 0.8.2",

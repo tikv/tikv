@@ -133,6 +133,18 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref NOISY_GROUPS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_resource_control_noisy_groups",
+        "Number of resource groups currently blamed for an overload"
+    )
+    .unwrap();
+
+    pub static ref NOISY_TABLES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_resource_control_noisy_tables",
+        "Number of TiDB tables whose regions are demoted to the low-priority store pool"
+    )
+    .unwrap();
+
     pub static ref RESOURCE_SCORE_VEC: GaugeVec = register_gauge_vec!(
         "tikv_resource_control_resource_score",
         "Common 0-100 resource-pressure score computed by compute_resource_scores, per resource type (cpu, io, compaction)",
