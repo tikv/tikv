@@ -105,7 +105,7 @@ pub struct SequenceNumberWindow {
     ack_start_counter: u64,
     // (end_counter, sequence number)
     pending_sequence: BTreeMap<u64, SequenceNumber>,
-    // max corresponding sequence number before ack_start_counter.
+    // Max sequence number among all acknowledged end-counter groups.
     committed_seqno: u64,
     max_received_seqno: u64,
 }
@@ -153,13 +153,9 @@ impl SequenceNumberWindow {
             .split_off(&(self.ack_start_counter + 1));
         std::mem::swap(&mut sequences, &mut self.pending_sequence);
         if let Some(sequence) = sequences.values().max() {
-            assert!(
-                self.committed_seqno <= sequence.number,
-                "committed_seqno {}, seqno{}",
-                self.committed_seqno,
-                sequence.number
-            );
-            self.committed_seqno = sequence.number;
+            // Concurrent writes may record their end counters out of sequence-number
+            // order, so newly committed groups can have smaller sequence numbers.
+            self.committed_seqno = self.committed_seqno.max(sequence.number);
         }
     }
 
@@ -174,10 +170,6 @@ impl SequenceNumberWindow {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use test::Bencher;
-
     use super::*;
 
     #[test]
@@ -217,37 +209,49 @@ mod tests {
         assert_eq!(window.committed_seqno(), 8);
     }
 
-    #[bench]
-    fn bench_sequence_number_window(b: &mut Bencher) {
-        fn produce_random_seqno(producer: usize, number: usize) -> Vec<SequenceNumber> {
-            let mock_seqno_allocator = Arc::new(AtomicU64::new(1));
-            let (tx, rx) = std::sync::mpsc::sync_channel(number);
-            let handles: Vec<_> = (0..producer)
-                .map(|_| {
-                    let allocator = mock_seqno_allocator.clone();
-                    let count = number / producer;
-                    let tx = tx.clone();
-                    std::thread::spawn(move || {
-                        for _ in 0..count {
-                            let mut sn = SequenceNumber::pre_write();
-                            sn.post_write(allocator.fetch_add(1, Ordering::AcqRel));
-                            tx.send(sn).unwrap();
-                        }
-                    })
-                })
-                .collect();
-            for h in handles {
-                h.join().unwrap();
-            }
-            (0..number).map(|_| rx.recv().unwrap()).collect()
-        }
+    #[test]
+    fn test_sequence_number_window_out_of_order_seqno() {
+        // Write 2 allocates seqno 1 first, but records its end counter after
+        // write 1 (seqno 2) and after write 3 has started. Write 3 records
+        // its end counter after write 4 has started.
+        let seqnos = [
+            SequenceNumber {
+                number: 2,
+                memtable_version: 0,
+                start_counter: 1,
+                end_counter: 2,
+            },
+            SequenceNumber {
+                number: 1,
+                memtable_version: 0,
+                start_counter: 2,
+                end_counter: 3,
+            },
+            SequenceNumber {
+                number: 3,
+                memtable_version: 0,
+                start_counter: 3,
+                end_counter: 4,
+            },
+            SequenceNumber {
+                number: 4,
+                memtable_version: 0,
+                start_counter: 4,
+                end_counter: 4,
+            },
+        ];
 
-        let seqno = produce_random_seqno(16, 100000);
-        b.iter(|| {
+        for (order, expected) in [
+            ([0, 1, 2, 3], [0, 2, 2, 4]),
+            // Receiving the largest seqno first must still wait for missing writes.
+            ([3, 0, 1, 2], [0, 0, 2, 4]),
+        ] {
             let mut window = SequenceNumberWindow::default();
-            for sn in &seqno {
-                window.push(*sn);
+            for (index, expected_seqno) in order.into_iter().zip(expected) {
+                window.push(seqnos[index]);
+                assert_eq!(window.committed_seqno(), expected_seqno);
             }
-        })
+            assert_eq!(window.pending_count(), 0);
+        }
     }
 }
