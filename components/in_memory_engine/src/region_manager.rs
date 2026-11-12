@@ -736,19 +736,23 @@ impl RegionManager {
             // epoch not changed
             let mut snapshot_list = region_meta.region_snapshot_list.lock().unwrap();
             snapshot_list.remove_snapshot(snapshot_meta.snapshot_ts);
-            if Self::region_ready_to_evict(
-                region_meta,
-                &snapshot_list,
-                &self.historical_regions.lock().unwrap(),
-            ) {
-                drop(snapshot_list);
+            let no_snapshot = snapshot_list.is_empty();
+            // Release the snapshot list before locking `historical_regions`,
+            // as the slow path locks them in the reverse order. It's fine to
+            // check the list after releasing it, because new snapshots can
+            // only be acquired on active regions, and the state of the region
+            // can't change while holding the read lock of `regions_map`.
+            drop(snapshot_list);
+            if region_meta.get_state() == RegionState::PendingEvict
+                && no_snapshot
+                && !Self::overlaps_with_historical_regions(
+                    &region_meta.region,
+                    &self.historical_regions.lock().unwrap(),
+                )
+            {
+                let region = region_meta.region.clone();
                 drop(regions_map);
-                let mut regions_map = self.regions_map.write();
-                let region_meta = regions_map
-                    .mut_region_meta(snapshot_meta.region.id)
-                    .unwrap();
-                region_meta.set_state(RegionState::Evicting);
-                return vec![region_meta.region.clone()];
+                return self.mark_evicting_if_ready(vec![region]);
             }
             return vec![];
         }
@@ -783,15 +787,45 @@ impl RegionManager {
                 true
             });
             if !deletable_regions.is_empty() {
+                // `historical_regions` must be released before acquiring the
+                // write lock of `regions_map`, otherwise it deadlocks with the
+                // fast path, which locks `historical_regions` while holding
+                // the read lock of `regions_map`.
+                drop(historical_regions);
                 drop(regions_map);
-                let mut regions_map = self.regions_map.write();
-                for r in &deletable_regions {
-                    let meta = regions_map.mut_region_meta(r.id).unwrap();
-                    meta.set_state(RegionState::Evicting);
-                }
+                deletable_regions = self.mark_evicting_if_ready(deletable_regions);
             }
         }
         deletable_regions
+    }
+
+    // Mark the regions that are still ready to be evicted as `Evicting` and
+    // return them. The readiness must be checked again after acquiring the
+    // write lock of `regions_map`, because the same region may have been
+    // marked by another thread after the read lock was released. The region
+    // may even have been evicted and loaded again with a newer epoch, in
+    // which case it's skipped, as the new one is handled by whoever makes it
+    // ready to be evicted.
+    fn mark_evicting_if_ready(&self, mut regions: Vec<CacheRegion>) -> Vec<CacheRegion> {
+        let mut regions_map = self.regions_map.write();
+        let historical_regions = self.historical_regions.lock().unwrap();
+        regions.retain(|r| {
+            let Some(meta) = regions_map.mut_region_meta(r.id) else {
+                return false;
+            };
+            if meta.region != *r {
+                return false;
+            }
+            let ready = {
+                let snapshot_list = meta.region_snapshot_list.lock().unwrap();
+                Self::region_ready_to_evict(meta, &snapshot_list, &historical_regions)
+            };
+            if ready {
+                meta.set_state(RegionState::Evicting);
+            }
+            ready
+        });
+        regions
     }
 
     // whether target region is ready to be physically evicted.
@@ -1104,6 +1138,8 @@ pub enum RegionCacheStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
     use engine_traits::{CacheRegion, EvictReason, FailedReason};
 
     use super::*;
@@ -1190,6 +1226,133 @@ mod tests {
                 .regions_map
                 .read()
                 .region_meta(r_left.id)
+                .unwrap()
+                .get_state(),
+            RegionState::Evicting
+        );
+    }
+
+    #[test]
+    fn test_concurrent_remove_region_snapshot() {
+        let region_mgr = Arc::new(RegionManager::default());
+        let r1 = CacheRegion::new(1, 0, b"k00", b"k10");
+        region_mgr.new_region(r1.clone());
+        region_mgr.region_snapshot(r1.id, 0, 5).unwrap();
+        let snapshot1 = RegionCacheSnapshotMeta::new(r1.clone(), 5, 1);
+
+        // r1 is moved to the historical regions as it's still referenced by
+        // snapshot1.
+        let r_left = CacheRegion::new(1, 2, b"k00", b"k03");
+        let r_evict = CacheRegion::new(2, 2, b"k03", b"k06");
+        let r_right = CacheRegion::new(3, 2, b"k06", b"k10");
+        region_mgr.split_region(&r1, vec![r_left, r_evict.clone(), r_right]);
+        region_mgr.region_snapshot(r_evict.id, 2, 10).unwrap();
+        let snapshot2 = RegionCacheSnapshotMeta::new(r_evict.clone(), 10, 2);
+        assert!(
+            region_mgr
+                .evict_region(&r_evict, EvictReason::AutoEvict, None)
+                .is_empty()
+        );
+
+        let (tx, rx) = mpsc::channel();
+        let historical_regions = region_mgr.historical_regions.lock().unwrap();
+        // Release snapshot1 through the slow path, which waits for
+        // `historical_regions` first.
+        let (mgr, tx1) = (region_mgr.clone(), tx.clone());
+        thread::spawn(move || tx1.send(mgr.remove_region_snapshot(&snapshot1)).unwrap());
+        thread::sleep(Duration::from_millis(100));
+
+        // Release snapshot2 through the fast path, which also has to wait for
+        // `historical_regions` as r_evict is ready to be evicted otherwise.
+        // It must not hold the snapshot list of r_evict meanwhile, because
+        // the slow path locks the snapshot lists after `historical_regions`.
+        let (mgr, tx2) = (region_mgr.clone(), tx);
+        thread::spawn(move || tx2.send(mgr.remove_region_snapshot(&snapshot2)).unwrap());
+        test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+            let regions_map = region_mgr.regions_map.read();
+            let meta = regions_map.region_meta(r_evict.id).unwrap();
+            let snapshot_list = meta.region_snapshot_list.try_lock();
+            snapshot_list.is_ok_and(|list| list.is_empty())
+        });
+
+        // The slow path is likely to acquire `historical_regions` first, and
+        // finds r_evict ready to be evicted. It must not hold
+        // `historical_regions` while waiting for the write lock of
+        // `regions_map`, which is read locked by the fast path.
+        drop(historical_regions);
+
+        // r_evict is marked as evicting by exactly one of them.
+        let mut deletable_regions = vec![];
+        for _ in 0..2 {
+            deletable_regions.extend(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        assert_eq!(deletable_regions, vec![r_evict.clone()]);
+        assert_eq!(
+            region_mgr
+                .regions_map
+                .read()
+                .region_meta(r_evict.id)
+                .unwrap()
+                .get_state(),
+            RegionState::Evicting
+        );
+        assert!(region_mgr.historical_regions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_mark_evicting_if_ready_skips_reloaded_region() {
+        let region_mgr = RegionManager::default();
+        let old_region = CacheRegion::new(1, 1, b"k00", b"k10");
+        region_mgr.new_region(old_region.clone());
+        let deletable_regions = region_mgr.evict_region(&old_region, EvictReason::AutoEvict, None);
+        assert_eq!(deletable_regions, vec![old_region.clone()]);
+        region_mgr.on_delete_regions(&deletable_regions);
+
+        // The same region is loaded again with a newer epoch, and becomes
+        // ready to be evicted once its last snapshot is released.
+        let new_region = CacheRegion::new(1, 2, b"k00", b"k10");
+        region_mgr.new_region(new_region.clone());
+        region_mgr.region_snapshot(new_region.id, 2, 10).unwrap();
+        assert!(
+            region_mgr
+                .evict_region(&new_region, EvictReason::AutoEvict, None)
+                .is_empty()
+        );
+        region_mgr
+            .regions_map
+            .read()
+            .region_meta(new_region.id)
+            .unwrap()
+            .region_snapshot_list
+            .lock()
+            .unwrap()
+            .remove_snapshot(10);
+
+        // A stale candidate of the old generation must not mark the new one.
+        assert!(
+            region_mgr
+                .mark_evicting_if_ready(vec![old_region.clone()])
+                .is_empty()
+        );
+        assert_eq!(
+            region_mgr
+                .regions_map
+                .read()
+                .region_meta(new_region.id)
+                .unwrap()
+                .get_state(),
+            RegionState::PendingEvict
+        );
+
+        assert_eq!(
+            region_mgr.mark_evicting_if_ready(vec![new_region.clone()]),
+            vec![new_region.clone()]
+        );
+        assert_eq!(
+            region_mgr
+                .regions_map
+                .read()
+                .region_meta(new_region.id)
                 .unwrap()
                 .get_state(),
             RegionState::Evicting
