@@ -848,6 +848,7 @@ where
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub max_apply_unpersisted_log_limit: u64,
+    pub evict_cache_on_memory_ratio: f64,
     /// A flag used to track whether `max_apply_unpersisted_log_limit` is set
     /// to the Peer in raft-rs. We need this flag to handle the metrics
     /// `RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE` correctly because raft-rs can
@@ -1085,6 +1086,7 @@ where
             tag: tag.clone(),
             last_applying_idx: applied_index,
             max_apply_unpersisted_log_limit: cfg.max_apply_unpersisted_log_limit,
+            evict_cache_on_memory_ratio: cfg.evict_cache_on_memory_ratio,
             enable_apply_unpersisted_log_state: false,
             min_safe_index_for_unpersisted_apply: last_index,
             last_compacted_idx: 0,
@@ -1256,6 +1258,9 @@ where
         if self.min_safe_index_for_unpersisted_apply > 0
             && self.min_safe_index_for_unpersisted_apply <= applied_index
         {
+            if needs_evict_entry_cache(self.evict_cache_on_memory_ratio) {
+                return;
+            }
             if self.max_apply_unpersisted_log_limit > 0
                 && self
                     .raft_group
@@ -3371,6 +3376,7 @@ where
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_entry_cache(false);
+                self.disable_apply_unpersisted_log(self.raft_group.raft.raft_log.last_index());
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -6258,6 +6264,7 @@ where
         }
         self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
         self.max_apply_unpersisted_log_limit = ctx.cfg.max_apply_unpersisted_log_limit;
+        self.evict_cache_on_memory_ratio = ctx.cfg.evict_cache_on_memory_ratio;
         if self
             .raft_group
             .raft
