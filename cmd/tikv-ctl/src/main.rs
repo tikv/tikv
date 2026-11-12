@@ -604,20 +604,26 @@ fn main() {
                 Cmd::Scan {
                     from,
                     to,
+                    region,
                     limit,
                     show_cf,
                     start_ts,
                     commit_ts,
                 } => {
-                    let from = unescape(&from);
-                    let to = to.map_or_else(Vec::new, |to| unescape(&to));
                     let limit = limit.unwrap_or(0);
-                    if to.is_empty() && limit == 0 {
-                        println!(r#"please pass "to" or "limit""#);
-                        tikv_util::logger::exit_process_gracefully(-1);
-                    }
                     let cfs = show_cf.iter().map(AsRef::as_ref).collect();
-                    debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+                    if let Some(region) = region {
+                        debug_executor
+                            .dump_mvccs_infos_by_region(region, limit, cfs, start_ts, commit_ts);
+                    } else {
+                        let from = unescape(&from.unwrap());
+                        let to = to.map_or_else(Vec::new, |to| unescape(&to));
+                        if to.is_empty() && limit == 0 {
+                            println!(r#"please pass "to" or "limit""#);
+                            tikv_util::logger::exit_process_gracefully(-1);
+                        }
+                        debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+                    }
                 }
                 Cmd::RawScan {
                     from,
