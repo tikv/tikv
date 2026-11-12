@@ -211,6 +211,7 @@ where
     start_ts: UnixSecs,
     store_stat: store::StoreStat,
     store_heartbeat_interval: std::time::Duration,
+    region_heartbeat_report_interval: std::time::Duration,
 
     // For region.
     region_peers: HashMap<u64, region::PeerStat>,
@@ -267,6 +268,7 @@ where
         graceful_shutdown_state: Arc<AtomicBool>,
     ) -> Result<Self, std::io::Error> {
         let store_heartbeat_interval = cfg.value().pd_store_heartbeat_tick_interval.0;
+        let region_heartbeat_report_interval = cfg.value().pd_heartbeat_tick_interval.0;
         let mut stats_monitor = PdStatsMonitor::new(
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().inspect_interval.0,
@@ -289,6 +291,7 @@ where
             router,
             stats_monitor,
             store_heartbeat_interval,
+            region_heartbeat_report_interval,
             remote,
             start_ts: UnixSecs::zero(),
             store_stat: store::StoreStat::default(),
