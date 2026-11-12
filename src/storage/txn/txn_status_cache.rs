@@ -331,6 +331,7 @@ impl TxnStatusCache {
                             required_keep_time,
                             simulated_system_time.clone(),
                         ),
+                        false,
                     );
                     let allocated_capacity = cache.internal_allocated_capacity();
                     initial_allocated_capacity_total += allocated_capacity;
@@ -347,6 +348,7 @@ impl TxnStatusCache {
                             large_txn_required_keep_time,
                             simulated_system_time.clone(),
                         ),
+                        false,
                     );
                     let allocated_capacity = cache.internal_allocated_capacity();
                     initial_allocated_capacity_total += allocated_capacity;
