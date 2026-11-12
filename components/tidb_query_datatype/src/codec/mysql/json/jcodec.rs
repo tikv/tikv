@@ -50,10 +50,12 @@ pub trait JsonEncoder: NumberEncoder {
 
         // Write key entries
         for (key, _) in entries.iter() {
-            let key_len = key.len();
+            let key_len = u16::try_from(key.len())
+                // Ensure the JSON object key length fits within the u16 limit.
+                .map_err(|_| Error::Other(format!("JSON object key length exceeds u16::MAX: {}", key.len()).into()))?;
             self.write_u32_le(key_offset as u32)?;
-            self.write_u16_le(key_len as u16)?;
-            key_offset += key_len;
+            self.write_u16_le(key_len)?;
+            key_offset += usize::from(key_len);
         }
 
         let mut value_offset = key_offset as u32;
@@ -95,10 +97,14 @@ pub trait JsonEncoder: NumberEncoder {
 
         // Write key entries
         for key in data.keys() {
-            let key_len = key.len();
+            let key_len = u16::try_from(key.len()).map_err(|_| {
+                Error::Other(
+                    format!("JSON object key length exceeds u16::MAX: {}", key.len()).into(),
+                )
+            })?;
             self.write_u32_le(key_offset as u32)?;
-            self.write_u16_le(key_len as u16)?;
-            key_offset += key_len;
+            self.write_u16_le(key_len)?;
+            key_offset += usize::from(key_len);
         }
 
         let mut value_offset = key_offset as u32;
@@ -307,5 +313,19 @@ mod tests {
             let output_str = output.to_string();
             assert_eq!(input_str, output_str);
         }
+    }
+
+    #[test]
+    fn test_key_len_overflow() {
+        let valid_json = format!(r#"{{"{}": 1}}"#, "a".repeat(u16::MAX as usize));
+        let j: Json = valid_json.parse().unwrap();
+
+        let mut buf = vec![];
+        assert!(buf.write_json(j.as_ref()).is_ok());
+
+        let invalid_json = format!(r#"{{"{}": 1}}"#, "a".repeat(u16::MAX as usize + 1));
+        let j: Json = invalid_json.parse().unwrap();
+        let mut buf = vec![];
+        assert!(buf.write_json(j.as_ref()).is_err());
     }
 }
