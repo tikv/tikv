@@ -1,11 +1,45 @@
 use std::{
+    cell::RefCell,
     collections::{
         BTreeMap,
         Bound::{Excluded, Unbounded},
     },
-    mem::ManuallyDrop,
-    sync::{Arc, Mutex},
+    marker::PhantomData,
+    sync::{Arc, Condvar, Mutex},
 };
+
+#[derive(Debug)]
+struct RangeLatchLock {
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+impl RangeLatchLock {
+    fn new() -> Self {
+        Self {
+            held: Mutex::new(true),
+            released: Condvar::new(),
+        }
+    }
+
+    fn wait(&self) {
+        let mut held = self.held.lock().unwrap();
+        while *held {
+            held = self.released.wait(held).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
+}
+
+thread_local! {
+    /// Keeps removed latch allocations alive until the releasing thread next
+    /// enters `RangeLatch::acquire`, after the guard's drop frame has returned.
+    static RETIRED_RANGE_LATCHES: RefCell<Vec<Arc<RangeLatchLock>>> = RefCell::new(Vec::new());
+}
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -41,10 +75,10 @@ pub struct RangeLatch {
     /// A BTreeMap storing active range latches.
     /// Key: The start key of the range (sorted order).
     /// Value: A tuple of:
-    ///   - `Arc<Mutex<()>>`: The latch object for this range.
+    ///   - `Arc<RangeLatchLock>`: The latch object for this range.
     ///   - `(Vec<u8>, Vec<u8>)`: The actual range definition (start_key,
     ///     end_key).
-    range_latches: Mutex<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
+    range_latches: Mutex<BTreeMap<Vec<u8>, (Arc<RangeLatchLock>, (Vec<u8>, Vec<u8>))>>,
 }
 
 impl RangeLatch {
@@ -74,6 +108,8 @@ impl RangeLatch {
     /// Deadlocks cannot occur in the current scenario, as each caller thread
     /// holds at most one lock at a time.
     pub fn acquire(self: &Arc<Self>, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeLatchGuard<'_> {
+        RETIRED_RANGE_LATCHES.with(|retired| retired.borrow_mut().clear());
+
         loop {
             let mut range_latches = self.range_latches.lock().unwrap();
 
@@ -88,38 +124,24 @@ impl RangeLatch {
 
             // If no conflicts, insert the new range and return the guard
             if overlapping_ranges.is_empty() {
-                let mutex = Arc::new(Mutex::new(()));
+                let latch = Arc::new(RangeLatchLock::new());
                 let previous_value = range_latches.insert(
                     start_key.clone(),
-                    (mutex.clone(), (start_key.clone(), end_key.clone())),
+                    (latch, (start_key.clone(), end_key.clone())),
                 );
                 debug_assert!(previous_value.is_none());
 
-                // Now acquire the latch after releasing the write guard
-                let mutex_guard = mutex.lock().unwrap();
-                // Safety: `transmute` just change the lifetime, do not change
-                // the type.
-                // `_mutex_guard` points to the `Mutex<()>`
-                // We need to make sure it will be dropped before the
-                // `Arc<Mutex<()>>` and the `RangeLatch` while `drop`.
-                // Then we can make sure the mutex guard doesn't point to
-                // released memory.
-                // We use `ManuallyDrop` to promise it.
-
-                #[allow(clippy::missing_transmute_annotations)]
-                let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
-
                 return RangeLatchGuard {
                     start_key,
-                    _mutex_guard: ManuallyDrop::new(mutex_guard),
                     handle: self,
+                    _not_send: PhantomData,
                 };
             }
             drop(range_latches);
 
             // Wait for all overlapping ranges to be released
-            for (_, (mutex, (..))) in overlapping_ranges {
-                let _guard = mutex.lock().unwrap();
+            for (_, (latch, (..))) in overlapping_ranges {
+                latch.wait();
             }
         }
     }
@@ -129,29 +151,33 @@ impl RangeLatch {
 #[derive(Debug)]
 pub struct RangeLatchGuard<'a> {
     start_key: Vec<u8>,
-    /// Hold the mutex guard to prevent concurrent access to the same range.
-    ///
-    /// Use `ManuallyDrop` to promise:
-    /// `_mutex_guard` will be dropped before the `Arc<Mutex<()>>` and the
-    /// `RangeLatch` while `drop`.
-    _mutex_guard: ManuallyDrop<std::sync::MutexGuard<'a, ()>>,
     /// Holds a reference to RangeLatch to release the latch when the guard is
     /// dropped.
     handle: &'a RangeLatch,
+    /// Preserve the original guard's `!Send` behavior without storing a
+    /// self-referential `MutexGuard`.
+    _not_send: PhantomData<std::sync::MutexGuard<'a, ()>>,
 }
 
 impl Drop for RangeLatchGuard<'_> {
     fn drop(&mut self) {
-        // Safety: we call `ManuallyDrop::drop` to drop the mutex guard
-        // once and only once.
-        // So `_mutex_guard` will be released earlier than the
-        // `Arc<Mutex<()>>`. We drop `_mutex_guard` by hand, so dropping order
-        // depends on declaration order no longer matters.
-        unsafe { ManuallyDrop::drop(&mut self._mutex_guard) };
-        let mut range_latches = self.handle.range_latches.lock().unwrap();
-        // `range_latches.remove(&self.start_key);` will cause
-        // `Arc<Mutex()>>` dropped.
-        range_latches.remove(&self.start_key);
+        let latch = self
+            .handle
+            .range_latches
+            .lock()
+            .unwrap()
+            .remove(&self.start_key);
+
+        if let Some((latch, _)) = latch {
+            // Removing the entry makes the range available immediately. Wake
+            // waiters so they can retry against the updated map.
+            latch.release();
+
+            // Do not free the latch allocation inside this drop frame. A
+            // thread-local reference prevents another thread from performing
+            // the final Arc drop; this thread drains it on its next acquire.
+            RETIRED_RANGE_LATCHES.with(|retired| retired.borrow_mut().push(latch));
+        }
     }
 }
 
