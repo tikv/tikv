@@ -9,6 +9,7 @@ use std::{
 use pd_client::RpcClient;
 use tikv_util::time::Instant;
 
+mod noisy_tables;
 mod resource_group;
 pub use resource_group::{
     AdmissionDecision, CONTROL_TICK, CONTROL_TICK_OVERLOADED, DelaySlotGuard, HIGH_PRIORITY,
