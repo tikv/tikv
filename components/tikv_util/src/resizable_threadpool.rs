@@ -117,6 +117,10 @@ impl ResizableRuntime {
             .expect("Failed to create runtime-keeper");
         let new_runtime = (replace_pool_rule)(thread_size, &init_name)
             .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_prefix));
+        // Notify `after_adjust` of the initial pool size so callers' metrics (e.g.
+        // BACKUP_THREAD_POOL_SIZE_GAUGE) are populated when the pool is constructed
+        // at its final size and is never resized afterwards.
+        after_adjust(thread_size);
 
         ResizableRuntime {
             size: thread_size,
