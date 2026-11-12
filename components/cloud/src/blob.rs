@@ -265,7 +265,7 @@ mod tests {
         Emitting,
     }
     /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
-    /// `read` call. This is copy & paste from the implmentation from s3.rs.
+    /// `read` call. This is copy & paste from the implementation from s3.rs.
     #[pin_project::pin_project]
     struct ThrottleRead<R> {
         #[pin]
