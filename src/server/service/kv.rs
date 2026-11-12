@@ -2975,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn test_health_feedback_attacher_reports_noisy_groups() {
+    fn test_health_feedback_attacher_keeps_noisy_groups_present_when_write_gate_changes() {
         let health_controller = HealthController::new();
         let seq = Arc::new(AtomicU64::new(1));
         let resource_manager = Arc::new(ResourceGroupManager::default());
@@ -2985,21 +2985,37 @@ mod tests {
             health_controller,
             seq,
             Some(Duration::from_secs(1)),
-            Some(resource_manager),
+            Some(resource_manager.clone()),
         );
-        let mut resp = BatchCommandsResponse::default();
-        a.attach_if_needed(&mut resp);
+        for write_admission in [false, true, false] {
+            resource_manager
+                .get_config()
+                .update(|cfg| -> Result<(), ()> {
+                    cfg.enable_write_admission_control = write_admission;
+                    // These compatibility flags no longer classify reads.
+                    cfg.enable_fair_scheduling = true;
+                    cfg.enable_read_admission_control = true;
+                    Ok(())
+                })
+                .unwrap();
+            resource_manager.refresh_cached_config();
+            assert_eq!(resource_manager.reports_noisy_groups(), write_admission);
 
-        // A store that reports noisy groups and currently blames nobody must
-        // say so positively, so that a client can clear what it knows. That is
-        // a present-but-empty message, not an absent one.
-        assert!(resp.get_health_feedback().has_noisy_groups());
-        assert!(
-            resp.get_health_feedback()
-                .get_noisy_groups()
-                .get_names()
-                .is_empty()
-        );
+            a.last_feedback_time = None;
+            let mut resp = BatchCommandsResponse::default();
+            a.attach_if_needed(&mut resp);
+
+            // The manager owns name selection, but disabling its write gate
+            // must still send an explicit empty verdict to clear client state.
+            // Only an absent resource manager leaves the message unset.
+            assert!(resp.get_health_feedback().has_noisy_groups());
+            assert!(
+                resp.get_health_feedback()
+                    .get_noisy_groups()
+                    .get_names()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]

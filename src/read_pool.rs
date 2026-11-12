@@ -20,27 +20,26 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, CONTROL_TICK, ControlledFuture, LEEWAY_FACTOR, LEEWAY_FRACTION,
-    READ_POOL_CPU_VEC, ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority,
-    with_resource_limiter,
+    AdmissionDecision, CONTROL_TICK, LEEWAY_FACTOR, LEEWAY_FRACTION, READ_POOL_CPU_VEC,
+    ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
     deadline::Deadline,
     future::async_timeout,
-    resource_control::{TaskMetadata, group_label, priority_from_task_meta},
+    resource_control::{TaskMetadata, group_label},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
-    yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
+    yatp_pool::{
+        self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder,
+        fair_queue::{FairCancellation, FairQueue, FairQueueConfig},
+    },
 };
 use tracker::{TlsTrackedFuture, get_tls_tracker_token, set_tls_tracker_token};
 use yatp::{
-    metrics::MULTILEVEL_LEVEL_ELAPSED,
-    pool::Remote,
-    queue::{Extras, TaskCell as TaskCellTrait},
-    task::future::TaskCell,
+    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
 };
 
 use self::metrics::*;
@@ -70,7 +69,7 @@ pub enum ReadPool {
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
-        resource_ctl: Option<Arc<ResourceController>>,
+        fair_queue: Option<Arc<FairQueue>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
@@ -94,7 +93,7 @@ impl ReadPool {
                 running_threads,
                 max_tasks,
                 pool_size,
-                resource_ctl,
+                fair_queue,
                 resource_manager,
                 time_slice_inspector,
             } => ReadPoolHandle::Yatp {
@@ -103,7 +102,7 @@ impl ReadPool {
                 running_threads: running_threads.clone(),
                 max_tasks: *max_tasks,
                 pool_size: *pool_size,
-                resource_ctl: resource_ctl.clone(),
+                fair_queue: fair_queue.clone(),
                 resource_manager: resource_manager.clone(),
                 time_slice_inspector: time_slice_inspector.clone(),
             },
@@ -124,79 +123,91 @@ pub enum ReadPoolHandle {
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
-        resource_ctl: Option<Arc<ResourceController>>,
+        fair_queue: Option<Arc<FairQueue>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
 }
 
-/// Runs admission control then, if the task is allowed through, enqueues it.
-/// Admission is checked before the capacity/eviction check so that a rejected
-/// or timed-out delayed task never causes an already-queued task to be dropped.
-async fn admission_and_enqueue(
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-    resource_limiter: Option<Arc<ResourceLimiter>>,
-    task_priority: TaskPriority,
-    gauge: IntGauge,
-    max_tasks: usize,
-    remote: Remote<TaskCell>,
-    mut task_cell: TaskCell,
-    running_tasks: Vec<IntGauge>,
-    resource_ctl: Option<Arc<ResourceController>>,
-    estimated_priority: u64,
-) -> Result<(), ReadPoolError> {
-    // Admission control runs before any eviction so that a rejected or
-    // timed-out delayed task never causes an already-queued task to be dropped.
-    let delay = match (resource_manager.as_deref(), resource_limiter.as_deref()) {
-        (Some(rm), Some(limiter)) => match rm.admission_decision(true, limiter) {
-            AdmissionDecision::Reject => return Err(ReadPoolError::Rejected),
-            AdmissionDecision::Delay(d) => {
-                if task_priority == TaskPriority::High {
-                    warn!("admission delay on high-priority read task";
-                          "group" => limiter.name(),
-                          "delay" => ?d);
-                }
-                Some(d)
-            }
-            AdmissionDecision::Allow => None,
-        },
-        _ => None,
-    };
-    if let Some(d) = delay {
-        let mut _guard = resource_manager.as_ref().map(|rm| rm.delay_slot_guard());
-        futures_timer::Delay::new(d).await;
-        if let Some(guard) = _guard.as_mut() {
-            guard.release();
-        }
+/// Keeps metrics tied to the entire live task, including queued and IO-waiting
+/// work. Dropping a rejected, evicted, or canceled task releases the count too.
+struct RunningTaskGuard(IntGauge);
+
+impl RunningTaskGuard {
+    fn new(gauge: IntGauge) -> Self {
+        gauge.inc();
+        Self(gauge)
     }
-    // After admission (and any sleep), check pool capacity and evict if needed.
-    if gauge.get() as usize >= max_tasks {
-        // Only computed when the request is actually being rejected.
-        let evicted = if resource_ctl.is_some() {
-            remote.try_evict_lowest(estimated_priority)
-        } else {
-            None
+}
+
+impl Drop for RunningTaskGuard {
+    fn drop(&mut self) {
+        self.0.dec();
+    }
+}
+
+#[derive(Default)]
+struct CancellationState {
+    cancelled: bool,
+    handle: Option<FairCancellation>,
+}
+
+type CancellationSlot = Arc<Mutex<CancellationState>>;
+
+/// Cancels an RC read task when its caller stops waiting for the response.
+/// Non-RC pools retain their existing detached-task behavior.
+pub struct ReadPoolCancellationGuard(Option<CancellationSlot>);
+
+impl ReadPoolCancellationGuard {
+    pub(crate) fn disarm(&mut self) {
+        self.0.take();
+    }
+}
+
+impl Drop for ReadPoolCancellationGuard {
+    fn drop(&mut self) {
+        let Some(slot) = self.0.as_ref() else {
+            return;
         };
-        match evicted {
-            Some(mut evicted) => {
-                let evicted_prio = priority_from_task_meta(evicted.mut_extras().metadata());
-                running_tasks[evicted_prio as usize].dec();
-                UNIFIED_READ_POOL_EVICTED_TASKS.inc();
-                drop(evicted);
-            }
-            None => {
-                let meta = TaskMetadata::from(task_cell.mut_extras().metadata());
-                let name = std::str::from_utf8(meta.group_name()).unwrap_or_default();
-                UNIFIED_READ_POOL_FULL_REJECTED
-                    .with_label_values(&[group_label(name)])
-                    .inc();
-                return Err(ReadPoolError::UnifiedReadPoolFull);
-            }
+        // Cancellation can remove and drop a queued task. Do not call it while
+        // holding the slot lock.
+        let cancellation = {
+            let mut state = slot.lock().unwrap();
+            state.cancelled = true;
+            state.handle.take()
+        };
+        if let Some(cancellation) = cancellation {
+            cancellation.cancel();
         }
     }
-    gauge.inc();
-    remote.spawn(task_cell);
+}
+
+/// Preserve background admission before taking live-task capacity. Foreground
+/// historical admission is bypassed by ResourceGroupManager on the read path.
+async fn admit_read_task(
+    resource_manager: Option<&Arc<ResourceGroupManager>>,
+    resource_limiter: Option<&ResourceLimiter>,
+) -> Result<(), ReadPoolError> {
+    if let (Some(manager), Some(limiter)) = (resource_manager, resource_limiter) {
+        match manager.admission_decision(true, limiter) {
+            AdmissionDecision::Reject => return Err(ReadPoolError::Rejected),
+            AdmissionDecision::Delay(delay) => {
+                let _guard = manager.delay_slot_guard();
+                futures_timer::Delay::new(delay).await;
+            }
+            AdmissionDecision::Allow => {}
+        }
+    }
     Ok(())
+}
+
+fn full_rejection(metadata: &[u8]) -> ReadPoolError {
+    let metadata = TaskMetadata::from(metadata);
+    let name = std::str::from_utf8(metadata.group_name()).unwrap_or_default();
+    UNIFIED_READ_POOL_FULL_REJECTED
+        .with_label_values(&[group_label(name)])
+        .inc();
+    ReadPoolError::UnifiedReadPoolFull
 }
 
 impl ReadPoolHandle {
@@ -218,6 +229,59 @@ impl ReadPoolHandle {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> BoxFuture<'static, Result<(), ReadPoolError>>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn_impl(f, priority, task_id, metadata, resource_limiter, None)
+    }
+
+    /// Submits a task and returns a separate guard for the response lifetime.
+    /// Keep the guard until the entire response future or stream is dropped;
+    /// completing the admission future alone does not complete the task.
+    pub fn spawn_with_cancellation<F>(
+        &self,
+        f: F,
+        priority: CommandPri,
+        task_id: u64,
+        metadata: TaskMetadata<'_>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> (
+        BoxFuture<'static, Result<(), ReadPoolError>>,
+        ReadPoolCancellationGuard,
+    )
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let cancellation = match self {
+            Self::Yatp {
+                fair_queue: Some(_),
+                ..
+            } => Some(Arc::new(Mutex::new(CancellationState::default()))),
+            _ => None,
+        };
+        let guard = ReadPoolCancellationGuard(cancellation.clone());
+        (
+            self.spawn_impl(
+                f,
+                priority,
+                task_id,
+                metadata,
+                resource_limiter,
+                cancellation,
+            ),
+            guard,
+        )
+    }
+
+    fn spawn_impl<F>(
+        &self,
+        f: F,
+        priority: CommandPri,
+        task_id: u64,
+        metadata: TaskMetadata<'_>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+        cancellation: Option<CancellationSlot>,
     ) -> BoxFuture<'static, Result<(), ReadPoolError>>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -263,16 +327,14 @@ impl ReadPoolHandle {
                 remote,
                 running_tasks,
                 max_tasks,
-                resource_ctl,
+                fair_queue,
                 resource_manager,
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
-                let running_task_gauge = running_tasks[task_priority as usize].clone();
-
+                let gauge = running_tasks[task_priority as usize].clone();
                 let is_background = resource_limiter.as_ref().is_some_and(|l| l.is_background());
                 let fixed_level = if is_background {
-                    // Background tasks always run at low priority in the pool.
                     Some(2)
                 } else {
                     match priority {
@@ -281,54 +343,79 @@ impl ReadPoolHandle {
                         CommandPri::Low => Some(2),
                     }
                 };
-                let group_name = metadata.group_name().to_owned();
-                let estimated_priority = resource_ctl
-                    .as_ref()
-                    .map_or(u64::MAX, |ctl| ctl.peek_priority_of(&metadata, priority));
-                let mut extras = Extras::new_multilevel(task_id, fixed_level);
-                extras.set_metadata(metadata.to_vec());
-                // Clone gauge: one for inc (after admission), one inside the
-                // future for dec (when the task completes).
-                let gauge_for_spawn = running_task_gauge.clone();
-                let task_cell = if let Some(resource_ctl) = resource_ctl {
-                    let inner = ControlledFuture::new(
-                        f.map(move |_| {
-                            running_task_gauge.dec();
-                        }),
-                        resource_ctl.clone(),
-                        group_name.clone(),
-                    );
-                    TaskCell::new(
-                        TlsTrackedFuture::new(with_resource_limiter(
-                            inner,
-                            resource_limiter.clone(),
-                            true, // skip compaction pressure for foreground jobs
-                            true, // measure-only: build debt, never sleep inside pool
-                            resource_manager.clone(),
-                            0, // read path: no write bytes
-                        )),
-                        extras,
-                    )
-                } else {
-                    TaskCell::new(
-                        TlsTrackedFuture::new(f.map(move |_| {
-                            running_task_gauge.dec();
-                        })),
-                        extras,
-                    )
-                };
-                admission_and_enqueue(
+                let metadata = metadata.to_vec();
+                let remote = remote.clone();
+                let max_tasks = *max_tasks;
+                let fair_queue = fair_queue.clone();
+                let resource_manager = resource_manager.clone();
+                // Capture the request's tracker before returning the admission
+                // future: that future may be polled on a different thread.
+                let f = TlsTrackedFuture::new(with_resource_limiter(
+                    f,
+                    resource_limiter.clone(),
+                    true,
+                    true, // retain usage/debt statistics without in-pool sleep
                     resource_manager.clone(),
-                    resource_limiter,
-                    task_priority,
-                    gauge_for_spawn,
-                    *max_tasks,
-                    remote.clone(),
-                    task_cell,
-                    running_tasks.to_vec(),
-                    resource_ctl.clone(),
-                    estimated_priority,
-                )
+                    0,
+                ));
+                async move {
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(|slot| slot.lock().unwrap().cancelled)
+                    {
+                        return Err(ReadPoolError::TaskCanceled);
+                    }
+                    admit_read_task(resource_manager.as_ref(), resource_limiter.as_deref()).await?;
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(|slot| slot.lock().unwrap().cancelled)
+                    {
+                        return Err(ReadPoolError::TaskCanceled);
+                    }
+                    let mut extras = Extras::new_multilevel(task_id, fixed_level);
+                    let task_cell = if let Some(queue) = fair_queue {
+                        // Acquisition includes global and RG limits, and may evict only
+                        // queued tasks with a strictly lower business priority.
+                        let permit = queue
+                            .try_acquire(&TaskMetadata::from(metadata.as_slice()))
+                            .ok_or_else(|| full_rejection(&metadata))?;
+                        extras.set_metadata(permit.metadata(metadata));
+                        if let Some(slot) = cancellation {
+                            let handle = permit.cancellation();
+                            let mut state = slot.lock().unwrap();
+                            if state.cancelled {
+                                drop(state);
+                                handle.cancel();
+                                return Err(ReadPoolError::TaskCanceled);
+                            }
+                            state.handle = Some(handle);
+                        }
+                        let guard = RunningTaskGuard::new(gauge);
+                        let future = async move {
+                            let _guard = guard;
+                            f.await;
+                        };
+                        // The permit owns the only new read-pool scheduling charge;
+                        // ControlledFuture must not charge the legacy controller too.
+                        TaskCell::new(permit.wrap(future), extras)
+                    } else {
+                        // Preserve the non-RC pool's per-priority capacity semantics.
+                        if gauge.get() as usize >= max_tasks {
+                            return Err(full_rejection(&metadata));
+                        }
+                        extras.set_metadata(metadata);
+                        let guard = RunningTaskGuard::new(gauge);
+                        TaskCell::new(
+                            async move {
+                                let _guard = guard;
+                                f.await;
+                            },
+                            extras,
+                        )
+                    };
+                    remote.spawn(task_cell);
+                    Ok(())
+                }
                 .boxed()
             }
         }
@@ -355,7 +442,7 @@ impl ReadPoolHandle {
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<T>();
-        let spawn_fut = self.spawn(
+        let (spawn_fut, cancel_guard) = self.spawn_with_cancellation(
             f.map(move |res| {
                 let _ = tx.send(res);
             }),
@@ -365,6 +452,7 @@ impl ReadPoolHandle {
             resource_limiter,
         );
         async move {
+            let mut guard = cancel_guard;
             match admission_deadline {
                 Some(deadline) => {
                     match async_timeout(spawn_fut, deadline.remaining_duration()).await {
@@ -374,7 +462,9 @@ impl ReadPoolHandle {
                 }
                 None => spawn_fut.await?,
             }
-            rx.map_err(ReadPoolError::from).await
+            let result = rx.map_err(ReadPoolError::from).await;
+            guard.disarm();
+            result
         }
     }
 
@@ -410,12 +500,21 @@ impl ReadPoolHandle {
                 running_threads,
                 max_tasks,
                 pool_size,
+                fair_queue,
                 ..
             } => {
+                if let Some(queue) = fair_queue {
+                    // Custom YATP queues may be polled by surplus workers.
+                    // Bound dispatches in the shared queue as well, including
+                    // for handles cloned before this online update.
+                    queue.set_parallelism(max_thread_count);
+                }
                 remote.scale_workers(max_thread_count);
-                *max_tasks = max_tasks
-                    .saturating_div(*pool_size)
-                    .saturating_mul(max_thread_count);
+                if fair_queue.is_none() {
+                    *max_tasks = max_tasks
+                        .saturating_div(*pool_size)
+                        .saturating_mul(max_thread_count);
+                }
                 running_threads.set(max_thread_count as i64);
                 *pool_size = max_thread_count;
             }
@@ -430,9 +529,13 @@ impl ReadPoolHandle {
             ReadPoolHandle::Yatp {
                 max_tasks,
                 pool_size,
+                fair_queue,
                 ..
             } => {
                 *max_tasks = tasks_per_thread.saturating_mul(*pool_size);
+                if let Some(queue) = fair_queue {
+                    queue.set_max_tasks(*max_tasks);
+                }
             }
         }
     }
@@ -468,19 +571,15 @@ impl ReadPoolHandle {
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
     }
 
-    /// Whether an overload has been pinned on some group and the read pool is
-    /// protecting the others from it. Only then does the busy threshold yield:
-    /// a saturated queue is full of the noisy group's requests, so the
-    /// estimated wait would turn every victim away to a follower while
-    /// priority or admission control is already clearing its path here.
-    fn overload_is_attributed(&self) -> bool {
-        match self {
-            ReadPoolHandle::Yatp {
-                resource_manager: Some(rm),
+    /// Whether this pool schedules through the resource-group fair queue.
+    pub(crate) fn uses_group_fair_queue(&self) -> bool {
+        matches!(
+            self,
+            Self::Yatp {
+                fair_queue: Some(_),
                 ..
-            } => rm.protects_reads() && rm.has_noisy_groups(),
-            _ => false,
-        }
+            }
+        )
     }
 
     /// Bytes, not `&str`: most requests never need the name, so skip UTF-8.
@@ -492,8 +591,10 @@ impl ReadPoolHandle {
         if busy_threshold.is_zero() {
             return Ok(());
         }
-        // This wait is the whole pool's, so attribution is the better answer.
-        if self.overload_is_attributed() {
+        // Whole-pool FIFO wait cannot estimate a request's wait in a weighted
+        // group queue with MLFQ. Keep the capacity/CPU gates, but do not redirect
+        // one group's reads based on another group's backlog.
+        if self.uses_group_fair_queue() {
             let group = std::str::from_utf8(resource_group).unwrap_or_default();
             UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED
                 .with_label_values(&[group_label(group)])
@@ -633,7 +734,6 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-    resource_ctl: Option<Arc<ResourceController>>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     cleanup_method: CleanupMethod,
     enable_task_wait_metrics: bool,
@@ -643,7 +743,6 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         config,
         reporter,
         engine,
-        resource_ctl,
         resource_manager,
         cleanup_method,
         unified_read_pool_name,
@@ -655,7 +754,6 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-    resource_ctl: Option<Arc<ResourceController>>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     cleanup_method: CleanupMethod,
     unified_read_pool_name: String,
@@ -687,8 +785,33 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         })
         .enable_task_wait_metrics(enable_task_wait_metrics);
 
-    let pool = if let Some(ref r) = resource_ctl {
-        builder.build_priority_pool(r.clone())
+    let max_tasks = config
+        .max_tasks_per_worker
+        .saturating_mul(config.max_thread_count);
+    let fair_queue = resource_manager.as_ref().map(|manager| {
+        if config.cpu_threshold != 0.0 {
+            warn!("readpool.unified.cpu-threshold is ignored with resource control; use read-cpu-ratio");
+        }
+        let queue = FairQueue::new(
+            manager.clone(),
+            FairQueueConfig {
+                max_tasks,
+                max_tasks_per_group: config.max_tasks_per_resource_group,
+                cpu_cores: SysQuota::cpu_cores_quota(),
+                cpu_ratio: config.read_cpu_ratio,
+                slice_precharge: config.slice_precharge.0,
+                max_time_slice: config.max_time_slice.0,
+            },
+        );
+        // YATP physically starts extra workers to support online growth. Its
+        // custom queue path can pop before parking those surplus workers.
+        // Install the bound before any worker starts, while retaining the
+        // reserve threads needed by scale_pool_size.
+        queue.set_parallelism(config.max_thread_count);
+        queue
+    });
+    let pool = if let Some(queue) = fair_queue.as_ref() {
+        builder.build_fair_pool(queue.clone())
     } else {
         builder.build_multi_level_pool()
     };
@@ -705,11 +828,9 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
             running_threads.set(config.max_thread_count as _);
             running_threads
         },
-        max_tasks: config
-            .max_tasks_per_worker
-            .saturating_mul(config.max_thread_count),
+        max_tasks,
         pool_size: config.max_thread_count,
-        resource_ctl,
+        fair_queue,
         resource_manager,
         time_slice_inspector,
     }
@@ -865,7 +986,20 @@ impl Runnable for ReadPoolConfigRunner {
         match task {
             Task::PoolSize(s) => {
                 if s != self.core_thread_count {
+                    let fair_tasks_per_worker = match &self.handle {
+                        ReadPoolHandle::Yatp {
+                            max_tasks,
+                            fair_queue: Some(_),
+                            ..
+                        } => Some(max_tasks.saturating_div(self.core_thread_count)),
+                        _ => None,
+                    };
                     self.handle.scale_pool_size(s);
+                    // Explicit configuration changes update shared capacity;
+                    // transient worker scaling does not shrink the RC limit.
+                    if let Some(tasks_per_worker) = fair_tasks_per_worker {
+                        self.handle.set_max_tasks_per_worker(tasks_per_worker);
+                    }
                     self.core_thread_count = s;
                     self.cur_thread_count = s;
                     self.notify_pool_size_change(s);
@@ -879,6 +1013,17 @@ impl Runnable for ReadPoolConfigRunner {
             }
             Task::CpuThreshold(s) => {
                 self.cpu_threshold = s;
+                if matches!(
+                    &self.handle,
+                    ReadPoolHandle::Yatp {
+                        fair_queue: Some(_),
+                        ..
+                    }
+                ) {
+                    warn!(
+                        "readpool.unified.cpu-threshold is ignored with resource control; use read-cpu-ratio"
+                    );
+                }
             }
         }
     }
@@ -925,32 +1070,38 @@ impl ReadPoolConfigRunner {
 
     // Adjust pool size using based on thread utilization or cpu utilization.
     fn adjust_pool_size(&mut self) {
-        let resource_manager = match &self.handle {
-            // The runner only exists for the unified (Yatp) pool; see
-            // running_tasks(). `resource_manager` is None only when
-            // resource-control.enabled is false, which is startup-only.
+        // The shared CPU gate owns the RC read budget. Keep enough configured
+        // workers to use that budget instead of interpreting gate-induced idle
+        // time as a reason to repeatedly shrink the pool.
+        let fair_cpu_budget = match &self.handle {
             ReadPoolHandle::Yatp {
-                resource_manager, ..
-            } => resource_manager.clone(),
-            _ => unreachable!(),
+                fair_queue: Some(queue),
+                ..
+            } => Some(queue.cpu_budget_cores()),
+            _ => None,
         };
-
-        // Pool sizing is gated entirely on auto_adjust: with it off the pool
-        // stays at its configured size, exactly as before this change. Note
-        // this also makes fair scheduling inert, since its release signal is
-        // the pool recovering to core_thread_count — see
-        // `Config::enable_fair_scheduling`.
-        if !self.auto_adjust {
-            self.reset_thread_count();
-            // Release anything deprioritized while auto-adjustment was on, so
-            // a stale flag can't outlive the pool movement that set it.
-            if let Some(rm) = resource_manager.as_ref() {
-                rm.reset_group_priorities();
+        let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
+        let target_cpu_cores = fair_cpu_budget.unwrap_or_else(|| {
+            if self.cpu_threshold > 0.0 {
+                self.cpu_threshold * SysQuota::cpu_cores_quota()
+            } else {
+                SysQuota::cpu_cores_quota()
             }
+        });
+        // Keep observability current even when worker autoscaling is disabled.
+        // In RC mode the target reflects the queue's fixed CPU gate budget;
+        // this periodic measurement does not adjust that budget.
+        READ_POOL_CPU_VEC
+            .with_label_values(&["current"])
+            .set(read_pool_cpu * 100.0);
+        READ_POOL_CPU_VEC
+            .with_label_values(&["target"])
+            .set(target_cpu_cores * 100.0);
+        if !self.auto_adjust || fair_cpu_budget.is_some() {
+            self.reset_thread_count();
             return;
         }
 
-        let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
         let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
         let process_cpu = match self.process_stats.cpu_usage() {
@@ -961,38 +1112,8 @@ impl ReadPoolConfigRunner {
             }
         };
 
-        let mut target_cpu_cores = if self.cpu_threshold > 0.0 {
-            self.cpu_threshold * SysQuota::cpu_cores_quota()
-        } else {
-            SysQuota::cpu_cores_quota()
-        };
-
-        // Fold the ResourceGroupManager's foreground-pressure-driven target
-        // into the local ceiling — whichever is tighter wins. It returns no
-        // ceiling when fair scheduling is off.
-        if let Some(rm) = resource_manager.as_ref() {
-            let rm_target_cpu =
-                rm.compute_read_pool_target_cpu(read_pool_cpu, self.interval.as_secs_f64());
-            target_cpu_cores = target_cpu_cores.min(rm_target_cpu);
-        }
-        READ_POOL_CPU_VEC
-            .with_label_values(&["target"])
-            .set(target_cpu_cores * 100.0);
-
-        // Scaling out is otherwise a purely local decision (process CPU,
-        // thread usage, task queue depth, or read_pool_cpu vs
-        // target_cpu_cores). Additionally defer to the ResourceGroupManager's
-        // idle signal so the pool doesn't grow while it's still trying to
-        // protect foreground latency; it always allows scale-out when fair
-        // scheduling is off.
-        let scale_out_allowed = match resource_manager.as_ref() {
-            Some(rm) => rm.read_pool_scale_up_allowed(),
-            None => true,
-        };
-
         // Thread-utilization ladder (process CPU, thread usage, queue depth).
         let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
-            && scale_out_allowed
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
@@ -1004,8 +1125,7 @@ impl ReadPoolConfigRunner {
 
         let busy_cpu_scale_in = read_pool_cpu > (1.0 + LEEWAY_FRACTION) * target_cpu_cores;
         let busy_cpu_scale_out = read_pool_cpu < LEEWAY_FACTOR * target_cpu_cores
-            && self.cur_thread_count < self.core_thread_count
-            && scale_out_allowed;
+            && self.cur_thread_count < self.core_thread_count;
 
         let new_thread_count = if busy_cpu_scale_in {
             // CPU threshold takes precedence over busy thread scaling conditions
@@ -1028,15 +1148,6 @@ impl ReadPoolConfigRunner {
         };
 
         self.set_thread_count(new_thread_count);
-
-        // Only CPU pressure justifies penalizing a tenant, not an idle pool.
-        if let Some(rm) = resource_manager.as_ref() {
-            if busy_cpu_scale_in {
-                rm.deprioritize_over_quota_groups();
-            } else if self.cur_thread_count == self.core_thread_count {
-                rm.reset_group_priorities();
-            }
-        }
     }
 
     /// Resizes the pool, no-op if it is already at `new_thread_count`.
@@ -1156,6 +1267,8 @@ pub enum ReadPoolError {
     #[error("Request rejected by admission control")]
     Rejected,
 
+    #[error("Read pool task was canceled before submission")]
+    TaskCanceled,
     #[error("Deadline exceeded before the task was admitted")]
     DeadlineExceeded,
 
@@ -1178,11 +1291,6 @@ mod metrics {
             "tikv_unified_read_pool_thread_count",
             "The number of running threads in the unified read pool",
             &["name"]
-        )
-        .unwrap();
-        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter = register_int_counter!(
-            "tikv_unified_read_pool_evicted_tasks",
-            "Number of tasks evicted from the unified read pool by higher-priority tasks"
         )
         .unwrap();
         // Splits the two ServerIsBusy sources: wait gate and capacity gate.
@@ -1209,7 +1317,7 @@ mod metrics {
             .unwrap();
         pub static ref UNIFIED_READ_POOL_ESTIMATED_WAIT_US: IntGauge = register_int_gauge!(
             "tikv_unified_read_pool_estimated_wait_us",
-            "Estimated queueing wait for a new unified read pool task, in microseconds"
+            "Whole-pool FIFO wait estimate in microseconds; a backlog indicator rather than a per-request wait prediction for the fair queue"
         )
         .unwrap();
         pub static ref UNIFIED_READ_POOL_EWMA_TIME_SLICE_US: IntGauge = register_int_gauge!(
@@ -1340,7 +1448,6 @@ mod tests {
             DummyReporter,
             engine,
             None,
-            None,
             CleanupMethod::InPlace,
             name.to_owned(),
             false,
@@ -1419,7 +1526,6 @@ mod tests {
             DummyReporter,
             engine,
             None,
-            None,
             CleanupMethod::InPlace,
             false,
         );
@@ -1478,7 +1584,6 @@ mod tests {
             &config,
             DummyReporter,
             engine,
-            None,
             None,
             CleanupMethod::InPlace,
             false,
@@ -1588,6 +1693,7 @@ mod tests {
             max_tasks_per_worker: 2,
             auto_adjust_pool_size: true,
             cpu_threshold: 0.7,
+            ..Default::default()
         };
         // Just verify config can be created
         assert_eq!(valid_config.cpu_threshold, 0.7);
@@ -1620,7 +1726,6 @@ mod tests {
             &config,
             DummyReporter,
             engine,
-            None,
             None,
             CleanupMethod::InPlace,
             false,
@@ -1697,7 +1802,6 @@ mod tests {
             &UnifiedReadPoolConfig::default(),
             DummyReporter,
             engine,
-            None,
             Some(resource_manager),
             CleanupMethod::InPlace,
             false,
@@ -1745,167 +1849,6 @@ mod tests {
         assert_eq!(res.unwrap(), 42);
     }
 
-    #[test]
-    fn test_read_pool_pressure_scale_down_with_resource_manager() {
-        use tikv_util::worker::Worker;
-
-        let config = UnifiedReadPoolConfig {
-            min_thread_count: 1,
-            max_thread_count: 8,
-            max_tasks_per_worker: 4,
-            // cpu_threshold left at its 0.0 default on purpose: covers the
-            // default-config path.
-            auto_adjust_pool_size: true,
-            ..Default::default()
-        };
-        // Two-phase scheduling must be enabled for adjust_pool_size to fold
-        // the ResourceGroupManager's target CPU into target_cpu_cores at all.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(
-            &config,
-            DummyReporter,
-            engine,
-            None,
-            Some(resource_manager.clone()),
-            CleanupMethod::InPlace,
-            false,
-        );
-
-        let handle = pool.handle();
-        let worker = Worker::new("test-worker");
-        let mut runner = ReadPoolConfigRunner {
-            interval: Duration::from_secs(10),
-            sender: std::sync::mpsc::sync_channel(10).0,
-            handle: handle.clone(),
-            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
-            process_stats: ProcessStat::cur_proc_stat().unwrap(),
-            min_thread_count: config.min_thread_count,
-            core_thread_count: 8,
-            cur_thread_count: 8,
-            max_thread_count: config.max_thread_count,
-            auto_adjust: true,
-            cpu_threshold: config.cpu_threshold,
-        };
-
-        // Drive online_adjust_resource_quota so read_pool_cpu_pressure() > 0,
-        // matching how the real GroupQuotaAdjustWorker tick would set it.
-        resource_manager.set_bg_cpu_at_floor(true);
-        resource_manager.online_adjust_resource_quota(90.0);
-        assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
-
-        runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
-
-        let before_first_tick = runner.cur_thread_count;
-        runner.adjust_pool_size();
-
-        assert!(
-            runner.cur_thread_count < before_first_tick && runner.cur_thread_count > 1,
-            "a single tick should reduce the pool gradually, not collapse it straight to the \
-             minimum; before: {}, after: {}",
-            before_first_tick,
-            runner.cur_thread_count
-        );
-
-        // Repeated ticks settle at floor(0.85 * 4.0) = 3, the ceiling's floor.
-        for _ in 0..20 {
-            runner.adjust_pool_size();
-        }
-        assert_eq!(
-            runner.cur_thread_count, 3,
-            "sustained pressure should converge to and stabilize at the target ceiling's floor, got {}",
-            runner.cur_thread_count
-        );
-
-        worker.stop();
-    }
-
-    #[test]
-    fn test_read_pool_scale_out_blocked_until_resource_manager_allows_it() {
-        use tikv_util::worker::Worker;
-
-        let config = UnifiedReadPoolConfig {
-            min_thread_count: 1,
-            max_thread_count: 8,
-            max_tasks_per_worker: 4,
-            cpu_threshold: 0.0,
-            auto_adjust_pool_size: true,
-            ..Default::default()
-        };
-        // Two-phase scheduling must be enabled for adjust_pool_size to defer
-        // to the resource manager's read_pool_scale_up_allowed() signal.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(
-            &config,
-            DummyReporter,
-            engine,
-            None,
-            Some(resource_manager.clone()),
-            CleanupMethod::InPlace,
-            false,
-        );
-
-        let handle = pool.handle();
-        let worker = Worker::new("test-worker");
-        let mut runner = ReadPoolConfigRunner {
-            interval: Duration::from_secs(10),
-            sender: std::sync::mpsc::sync_channel(10).0,
-            handle: handle.clone(),
-            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
-            process_stats: ProcessStat::cur_proc_stat().unwrap(),
-            // min_thread_count == cur_thread_count so busy_thread_scale_in
-            // (unrelated to the resource manager) can't confound the result.
-            min_thread_count: 2,
-            core_thread_count: 8,
-            cur_thread_count: 2,
-            max_thread_count: config.max_thread_count,
-            auto_adjust: true,
-            cpu_threshold: config.cpu_threshold,
-        };
-
-        // Comfortably idle read-pool CPU: with no ResourceGroupManager, this
-        // alone would trigger busy_cpu_scale_out. read_pool_scale_up_allowed()
-        // defaults to false, so scheduling must block the grow.
-        assert!(!resource_manager.read_pool_scale_up_allowed());
-        runner.cpu_time_tracker.set_test_cpu_utilization(0.01);
-
-        runner.adjust_pool_size();
-
-        assert_eq!(
-            runner.cur_thread_count, 2,
-            "scheduling should block scale-out until the resource manager allows it, got {}",
-            runner.cur_thread_count
-        );
-
-        // Once the resource manager reports the system is comfortably idle,
-        // scale-out proceeds normally.
-        resource_manager.online_adjust_resource_quota(0.0);
-        assert!(resource_manager.read_pool_scale_up_allowed());
-
-        runner.adjust_pool_size();
-
-        assert_eq!(
-            runner.cur_thread_count, 3,
-            "scale-out should proceed once the resource manager allows it, got {}",
-            runner.cur_thread_count
-        );
-
-        worker.stop();
-    }
-
-    // Runner with auto-adjust off. Every other read pool test enables it,
-    // which is why the fair-scheduling coupling went unnoticed.
     fn test_runner(
         auto_adjust: bool,
         resource_manager: Option<Arc<ResourceGroupManager>>,
@@ -1922,7 +1865,6 @@ mod tests {
             &config,
             DummyReporter,
             engine,
-            None,
             resource_manager,
             CleanupMethod::InPlace,
             false,
@@ -1943,40 +1885,6 @@ mod tests {
             cpu_threshold: config.cpu_threshold,
         };
         (runner, worker)
-    }
-
-    #[test]
-    fn test_phase1_group_released_when_auto_adjust_is_off() {
-        // Auto-adjust off makes fair scheduling inert, so a flag set while it
-        // was on must not outlive it: the pool no longer moves, and pool
-        // movement is what would otherwise release the group.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let ctl = resource_manager.derive_controller("read".into(), true);
-
-        let group = tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
-        resource_manager.record_ru_consumption(group, 1000);
-
-        let phase0 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        ctl.set_group_phase(group.as_bytes(), true);
-        let phase1 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        assert!(phase1 > phase0, "sanity: group should be in phase 1");
-
-        let (mut runner, worker) = test_runner(false, Some(resource_manager.clone()));
-        runner.adjust_pool_size();
-
-        let after = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        assert!(
-            after < phase1,
-            "auto-adjust off should release phase 1; phase1: {}, after: {}",
-            phase1,
-            after
-        );
-
-        worker.stop();
     }
 
     #[test]
@@ -2005,163 +1913,258 @@ mod tests {
     }
 
     #[test]
-    fn test_no_scaling_when_both_fair_scheduling_and_auto_adjust_are_off() {
-        // Control: with both off there is nothing to maintain, so the pool
-        // must stay put.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: false,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let (mut runner, worker) = test_runner(false, Some(resource_manager));
-
-        runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
-        let before = runner.cur_thread_count;
-
-        runner.adjust_pool_size();
-
-        assert_eq!(
-            runner.cur_thread_count, before,
-            "pool must not scale when both fair scheduling and auto-adjust are off"
-        );
-
-        worker.stop();
-    }
-
-    #[test]
-    fn test_auto_adjust_off_pins_thread_count_with_fair_scheduling_on() {
-        // The thread ladder is bounded (min == max == core_thread_count) rather
-        // than gated on auto_adjust, so an idle pool must not drift. Without
-        // that bound the idle thread usage here trips busy_thread_scale_in.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let (mut runner, worker) = test_runner(false, Some(resource_manager));
-        // A wider configured range than core: only the effective bound stops
-        // the ladder from using it.
-        runner.min_thread_count = 1;
-        runner.max_thread_count = 16;
-
-        // No foreground pressure, so there is no CPU ceiling and the thread
-        // ladder is the only thing that could move the pool.
-        let before = runner.cur_thread_count;
-        for _ in 0..5 {
-            runner.adjust_pool_size();
+    fn test_admission_future_preserves_request_tracker() {
+        for controlled in [false, true] {
+            let config = UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                ..Default::default()
+            };
+            let manager = controlled.then(|| Arc::new(ResourceGroupManager::default()));
+            let pool = build_yatp_read_pool(
+                &config,
+                DummyReporter,
+                TestEngineBuilder::new().build().unwrap(),
+                manager,
+                CleanupMethod::InPlace,
+                false,
+            );
+            let handle = pool.handle();
+            let token =
+                tracker::GLOBAL_TRACKERS.insert(tracker::Tracker::new(tracker::RequestInfo::new(
+                    &kvproto::kvrpcpb::Context::default(),
+                    tracker::RequestType::Unknown,
+                    0,
+                )));
+            tracker::set_tls_tracker_token(token);
+            let task = handle.spawn_handle(
+                async { tracker::get_tls_tracker_token() },
+                CommandPri::Normal,
+                1,
+                TaskMetadata::default(),
+                None,
+                None,
+            );
+            tracker::clear_tls_tracker_token();
+            let observed = match block_on(futures::future::select(
+                Box::pin(task),
+                Box::pin(futures_timer::Delay::new(Duration::from_secs(10))),
+            )) {
+                futures::future::Either::Left((result, _)) => result.unwrap(),
+                futures::future::Either::Right(((), _pending_task)) => {
+                    panic!(
+                        "tracker propagation task did not finish within 10s: controlled={controlled}"
+                    );
+                }
+            };
+            tracker::GLOBAL_TRACKERS.remove(token);
+            assert_eq!(observed, token);
+            drop(handle);
+            drop(pool);
         }
+    }
 
-        assert_eq!(
-            runner.cur_thread_count, before,
-            "auto-adjust off must pin the pool at core_thread_count, got {}",
-            runner.cur_thread_count
-        );
-
+    #[test]
+    fn test_fair_pool_keeps_configured_workers() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        let (mut runner, worker) = test_runner(true, Some(manager));
+        runner.cpu_threshold = 0.01;
+        runner.cpu_time_tracker.set_test_cpu_utilization(100.0);
+        // Neither a low legacy CPU threshold nor apparent idle time caused by
+        // the CPU gate should change this pool's configured parallelism.
+        for _ in 0..3 {
+            runner.adjust_pool_size();
+            assert_eq!(runner.cur_thread_count, runner.core_thread_count);
+        }
         worker.stop();
     }
 
     #[test]
-    fn test_phase1_group_released_when_fair_scheduling_is_disabled() {
-        // With auto-adjust off too the tick returns early, so the release has
-        // to happen on that path or the flag goes live again on re-enable.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
-            ..Default::default()
-        };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let ctl = resource_manager.derive_controller("read".into(), true);
-
-        let group = tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
-        resource_manager.record_ru_consumption(group, 1000);
-
-        let phase0 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        ctl.set_group_phase(group.as_bytes(), true);
-        let phase1 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        assert!(phase1 > phase0, "sanity: group should be in phase 1");
-
-        // Disable fair scheduling, as an online config update would.
-        resource_manager
-            .get_config()
-            .update(|c| -> Result<(), ()> {
-                c.enable_fair_scheduling = false;
-                Ok(())
-            })
-            .unwrap();
-
-        let (mut runner, worker) = test_runner(true, Some(resource_manager.clone()));
-        // Pin the thread ladder so it can't shrink the pool and send the tick
-        // down the deprioritize branch instead of the release one.
-        runner.min_thread_count = runner.core_thread_count;
-        runner.adjust_pool_size();
-
-        // Re-enable: a stale flag would come back deprioritized here.
-        resource_manager
-            .get_config()
-            .update(|c| -> Result<(), ()> {
-                c.enable_fair_scheduling = true;
-                Ok(())
-            })
-            .unwrap();
-
-        let after = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        assert!(
-            after < phase1,
-            "disabling fair scheduling should clear phase 1; phase1: {}, after: {}",
-            phase1,
-            after
-        );
-
-        worker.stop();
+    fn test_cancellation_guard_dropped_before_admission() {
+        for controlled in [false, true] {
+            let config = UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                ..Default::default()
+            };
+            let pool = build_yatp_read_pool(
+                &config,
+                DummyReporter,
+                TestEngineBuilder::new().build().unwrap(),
+                controlled.then(|| Arc::new(ResourceGroupManager::default())),
+                CleanupMethod::InPlace,
+                false,
+            );
+            let handle = pool.handle();
+            let (tx, rx) = oneshot::channel();
+            let (admission, guard) = handle.spawn_with_cancellation(
+                async move {
+                    let _ = tx.send(());
+                },
+                CommandPri::Normal,
+                1,
+                TaskMetadata::default(),
+                None,
+            );
+            drop(guard);
+            if controlled {
+                assert!(matches!(
+                    block_on(admission),
+                    Err(ReadPoolError::TaskCanceled)
+                ));
+                assert!(block_on(rx).is_err());
+                if let ReadPoolHandle::Yatp {
+                    fair_queue: Some(queue),
+                    ..
+                } = handle
+                {
+                    assert_eq!(queue.snapshot().live_tasks, 0);
+                    assert_eq!(queue.snapshot().queued, 0);
+                }
+            } else {
+                // The public guard must not alter non-RC detached-task behavior.
+                block_on(admission).unwrap();
+                block_on(rx).unwrap();
+            }
+        }
     }
 
     #[test]
-    fn test_phase1_group_released_when_pool_recovers() {
-        // A group deprioritized while the pool was scaled in must be released
-        // once the pool is back at core_thread_count.
-        let rm_config = resource_control::config::Config {
-            enable_fair_scheduling: true,
+    fn test_fair_pool_cancel_queued_task_releases_capacity() {
+        let config = UnifiedReadPoolConfig {
+            max_thread_count: 1,
+            max_tasks_per_worker: 2,
             ..Default::default()
         };
-        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
-        let ctl = resource_manager.derive_controller("read".into(), true);
-
-        // set_group_phase only touches already-registered groups; the default
-        // one always is. record_ru_consumption puts it in the RU trackers,
-        // which reset_group_priorities iterates.
-        let group = tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
-        resource_manager.record_ru_consumption(group, 1000);
-
-        let before_phase1 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        ctl.set_group_phase(group.as_bytes(), true);
-        let phase1_priority = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        // The phase bit sits well above the virtual-time tag, so it dominates
-        // any drift between reads.
-        assert!(
-            phase1_priority > before_phase1,
-            "sanity: entering phase 1 should raise the encoded priority; \
-             phase0: {}, phase1: {}",
-            before_phase1,
-            phase1_priority
+        let manager = Arc::new(ResourceGroupManager::default());
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            TestEngineBuilder::new().build().unwrap(),
+            Some(manager),
+            CleanupMethod::InPlace,
+            false,
         );
+        let handle = pool.handle();
+        let queue = match &handle {
+            ReadPoolHandle::Yatp {
+                fair_queue: Some(queue),
+                ..
+            } => queue.clone(),
+            _ => unreachable!(),
+        };
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        block_on(handle.spawn(
+            async move {
+                started_tx.send(()).unwrap();
+                // Bound even the failure path so a failed assertion cannot
+                // leave pool shutdown waiting on a blocked test worker.
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut result = Box::pin(handle.spawn_handle(
+            futures::future::pending::<()>(),
+            CommandPri::Normal,
+            2,
+            TaskMetadata::default(),
+            None,
+            None,
+        ));
+        let first_poll = block_on(futures::future::poll_fn(|cx| {
+            std::task::Poll::Ready(result.as_mut().poll(cx))
+        }));
+        assert!(first_poll.is_pending());
+        assert_eq!(queue.snapshot().live_tasks, 2);
+        assert_eq!(queue.snapshot().queued, 1);
+        drop(result);
+        // Caller cancellation removes queued work immediately, without waiting
+        // for another worker dispatch or for the global CPU gate to reopen.
+        assert_eq!(queue.snapshot().live_tasks, 1);
+        assert_eq!(queue.snapshot().queued, 0);
+        let running = match &handle {
+            ReadPoolHandle::Yatp { running_tasks, .. } => {
+                running_tasks.iter().map(|g| g.get()).sum::<i64>()
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(running, 1);
+        release_tx.send(()).unwrap();
+    }
 
-        let (mut runner, worker) = test_runner(true, Some(resource_manager.clone()));
-        // Pin the thread ladder so the pool stays at core_thread_count and the
-        // tick takes the release branch.
-        runner.min_thread_count = runner.core_thread_count;
-        assert_eq!(runner.cur_thread_count, runner.core_thread_count);
-
-        runner.adjust_pool_size();
-
-        let released_priority = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
-        assert!(
-            released_priority < phase1_priority,
-            "group should be released from phase 1 once the pool is back at \
-             core_thread_count; phase1: {}, after: {}",
-            phase1_priority,
-            released_priority
+    #[test]
+    fn test_fair_pool_capacity_update_reaches_existing_handles() {
+        let config = UnifiedReadPoolConfig {
+            max_thread_count: 1,
+            max_tasks_per_worker: 2,
+            ..Default::default()
+        };
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            TestEngineBuilder::new().build().unwrap(),
+            Some(Arc::new(ResourceGroupManager::default())),
+            CleanupMethod::InPlace,
+            false,
         );
-
-        worker.stop();
+        let existing_handle = pool.handle();
+        let mut config_handle = pool.handle();
+        config_handle.set_max_tasks_per_worker(1);
+        let (tx1, rx1) = oneshot::channel::<()>();
+        let (started1_tx, started1_rx) = std::sync::mpsc::channel();
+        block_on(existing_handle.spawn(
+            async move {
+                let _ = started1_tx.send(());
+                let _ = rx1.await;
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        started1_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            block_on(existing_handle.spawn(
+                async {},
+                CommandPri::Normal,
+                2,
+                TaskMetadata::default(),
+                None,
+            )),
+            Err(ReadPoolError::UnifiedReadPoolFull)
+        ));
+        config_handle.set_max_tasks_per_worker(2);
+        let (tx2, rx2) = oneshot::channel::<()>();
+        let (started2_tx, started2_rx) = std::sync::mpsc::channel();
+        block_on(existing_handle.spawn(
+            async move {
+                let _ = started2_tx.send(());
+                let _ = rx2.await;
+            },
+            CommandPri::Normal,
+            3,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        // Parallelism is still one: the first task's IO wait must release
+        // its dispatch slot so the second task can run. Both retain live
+        // capacity until their independent IO waiters complete.
+        started2_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let queue = match &existing_handle {
+            ReadPoolHandle::Yatp {
+                fair_queue: Some(queue),
+                ..
+            } => queue,
+            _ => unreachable!(),
+        };
+        assert_eq!(queue.snapshot().live_tasks, 2);
+        drop((tx1, tx2));
     }
 
     #[test]
@@ -2178,13 +2181,7 @@ mod tests {
 
         for control in [false, true] {
             let name = format!("test_yatp_task_poll_duration_metric_{}", control);
-            let (resource_ctl, resource_manager) = if control {
-                let rm = Arc::new(ResourceGroupManager::default());
-                let ctl = rm.derive_controller(name.clone(), true);
-                (Some(ctl), Some(rm))
-            } else {
-                (None, None)
-            };
+            let resource_manager = control.then(|| Arc::new(ResourceGroupManager::default()));
             let config = UnifiedReadPoolConfig {
                 min_thread_count: 1,
                 max_thread_count: 2,
@@ -2198,7 +2195,6 @@ mod tests {
                 &config,
                 DummyReporter,
                 engine,
-                resource_ctl,
                 resource_manager,
                 CleanupMethod::InPlace,
                 name.clone(),
@@ -2227,8 +2223,13 @@ mod tests {
             tx1.send(()).unwrap();
             tx2.send(()).unwrap();
 
-            thread::sleep(Duration::from_millis(300));
-            assert_eq!(count_metric(&name), 2);
+            // Worker startup and metric flushing are asynchronous. A fixed
+            // sleep flakes when the other pool tests saturate the host.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while count_metric(&name) < 2 && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(count_metric(&name), 2, "pool={name}");
             drop(pool);
         }
     }
@@ -2266,10 +2267,8 @@ mod tests {
         // - `override_priority` (in ResourceControlContext) determines the TaskPriority
         //   bucket (High/Medium/Low) used for running_tasks counters. Both groups use 0
         //   here, so all tasks are "medium".
-        // - Resource group priority (1 vs 16) is what peek_priority_of uses for the
-        //   eviction comparison. "high_group" (priority=16) produces a numerically
-        //   smaller value than "low_group" (priority=1), meaning it is scheduled first
-        //   and can evict low_group tasks.
+        // - Resource group priority (1 vs 16) controls the strict business-priority
+        //   comparison. Only the higher-priority group may evict queued work.
         let resource_manager = Arc::new(ResourceGroupManager::default());
         let low_group = new_resource_group_ru("low_group".into(), 5000, 1);
         resource_manager.add_resource_group(low_group);
@@ -2277,7 +2276,6 @@ mod tests {
         resource_manager.add_resource_group(high_group);
 
         let name = "test-yatp-eviction";
-        let resource_ctl = resource_manager.derive_controller(name.into(), true);
 
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
@@ -2291,7 +2289,6 @@ mod tests {
             &config,
             DummyReporter,
             engine,
-            Some(resource_ctl),
             Some(resource_manager),
             CleanupMethod::InPlace,
             name.to_owned(),
@@ -2402,7 +2399,13 @@ mod tests {
 
         // The eviction metric should have been incremented.
         assert!(
-            UNIFIED_READ_POOL_EVICTED_TASKS.get() >= 1,
+            match &handle {
+                ReadPoolHandle::Yatp {
+                    fair_queue: Some(queue),
+                    ..
+                } => queue.snapshot().evicted_tasks >= 1,
+                _ => false,
+            },
             "eviction counter should be incremented"
         );
 
@@ -2420,15 +2423,12 @@ mod tests {
             max_tasks_per_worker: 100,
             ..Default::default()
         };
-        let resource_manager = Arc::new(ResourceGroupManager::default());
-        resource_manager.add_resource_group(new_resource_group_ru("noisy".into(), 5000, 1));
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool_with_name(
             &config,
             DummyReporter,
             engine,
             None,
-            Some(resource_manager.clone()),
             CleanupMethod::InPlace,
             "test-busy-threshold".to_owned(),
             false,
@@ -2493,7 +2493,7 @@ mod tests {
     }
 
     #[test]
-    fn test_busy_threshold_yields_to_an_attributed_overload() {
+    fn test_busy_threshold_skips_group_fair_queue() {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 1,
@@ -2503,13 +2503,11 @@ mod tests {
         let resource_manager =
             Arc::new(ResourceGroupManager::new(ResourceControlConfig::default()));
         resource_manager.add_resource_group(new_resource_group_ru("rc".into(), 5000, 1));
-        let _ctl = resource_manager.derive_controller("read".into(), true);
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool_with_name(
             &config,
             DummyReporter,
             engine,
-            None,
             Some(resource_manager.clone()),
             CleanupMethod::InPlace,
             "test-busy-threshold-rc".to_owned(),
@@ -2536,90 +2534,25 @@ mod tests {
             "the wait is still measured, and still reported as a metric"
         );
 
-        // Nobody named yet, so the gate behaves as it always has.
-        assert!(!resource_manager.has_noisy_groups());
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect_err("with no attribution the advisory applies");
-
-        // A loaded node with background at its floor is what the detector acts on.
-        resource_manager.record_ru_consumption("rc", 10_000_000);
-        resource_manager.set_bg_cpu_at_floor(true);
-        // Two ticks: blame needs `MIN_ENGAGE_TICKS` of sustained overshoot.
-        resource_manager.online_adjust_resource_quota(90.0);
-        resource_manager.online_adjust_resource_quota(90.0);
-        assert!(
-            resource_manager.has_noisy_groups(),
-            "the overload is attributed"
-        );
-        assert!(!resource_manager.reports_noisy_groups());
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect_err("with reporting disabled the advisory still applies");
-
-        // Write admission reports noisy groups but leaves reads unprotected,
-        // so victims keep their replica fallback.
-        resource_manager
-            .get_config()
-            .update(|c| -> Result<(), ()> {
-                c.enable_write_admission_control = true;
-                Ok(())
-            })
-            .unwrap();
-        resource_manager.refresh_cached_config();
-        assert!(resource_manager.reports_noisy_groups());
-        assert!(!resource_manager.protects_reads());
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect_err("write-side control alone does not lift the advisory");
-
-        resource_manager
-            .get_config()
-            .update(|c| -> Result<(), ()> {
-                c.enable_write_admission_control = false;
-                c.enable_read_admission_control = true;
-                Ok(())
-            })
-            .unwrap();
-        resource_manager.refresh_cached_config();
-
+        // Group fair scheduling is active without a historical/noisy verdict.
         let skipped = UNIFIED_READ_POOL_BUSY_THRESHOLD_SKIPPED.with_label_values(&["rc"]);
         let before = skipped.get();
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect("attribution supersedes the whole-pool advisory");
+        assert!(!resource_manager.has_noisy_groups());
+        handle.check_busy_threshold(threshold, b"rc").unwrap();
         assert_eq!(skipped.get(), before + 1);
-
-        // Releasing the scheduler alone is not enough while the throttle holds.
-        resource_manager.reset_group_priorities();
-        assert!(resource_manager.has_noisy_groups(), "still throttled");
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect("and so the gate stays out of the way");
-
+        // Deprecated flags must not change scheduling or restore the invalid
+        // whole-pool estimate. The global/per-group hard caps still apply.
         resource_manager
             .get_config()
             .update(|c| -> Result<(), ()> {
-                c.enable_read_admission_control = false;
+                c.enable_read_admission_control = true;
+                c.enable_fair_scheduling = true;
                 Ok(())
             })
             .unwrap();
         resource_manager.refresh_cached_config();
-        assert!(resource_manager.has_noisy_groups(), "still throttled");
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect_err("disabling read-side control online restores the advisory");
-
-        // A quiet node ramps the limit back, then release finds nothing held.
-        for _ in 0..100 {
-            resource_manager.online_adjust_resource_quota(0.0);
-        }
-        resource_manager.reset_group_priorities();
-        assert!(!resource_manager.has_noisy_groups());
-        handle
-            .check_busy_threshold(threshold, b"rc")
-            .expect_err("with nobody named the advisory applies again");
-
+        handle.check_busy_threshold(threshold, b"rc").unwrap();
+        assert_eq!(skipped.get(), before + 2);
         running_tasks[0].sub(500);
     }
 
@@ -2639,7 +2572,6 @@ mod tests {
             &config,
             DummyReporter,
             engine,
-            None,
             None,
             CleanupMethod::InPlace,
             false,
@@ -2692,5 +2624,220 @@ mod tests {
         }
 
         assert_eq!(runner.cur_thread_count, core_thread_count);
+    }
+
+    #[test]
+    fn test_fair_pool_parallelism_update_reaches_existing_handles() {
+        let pool = build_yatp_read_pool_with_name(
+            &UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                max_tasks_per_worker: 4,
+                ..Default::default()
+            },
+            DummyReporter,
+            TestEngineBuilder::new().build().unwrap(),
+            Some(Arc::new(ResourceGroupManager::default())),
+            CleanupMethod::InPlace,
+            "test-fair-pool-parallelism".to_owned(),
+            false,
+        );
+        let handle = pool.handle();
+        let mut config_handle = pool.handle();
+        let queue = match &handle {
+            ReadPoolHandle::Yatp {
+                fair_queue: Some(queue),
+                ..
+            } => queue,
+            _ => unreachable!(),
+        };
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let mut releases = Vec::new();
+        for id in 0..3 {
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            releases.push(release_tx);
+            let started_tx = started_tx.clone();
+            block_on(handle.spawn(
+                async move {
+                    let _ = started_tx.send(id);
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                },
+                CommandPri::Normal,
+                id,
+                TaskMetadata::default(),
+                None,
+            ))
+            .unwrap();
+        }
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 0);
+        assert_eq!(queue.snapshot().active_dispatches, 1);
+        assert_eq!(queue.snapshot().queued, 2);
+
+        config_handle.scale_pool_size(2);
+        // YATP updates its core count without waking parked workers; a new
+        // submission triggers its normal wake path after online expansion.
+        block_on(handle.spawn(
+            async {},
+            CommandPri::Normal,
+            3,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+        assert_eq!(queue.snapshot().active_dispatches, 2);
+        config_handle.scale_pool_size(1);
+        // Existing dispatches can finish after a reduction. Releasing just
+        // one slot must not start the third task while the other slot is busy.
+        releases[0].send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while queue.snapshot().active_dispatches != 1 && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(queue.snapshot().active_dispatches, 1);
+        assert_eq!(queue.snapshot().queued, 2);
+
+        config_handle.scale_pool_size(2);
+        block_on(handle.spawn(
+            async {},
+            CommandPri::Normal,
+            4,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
+        assert_eq!(queue.snapshot().active_dispatches, 2);
+        releases[1].send(()).unwrap();
+        releases[2].send(()).unwrap();
+    }
+
+    #[test]
+    fn test_admission_timeout_does_not_evict_queued_task() {
+        use std::sync::mpsc::{self, TryRecvError};
+
+        let manager = Arc::new(ResourceGroupManager::new(ResourceControlConfig {
+            admission_max_delayed_count: 1,
+            ..Default::default()
+        }));
+        manager.add_resource_group(new_resource_group_ru("timeout-low".into(), 5000, 1));
+        manager.add_resource_group(new_resource_group_ru("timeout-high".into(), 5000, 16));
+        let pool = build_yatp_read_pool_with_name(
+            &UnifiedReadPoolConfig {
+                min_thread_count: 1,
+                max_thread_count: 1,
+                max_tasks_per_worker: 2,
+                ..Default::default()
+            },
+            DummyReporter,
+            TestEngineBuilder::new().build().unwrap(),
+            Some(manager),
+            CleanupMethod::InPlace,
+            "test-admission-timeout-no-eviction".to_owned(),
+            false,
+        );
+        let handle = pool.handle();
+        let (queue, running_tasks) = match &handle {
+            ReadPoolHandle::Yatp {
+                fair_queue: Some(queue),
+                running_tasks,
+                ..
+            } => (queue.clone(), running_tasks.clone()),
+            _ => unreachable!(),
+        };
+        let low_ctx = ResourceControlContext {
+            resource_group_name: "timeout-low".to_owned(),
+            ..Default::default()
+        };
+        let high_ctx = ResourceControlContext {
+            resource_group_name: "timeout-high".to_owned(),
+            ..Default::default()
+        };
+
+        // Hold the only worker synchronously, so the second task remains an
+        // eviction candidate until the admission-timeout checks have finished.
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        block_on(handle.spawn(
+            async move {
+                started_tx.send(()).unwrap();
+                // Bound teardown even if an assertion fails before release.
+                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (victim_tx, victim_rx) = mpsc::channel();
+        block_on(handle.spawn(
+            async move {
+                let _ = victim_tx.send(());
+            },
+            CommandPri::Normal,
+            2,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
+        let before = queue.snapshot();
+        assert_eq!(before.live_tasks, 2);
+        assert_eq!(before.queued, 1);
+        let gauges_before = running_tasks.each_ref().map(|gauge| gauge.get());
+
+        // A high-priority task could evict the queued low-priority task if
+        // capacity acquisition ran before this background egress admission.
+        let limiter = Arc::new(ResourceLimiter::new(
+            "timeout-high".to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+            true,
+        ));
+        limiter.set_egress_limit_for_test(1024.0);
+        limiter.consume_egress(64 * 1024);
+        assert!(limiter.admission_delay(true) > Duration::from_secs(30));
+        for task_id in 3..5 {
+            let (executed_tx, executed_rx) = mpsc::channel();
+            let request = handle.spawn_handle(
+                async move {
+                    let _ = executed_tx.send(());
+                },
+                CommandPri::High,
+                task_id,
+                TaskMetadata::from_ctx(&high_ctx),
+                Some(limiter.clone()),
+                Some(Deadline::from_now(Duration::from_millis(100))),
+            );
+            let result = match block_on(futures::future::select(
+                Box::pin(request),
+                Box::pin(futures_timer::Delay::new(Duration::from_secs(5))),
+            )) {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right(_) => {
+                    panic!("admission deadline did not finish within 5s")
+                }
+            };
+            // With just one delay slot, the second timeout also proves the
+            // first attempt released its slot instead of leaking a rejection.
+            assert!(matches!(result, Err(ReadPoolError::DeadlineExceeded)));
+            assert!(matches!(
+                executed_rx.try_recv(),
+                Err(TryRecvError::Disconnected)
+            ));
+            let after = queue.snapshot();
+            assert_eq!(after.live_tasks, before.live_tasks);
+            assert_eq!(after.queued, before.queued);
+            assert_eq!(after.evicted_tasks, before.evicted_tasks);
+            assert_eq!(
+                running_tasks.each_ref().map(|gauge| gauge.get()),
+                gauges_before
+            );
+            assert!(matches!(victim_rx.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        release_tx.send(()).unwrap();
+        victim_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }

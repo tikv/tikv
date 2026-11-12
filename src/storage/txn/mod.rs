@@ -21,6 +21,7 @@ use kvproto::kvrpcpb::LockInfo;
 use thiserror::Error;
 use txn_types::{Key, TimeStamp, Value};
 
+pub(crate) use self::store::scan_with_reschedule;
 pub use self::{
     actions::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,
