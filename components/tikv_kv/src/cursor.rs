@@ -23,9 +23,8 @@ pub struct Cursor<I: Iterator> {
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
 
-    // Use `Cell` to wrap these flags to provide interior mutability, so that `key()` and
-    // `value()` don't need to have `&mut self`.
-    cur_key_has_read: Cell<bool>,
+    // Use `Cell` to wrap the flag to provide interior mutability, so that
+    // `value()` doesn't need to have `&mut self`.
     cur_value_has_read: Cell<bool>,
 
     // Optional cache for repeated forward seek misses. When enabled for Mixed
@@ -59,7 +58,6 @@ impl<I: Iterator> Cursor<I> {
             min_key: None,
             max_key: None,
 
-            cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
 
             missing_range: missing_range && mode == ScanMode::Mixed && !prefix_seek,
@@ -78,7 +76,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(());
         }
 
-        let cursor_key = self.key(statistics);
+        let cursor_key = self.key();
         if cursor_key <= key.as_encoded().as_slice() {
             self.missing_range_cache = None;
             return Ok(());
@@ -103,7 +101,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if !self.valid()? || self.key(statistics) != upper.as_slice() {
+        if !self.valid()? || self.key() != upper.as_slice() {
             // This cache is tied to both the missing range and the iterator
             // position: [lower, upper) is known to be empty only while the
             // cursor still points at `upper`, the first key >= the original
@@ -120,18 +118,10 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    /// Mark key and value as unread. It will be invoked once cursor is moved.
+    /// Mark value as unread. It will be invoked once cursor is moved.
     #[inline]
     fn mark_unread(&self) {
-        self.cur_key_has_read.set(false);
         self.cur_value_has_read.set(false);
-    }
-
-    /// Mark key as read. Returns whether key was marked as read before this
-    /// call.
-    #[inline]
-    fn mark_key_read(&self) -> bool {
-        self.cur_key_has_read.replace(true)
     }
 
     /// Mark value as read. Returns whether value was marked as read before this
@@ -154,7 +144,7 @@ impl<I: Iterator> Cursor<I> {
 
         if self.scan_mode == ScanMode::Forward
             && self.valid()?
-            && self.key(statistics) >= key.as_encoded().as_slice()
+            && self.key() >= key.as_encoded().as_slice()
         {
             return Ok(true);
         }
@@ -189,7 +179,7 @@ impl<I: Iterator> Cursor<I> {
         if !self.valid()? {
             return self.seek(key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.as_encoded());
+        let ord = self.key().cmp(key.as_encoded());
         if ord == Ordering::Equal
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
@@ -204,12 +194,12 @@ impl<I: Iterator> Cursor<I> {
                 return Ok(true);
             }
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
+                self.prev(statistics) && self.key() > key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
             if self.valid()? {
-                if self.key(statistics) < key.as_encoded().as_slice() {
+                if self.key() < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
             } else if self.prefix_seek {
@@ -224,7 +214,7 @@ impl<I: Iterator> Cursor<I> {
         } else {
             // ord == Less
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
+                self.next(statistics) && self.key() < key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
@@ -252,13 +242,12 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.as_encoded() {
+            if self.near_seek(key, statistics)? && self.key() == &**key.as_encoded() {
                 return Ok(Some(self.value(statistics)));
             }
             return Ok(None);
         }
-        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.as_encoded()
-        {
+        if self.near_seek_for_prev(key, statistics)? && self.key() == &**key.as_encoded() {
             return Ok(Some(self.value(statistics)));
         }
         Ok(None)
@@ -273,7 +262,7 @@ impl<I: Iterator> Cursor<I> {
 
         if self.scan_mode == ScanMode::Backward
             && self.valid()?
-            && self.key(statistics) <= key.as_encoded().as_slice()
+            && self.key() <= key.as_encoded().as_slice()
         {
             return Ok(true);
         }
@@ -293,7 +282,7 @@ impl<I: Iterator> Cursor<I> {
         if !self.valid()? {
             return self.seek_for_prev(key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.as_encoded());
+        let ord = self.key().cmp(key.as_encoded());
         if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
@@ -306,12 +295,12 @@ impl<I: Iterator> Cursor<I> {
 
         if ord == Ordering::Less {
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
+                self.next(statistics) && self.key() < key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
             if self.valid()? {
-                if self.key(statistics) > key.as_encoded().as_slice() {
+                if self.key() > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
             } else if self.prefix_seek {
@@ -322,7 +311,7 @@ impl<I: Iterator> Cursor<I> {
             }
         } else {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
+                self.prev(statistics) && self.key() > key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
@@ -342,7 +331,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.as_encoded() {
+        if self.key() == &**key.as_encoded() {
             // should not update min_key here. otherwise reverse_seek_le may not
             // work as expected.
             return Ok(self.prev(statistics));
@@ -360,7 +349,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.as_encoded() {
+        if self.key() == &**key.as_encoded() {
             return Ok(self.prev(statistics));
         }
 
@@ -368,15 +357,15 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&self, statistics: &mut CfStatistics) -> &[u8] {
-        let key = self.iter.key();
-        if !self.mark_key_read() {
-            statistics.flow_stats.read_bytes += key.len();
-            statistics.flow_stats.read_keys += 1;
-        }
-        key
+    pub fn key(&self) -> &[u8] {
+        self.iter.key()
     }
 
+    /// Returns the current value and charges its bytes to `statistics` the
+    /// first time it is read at this position.
+    ///
+    /// Movements charge the key but not the value, because some engines, such
+    /// as Titan, only load a value when it is read.
     #[inline]
     pub fn value(&self, statistics: &mut CfStatistics) -> &[u8] {
         let value = self.iter.value();
@@ -386,30 +375,53 @@ impl<I: Iterator> Cursor<I> {
         value
     }
 
+    /// Charges the key at the position a movement landed on, and the value if
+    /// the iterator has already read it.
+    #[inline]
+    fn record_current_size(&self, guard: &mut StatsCollector<'_, I::Collector>) {
+        guard.add_read_size(self.iter.key().len());
+        if let Some(value_size) = self.iter.cached_value_size() {
+            guard.add_read_size(value_size);
+            self.mark_value_read();
+        }
+    }
+
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard =
+        let mut guard =
             StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
-        self.iter.seek_to_first().expect("Invalid Iterator")
+        let result = self.iter.seek_to_first().expect("Invalid Iterator");
+        if result {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard =
+        let mut guard =
             StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
-        self.iter.seek_to_last().expect("Invalid Iterator")
+        let result = self.iter.seek_to_last().expect("Invalid Iterator");
+        if result {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         self.mark_unread();
-        let _guard =
+        let mut guard =
             StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
-        self.iter.seek(key)
+        let result = self.iter.seek(key);
+        if matches!(result, Ok(true)) {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
@@ -419,28 +431,40 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsCollector::new(
+        let mut guard = StatsCollector::new(
             self.iter.metrics_collector(),
             StatsKind::SeekForPrev,
             statistics,
         );
-        self.iter.seek_for_prev(key)
+        let result = self.iter.seek_for_prev(key);
+        if matches!(result, Ok(true)) {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard =
+        let mut guard =
             StatsCollector::new(self.iter.metrics_collector(), StatsKind::Next, statistics);
-        self.iter.next().expect("Invalid Iterator")
+        let result = self.iter.next().expect("Invalid Iterator");
+        if result {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard =
+        let mut guard =
             StatsCollector::new(self.iter.metrics_collector(), StatsKind::Prev, statistics);
-        self.iter.prev().expect("Invalid Iterator")
+        let result = self.iter.prev().expect("Invalid Iterator");
+        if result {
+            self.record_current_size(&mut guard);
+        }
+        result
     }
 
     #[inline]
@@ -737,6 +761,172 @@ mod tests {
         );
         iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_flow_statistics_are_collected_when_cursor_moves() {
+        let path = Builder::new()
+            .prefix("test_cursor_flow_statistics")
+            .tempdir()
+            .unwrap();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+        let (region, _) = load_default_dataset(engine.clone());
+        let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Forward)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+
+        assert!(
+            cursor
+                .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        let first_size = cursor.key().len() + cursor.value(&mut statistics).len();
+        cursor.key();
+        cursor.value(&mut statistics);
+        assert_eq!(statistics.flow_stats.read_keys, 1);
+        assert_eq!(statistics.flow_stats.read_bytes, first_size);
+
+        assert!(cursor.next(&mut statistics));
+        let second_size = cursor.key().len() + cursor.value(&mut statistics).len();
+        cursor.key();
+        cursor.value(&mut statistics);
+        assert_eq!(statistics.flow_stats.read_keys, 2);
+        assert_eq!(statistics.flow_stats.read_bytes, first_size + second_size);
+
+        // Reaching the region boundary still records the iterator operation,
+        // although there is no current KV pair whose bytes can be added.
+        assert!(!cursor.next(&mut statistics));
+        assert_eq!(statistics.flow_stats.read_keys, 3);
+        assert_eq!(statistics.flow_stats.read_bytes, first_size + second_size);
+    }
+
+    #[test]
+    fn test_key_only_cursor_does_not_account_value_bytes() {
+        let path = Builder::new()
+            .prefix("test_key_only_cursor_flow_statistics")
+            .tempdir()
+            .unwrap();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+        let (region, _) = load_default_dataset(engine.clone());
+        let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Forward)
+            .key_only(true)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+
+        assert!(
+            cursor
+                .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert_eq!(statistics.flow_stats.read_keys, 1);
+        assert_eq!(statistics.flow_stats.read_bytes, cursor.key().len());
+    }
+
+    #[test]
+    fn test_flow_statistics_cover_all_cursor_directions_and_bounds() {
+        let path = Builder::new()
+            .prefix("test_cursor_flow_directions")
+            .tempdir()
+            .unwrap();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+        let (region, _) = load_default_dataset(engine.clone());
+        let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+
+        // Forward movement includes the failed operation at the upper bound.
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Forward)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+        assert!(cursor.seek_to_first(&mut statistics));
+        let first_key_len = cursor.key().len();
+        assert!(cursor.next(&mut statistics));
+        let second_key_len = cursor.key().len();
+        assert!(!cursor.next(&mut statistics));
+        assert_eq!(statistics.seek, 1);
+        assert_eq!(statistics.next, 2);
+        assert_eq!(statistics.flow_stats.read_keys, 3);
+        assert_eq!(
+            statistics.flow_stats.read_bytes,
+            first_key_len + second_key_len
+        );
+
+        // Backward movement has the same accounting at the lower bound.
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Backward)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+        assert!(cursor.seek_to_last(&mut statistics));
+        let last_key_len = cursor.key().len();
+        assert!(cursor.prev(&mut statistics));
+        let previous_key_len = cursor.key().len();
+        assert!(!cursor.prev(&mut statistics));
+        assert_eq!(statistics.seek, 1);
+        assert_eq!(statistics.prev, 2);
+        assert_eq!(statistics.flow_stats.read_keys, 3);
+        assert_eq!(
+            statistics.flow_stats.read_bytes,
+            last_key_len + previous_key_len
+        );
+
+        // Both successful and failed seek-for-prev operations are counted.
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Backward)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+        assert!(
+            cursor
+                .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
+                .unwrap()
+        );
+        let key_len = cursor.key().len();
+        assert!(
+            !cursor
+                .seek_for_prev(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert_eq!(statistics.seek_for_prev, 2);
+        assert_eq!(statistics.flow_stats.read_keys, 2);
+        assert_eq!(statistics.flow_stats.read_bytes, key_len);
+
+        // A failed initial seek is also an underlying read, but contributes no
+        // key bytes because the iterator has no resulting position.
+        let mut cursor = CursorBuilder::new(&snapshot, CF_DEFAULT)
+            .scan_mode(ScanMode::Forward)
+            .build()
+            .unwrap();
+        let mut statistics = CfStatistics::default();
+        assert!(
+            !cursor
+                .seek(&Key::from_encoded_slice(b"a6"), &mut statistics)
+                .unwrap()
+        );
+        assert_eq!(statistics.seek, 1);
+        assert_eq!(statistics.flow_stats.read_keys, 1);
+        assert_eq!(statistics.flow_stats.read_bytes, 0);
     }
 
     #[test]
@@ -1109,7 +1299,7 @@ mod tests {
                     match step.current {
                         Some((key, value)) => {
                             assert_eq!(
-                                cursor.key(&mut statistics),
+                                cursor.key(),
                                 key,
                                 "case={} missing_range={} op={:?} key={:?}",
                                 case.name,
@@ -1190,19 +1380,13 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
                 .unwrap()
         );
-        let mut pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
+        let mut pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
         assert!(
             iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
                 .unwrap()
         );
-        pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
+        pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
             !iter
@@ -1217,10 +1401,7 @@ mod tests {
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
+            res.push((iter.key().to_vec(), iter.value(&mut statistics).to_vec()));
             if !iter.prev(&mut statistics) {
                 break;
             }
@@ -1244,10 +1425,7 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
                 .unwrap()
         );
-        let pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
+        let pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
@@ -1256,20 +1434,14 @@ mod tests {
                 "{}",
                 seek_key
             );
-            let pair = (
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            );
+            let pair = (iter.key().to_vec(), iter.value(&mut statistics).to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
+            res.push((iter.key().to_vec(), iter.value(&mut statistics).to_vec()));
             if !iter.prev(&mut statistics) {
                 break;
             }
