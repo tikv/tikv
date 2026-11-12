@@ -134,6 +134,19 @@ High-risk service contracts:
   or estimated reclaimable bytes, and ranks admitted candidates by estimated
   reclaimable bytes from write/default-CF range properties. This keeps
   large-value regions visible even when they contain relatively few versions.
+  SST table and MVCC properties cover whole files, so a small Region inside a
+  large SST reports the whole file's counts. A version-count base score is
+  therefore used only when the bytes can't be estimated: a write-CF SST lacks
+  range properties or holds only tombstones, or the default-CF size is
+  unavailable, and no reclaimable bytes were measured. A positive estimate
+  that misses some SSTs still ranks by bytes: it is a lower bound in the same
+  units as other Regions, while the version count is SST-wide. An admitted
+  Region with range properties but no reclaimable bytes, such as one smaller
+  than a range-properties sample, gets the base score of one reclaimable byte,
+  so it stays a candidate but ranks below Regions with measured reclaimable
+  bytes. When `mvcc-read-aware-enabled` is set, the final
+  score adds `mvcc_versions_scanned * mvcc-read-weight` to the base score and can
+  raise it.
   The default byte threshold is 384 MiB, aligned with the default
   `coprocessor.region-max-size`; it remains an independent GC setting and
   should be tuned separately for custom Region sizes. Candidates admitted through
@@ -167,6 +180,12 @@ High-risk service contracts:
 - Auto-compaction must estimate reclaimable default-CF bytes only from stale
   value-bearing MVCC versions. Tombstones and MVCC Delete records do not own
   default-CF values and must not inflate that estimate.
+- Auto-compaction must rank by range-limited reclaimable bytes whenever range
+  properties exist and the SSTs hold value-bearing versions; SST-wide version
+  counts include keys outside the Region and are in different units. The
+  version-count fallback is only for SSTs without range properties, SSTs with
+  only tombstones, or an unavailable default-CF size, and only when no
+  reclaimable bytes were measured.
 
 ## Observability And Operational Signals
 
