@@ -107,12 +107,14 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
                         }
                     }
                     ArraySelection::Range(start, end) => {
-                        if let (Some(start), Some(mut end)) =
-                            (j.array_get_index(*start), j.array_get_index(*end))
-                        {
-                            if end >= elem_count {
-                                end = elem_count - 1
-                            }
+                        // An empty array has no last element, so a range selects nothing
+                        // from it. TiDB clamps `end` to -1 in that case.
+                        if let (Some(start), Some(end), Some(last)) = (
+                            j.array_get_index(*start),
+                            j.array_get_index(*end),
+                            elem_count.checked_sub(1),
+                        ) {
+                            let end = end.min(last);
                             if start <= end {
                                 for i in start..=end {
                                     append_if_ref_unique(
@@ -607,6 +609,42 @@ mod tests {
                     flags: PATH_EXPRESSION_CONTAINS_RANGE,
                 }],
                 Some("[1,2,3]"),
+            ),
+            (
+                r#"[]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(0),
+                        ArrayIndex::Left(1),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                None,
+            ),
+            (
+                r#"[]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::ArraySelection(ArraySelection::Range(
+                        ArrayIndex::Left(0),
+                        ArrayIndex::Left(0),
+                    ))],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                None,
+            ),
+            (
+                r#"{"a": []}"#,
+                vec![PathExpression {
+                    legs: vec![
+                        PathLeg::Key(KeySelection::Key(String::from("a"))),
+                        PathLeg::ArraySelection(ArraySelection::Range(
+                            ArrayIndex::Left(0),
+                            ArrayIndex::Left(3),
+                        )),
+                    ],
+                    flags: PATH_EXPRESSION_CONTAINS_RANGE,
+                }],
+                None,
             ),
         ];
         for (i, (js, exprs, expected)) in test_cases.drain(..).enumerate() {
