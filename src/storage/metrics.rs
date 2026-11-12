@@ -696,3 +696,50 @@ lazy_static! {
     )
     .unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+
+    use super::{TLS_STORAGE_METRICS, tls_collect_query};
+
+    fn key_ranges(region_id: u64) -> Vec<KeyRange> {
+        TLS_STORAGE_METRICS.with(|m| {
+            m.borrow()
+                .local_read_stats
+                .region_infos
+                .get(&region_id)
+                .unwrap()
+                .key_ranges
+                .clone()
+        })
+    }
+
+    fn clear() {
+        TLS_STORAGE_METRICS.with(|m| m.borrow_mut().local_read_stats.region_infos.clear());
+    }
+
+    #[test]
+    fn test_storage_reverse_scan_key_ranges() {
+        let region_id = 1;
+        let peer = metapb::Peer::default();
+        let low = vec![10u8];
+        let high = vec![20u8];
+
+        clear();
+        tls_collect_query(region_id, &peer, &high, &low, true, QueryKind::Scan);
+        let ranges = key_ranges(region_id);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].get_start_key(), low.as_slice());
+        assert_eq!(ranges[0].get_end_key(), high.as_slice());
+
+        clear();
+        tls_collect_query(region_id, &peer, &high, &[], true, QueryKind::Scan);
+        let ranges = key_ranges(region_id);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].get_start_key().is_empty());
+        assert_eq!(ranges[0].get_end_key(), high.as_slice());
+
+        clear();
+    }
+}
