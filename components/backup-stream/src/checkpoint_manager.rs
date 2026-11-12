@@ -45,6 +45,9 @@ pub struct CheckpointManager {
     checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
     frozen_resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     pub(crate) resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
+    /// Bumped whenever the task is unloaded to avoid inheriting from stale versions of
+    /// frozen_resolved_ts and resolved_ts.
+    pub(crate) generation: u64,
     manager_handle: Option<Sender<SubscriptionOp>>,
 }
 
@@ -203,6 +206,41 @@ impl CheckpointManager {
         for res in region_and_checkpoint {
             self.do_update(res.region, res.checkpoint);
         }
+    }
+
+    /// Like [`Self::resolve_regions`], but drops the results if the task has
+    /// been unloaded since `generation` was captured: they describe data that
+    /// was discarded by the unload.
+    pub fn resolve_regions_of_generation(
+        &mut self,
+        generation: u64,
+        region_and_checkpoint: Vec<ResolveResult>,
+    ) {
+        if generation != self.generation {
+            info!("dropping stale resolve results issued before the task was unloaded.";
+                "issued_generation" => generation,
+                "current_generation" => self.generation,
+                "len" => region_and_checkpoint.len());
+            return;
+        }
+        self.resolve_regions(region_and_checkpoint)
+    }
+
+    /// Forget all resolved (not yet durable) progress. Must be called when a
+    /// task is unloaded.
+    ///
+    /// Both `resolved_ts` and `frozen_resolved_ts` describe data held in the
+    /// task's temporary files, which unloading discards. If they survived,
+    /// they could be flushed into `checkpoint_ts`, or inherited as the start
+    /// ts of an initial scan after the task is loaded again, although the data
+    /// they cover never reached external storage.
+    ///
+    /// `checkpoint_ts` only holds flushed progress, so it is kept. Bumping the
+    /// generation invalidates resolve results that are still in flight.
+    pub fn reset_for_unload(&mut self) {
+        self.generation += 1;
+        self.resolved_ts.lock().unwrap().clear();
+        self.frozen_resolved_ts.clear();
     }
 
     /// flush the `frozen_resolved_ts` to `checkpoint_ts`, and notify the
@@ -401,10 +439,7 @@ impl CheckpointManager {
     }
 
     pub fn get_frozen_resolved_ts(&self) -> Option<TimeStamp> {
-        self.frozen_resolved_ts
-            .values()
-            .map(|x| x.checkpoint)
-            .min()
+        self.frozen_resolved_ts.values().map(|x| x.checkpoint).min()
     }
 
     pub fn sync_with_subs_mgr<T: Send + 'static>(
@@ -767,6 +802,47 @@ pub mod tests {
             checkpoint: 42.into(),
             checkpoint_type: CheckpointType::MinTs,
         }
+    }
+
+    /// Unloading drops the temp files, so progress resolved over them must
+    /// not survive: neither in the live map (read by the initial scans of the
+    /// next load), nor in the frozen one (flushed into `checkpoint_ts`).
+    #[test]
+    fn test_reset_for_unload_clears_unflushed_progress() {
+        let mut mgr = super::CheckpointManager::default();
+        // Flushed progress: durable, must be kept.
+        mgr.do_update(region(1, 1, 1), TimeStamp::new(50));
+        mgr.freeze_and_flush();
+        // Frozen but not flushed yet, plus live progress.
+        mgr.do_update(region(2, 1, 1), TimeStamp::new(80));
+        mgr.freeze();
+        mgr.do_update(region(3, 1, 1), TimeStamp::new(100));
+
+        mgr.reset_for_unload();
+
+        assert!(mgr.resolved_ts.lock().unwrap().is_empty());
+        assert_eq!(mgr.get_frozen_resolved_ts(), None);
+        assert_eq!(mgr.checkpoint_ts[&1].checkpoint, TimeStamp::new(50));
+        // A flush right after the unload must not publish the discarded progress.
+        mgr.freeze_and_flush();
+        assert!(!mgr.checkpoint_ts.contains_key(&2));
+        assert!(!mgr.checkpoint_ts.contains_key(&3));
+    }
+
+    /// A resolve issued before an unload may complete after it.
+    #[test]
+    fn test_stale_resolve_results_dropped_after_unload() {
+        let mut mgr = super::CheckpointManager::default();
+        let issued = mgr.generation;
+
+        mgr.reset_for_unload();
+        assert_ne!(mgr.generation, issued);
+        mgr.resolve_regions_of_generation(issued, vec![simple_resolve_result()]);
+        assert!(mgr.resolved_ts.lock().unwrap().is_empty());
+
+        // Results issued after the unload are applied.
+        mgr.resolve_regions_of_generation(mgr.generation, vec![simple_resolve_result()]);
+        assert_eq!(mgr.resolved_ts.lock().unwrap().len(), 1);
     }
 
     #[test]

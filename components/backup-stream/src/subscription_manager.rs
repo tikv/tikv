@@ -584,6 +584,31 @@ where
             .max()
     }
 
+    /// Returns whether the task of `region` has been unloaded, dropping the
+    /// subscription of `handle` if so.
+    ///
+    /// Unloading runs on the endpoint thread, not in this loop, so it can
+    /// complete between a caller's liveness check and its `register_region`.
+    /// Nothing would clear the subscription registered afterwards: the observer
+    /// is hibernating, so no `Stop` is ever sent.
+    ///
+    /// This must be called after the subscription is registered. With the
+    /// unloading order (unregister the task, then clear `subs`), either its
+    /// `subs.clear()` sees our subscription, or we see the task gone here.
+    fn drop_subscription_if_task_unloaded(&self, region: &Region, handle: &ObserveHandle) -> bool {
+        if self.find_task_by_region(region).is_some() {
+            return false;
+        }
+        let removed = self
+            .subs
+            .deregister_region_if(region, |old, _| old.handle().id == handle.id);
+        if removed {
+            warn!("the task was unloaded while starting to observe, dropped the subscription.";
+                utils::slog_region(region), "handle" => ?handle);
+        }
+        true
+    }
+
     #[instrument(skip_all, fields(id = region.id))]
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
@@ -829,6 +854,11 @@ where
     ) {
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+        // The task may have been unloaded since the caller checked it, so don't scan
+        // for it.
+        if self.drop_subscription_if_task_unloaded(region, &handle) {
+            return;
+        }
         let feedback_channel = match self.messenger.upgrade() {
             Some(ch) => ch,
             None => {
@@ -1007,6 +1037,8 @@ mod test {
         regions: RegionMem,
         subs: SubscriptionTracer,
         resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
+        range_router: Router,
+        task_name: &'static str,
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -1104,10 +1136,11 @@ mod test {
             ))
             .unwrap();
             let resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>> = Default::default();
+            let range_router = Router(Arc::new(router));
             let subs_mgr = RegionSubscriptionManager {
                 regions: regions.clone(),
                 meta_cli,
-                range_router: Router(Arc::new(router)),
+                range_router: range_router.clone(),
                 scheduler,
                 subs: subs.clone(),
                 failure_count: Default::default(),
@@ -1172,6 +1205,8 @@ mod test {
                 cancel,
                 subs,
                 resolved_ts,
+                range_router,
+                task_name,
             }
         }
 
@@ -1424,6 +1459,37 @@ mod test {
             *scans.lock().unwrap(),
             [(1, suite.task_start_ts), (1, suite.task_start_ts)]
         );
+    }
+
+    /// The task is unloaded (on the endpoint thread) after the loop found it
+    /// registered but before the subscription is registered. No `Stop` will
+    /// ever clear the subscription as the observer is hibernating, so the loop
+    /// must drop it itself.
+    #[test]
+    #[cfg(feature = "failpoints")]
+    fn test_start_observe_dropped_when_task_unloaded_midway() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        // Unload exactly like `Endpoint::unload_task`: unregister, then clear `subs`.
+        let router = suite.range_router.clone();
+        let subs = suite.subs.clone();
+        let task_name = suite.task_name;
+        fail::cfg_callback("try_start_observe0", move || {
+            router.unregister_task(task_name);
+            subs.clear();
+        })
+        .unwrap();
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        // Round-trips the loop, so the `Start` above has been handled.
+        suite.sync();
+        suite.wait_shutdown();
+        fail::remove("try_start_observe0");
+
+        assert!(suite.subs.get_subscription_of(1).is_none());
+        // Nothing should be scanned for a task that no longer exists.
+        assert!(scans.lock().unwrap().is_empty());
     }
 
     #[test]
