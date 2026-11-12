@@ -22,6 +22,7 @@ make_static_metric! {
         ask_batch_split,
         report_batch_split,
         get_gc_safe_point,
+        get_gc_states,
         update_service_safe_point,
         min_resolved_ts,
         get_operator,
