@@ -199,6 +199,7 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer(Arc::new(DashMap::new()), txn_status_cache.clone());
+        observer.set_subscriptions(subs.clone());
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
         let mut checkpoint_mgr = CheckpointManager::default();

@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
@@ -11,6 +11,7 @@ use tikv_util::{HandyRwLock, worker::Scheduler};
 use crate::{
     debug,
     endpoint::{ObserveOp, Task},
+    subscription_track::SubscriptionTracer,
     try_send,
     utils::SegmentSet,
 };
@@ -24,6 +25,11 @@ pub struct BackupStreamObserver {
     scheduler: Scheduler<Task>,
     // Note: maybe wrap those fields to methods?
     pub ranges: Arc<RwLock<SegmentSet<Vec<u8>>>>,
+    // Set once by the endpoint after it creates the tracer. It is behind an `Arc` because the
+    // observer is cloned into the coprocessor host before the endpoint exists, and every clone
+    // must see the tracer. Used to narrow a subscription's range synchronously when a region
+    // shrinks, instead of waiting for the async `RefreshResolver`.
+    subs: Arc<OnceLock<SubscriptionTracer>>,
 }
 
 impl BackupStreamObserver {
@@ -35,7 +41,14 @@ impl BackupStreamObserver {
         BackupStreamObserver {
             scheduler,
             ranges: Default::default(),
+            subs: Default::default(),
         }
+    }
+
+    /// Give the observer access to the subscription tracer. Only the first call
+    /// takes effect.
+    pub fn set_subscriptions(&self, subs: SubscriptionTracer) {
+        let _ = self.subs.set(subs);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -167,6 +180,12 @@ impl RegionChangeObserver for BackupStreamObserver {
                 );
             }
             RegionChangeEvent::Update(_) => {
+                // Runs on the apply thread, right when the new range takes effect. Narrow the
+                // subscription's range now so a resolve running before `RefreshResolver` is
+                // handled doesn't claim the range this region just gave up.
+                if let Some(subs) = self.subs.get() {
+                    subs.narrow_range_on_version_change(ctx.region());
+                }
                 try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::RefreshResolver {
@@ -202,7 +221,7 @@ mod tests {
     use super::BackupStreamObserver;
     use crate::{
         endpoint::{ObserveOp, Task},
-        subscription_track::SubscriptionTracer,
+        subscription_track::{Ref, SubscriptionTracer},
     };
 
     fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
@@ -314,6 +333,40 @@ mod tests {
             task,
             Ok(Some(Task::ModifyObserve(ObserveOp::Stop { region, .. }))) if region.id == 42
         ));
+    }
+
+    #[test]
+    fn test_split_narrows_subscription_synchronously() {
+        let (sched, mut rx) = dummy_scheduler();
+        let o = BackupStreamObserver::new(sched);
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        o.set_subscriptions(subs.clone());
+        assert!(o.ranges.wl().add((b"0001".to_vec(), b"0010".to_vec())));
+
+        let mut parent = fake_region(42, b"0001", b"0009");
+        parent.mut_region_epoch().set_version(1);
+        subs.register_region(&parent, ObserveHandle::new(), None);
+
+        let mut after_split = fake_region(42, b"0001", b"0005");
+        after_split.mut_region_epoch().set_version(2);
+        let mut ctx = ObserverContext::new(&after_split);
+        o.on_region_changed(
+            &mut ctx,
+            RegionChangeEvent::Update(RegionChangeReason::Split),
+            StateRole::Leader,
+        );
+
+        // The range is narrowed without the refresh op having been handled...
+        let sub = subs.get_subscription_of(42).unwrap();
+        assert_eq!(sub.value().meta.get_end_key(), b"0005");
+        // ...and the refresh op is still sent.
+        assert_matches!(
+            rx.recv_timeout(Duration::from_millis(20)),
+            Ok(Some(Task::ModifyObserve(ObserveOp::RefreshResolver { region }))) if region.id == 42
+        );
     }
 
     #[test]
