@@ -235,6 +235,25 @@ pub struct SstImporter<E: KvEngine> {
     multi_master_keys_backend: MultiMasterKeyBackend,
 }
 
+/// Adds the keys an apply read to `INPORTER_APPLY_COUNT` once, when the apply
+/// of a file ends, also when it fails part way.
+#[derive(Default)]
+struct ApplyKeyCounts {
+    meet: u64,
+    not_in_region: u64,
+}
+
+impl Drop for ApplyKeyCounts {
+    fn drop(&mut self) {
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_meet"])
+            .inc_by(self.meet);
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_not_in_region"])
+            .inc_by(self.not_in_region);
+    }
+}
+
 impl<E: KvEngine> SstImporter<E> {
     pub fn new<P: AsRef<Path>>(
         cfg: &Config,
@@ -1857,17 +1876,16 @@ impl<E: KvEngine> SstImporter<E> {
         );
         let mut smallest_key = None;
         let mut largest_key = None;
-        let mut total_key: u64 = 0;
+        let mut counts = ApplyKeyCounts::default();
         let mut ts_not_expected = 0;
-        let mut not_in_range: u64 = 0;
         let start = Instant::now();
 
         loop {
             if !event_iter.valid() {
                 break;
             }
-            total_key += 1;
             event_iter.next()?;
+            counts.meet += 1;
 
             if !event_iter
                 .key()
@@ -1893,7 +1911,7 @@ impl<E: KvEngine> SstImporter<E> {
                 // key not in range, we can simply skip this key here.
                 // the client make sure the correct region will download and apply the same
                 // file.
-                not_in_range += 1;
+                counts.not_in_region += 1;
                 continue;
             }
 
@@ -1905,17 +1923,11 @@ impl<E: KvEngine> SstImporter<E> {
             }
             build_fn(key, value);
         }
-        INPORTER_APPLY_COUNT
-            .with_label_values(&["key_meet"])
-            .inc_by(total_key);
-        INPORTER_APPLY_COUNT
-            .with_label_values(&["key_not_in_region"])
-            .inc_by(not_in_range);
-        if not_in_range != 0 || ts_not_expected != 0 {
+        if counts.not_in_region != 0 || ts_not_expected != 0 {
             info!("build download request file done";
-                "total_keys" => %total_key,
+                "total_keys" => %counts.meet,
                 "ts_filtered_keys" => %ts_not_expected,
-                "range_filtered_keys" => %not_in_range);
+                "range_filtered_keys" => %counts.not_in_region);
         }
 
         IMPORTER_APPLY_DURATION
