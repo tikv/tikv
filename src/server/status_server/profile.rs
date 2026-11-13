@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
+    fmt::Write as _,
     fs::File,
     io::{Read, Write},
     pin::Pin,
@@ -148,8 +149,7 @@ where
                 .write_to_vec(&mut body)
                 .map_err(|e| format!("encode pprof into bytes fail: {}", e))?;
         } else {
-            report
-                .flamegraph(&mut body)
+            write_flamegraph(&report, &mut body)
                 .map_err(|e| format!("generate flamegraph from report fail: {}", e))?;
         }
         drop(guard);
@@ -158,6 +158,33 @@ where
     };
 
     ProfileRunner::new(on_start, on_end, end.boxed())?.await
+}
+
+// pprof 0.15's optional flamegraph feature pins an unpatched XML writer.
+// Feed its public stack samples to the maintained inferno release directly.
+fn write_flamegraph(report: &pprof::Report, writer: impl Write) -> std::io::Result<()> {
+    let lines: Vec<String> = report
+        .data
+        .iter()
+        .map(|(frames, count)| {
+            let mut line = frames.thread_name_or_id();
+            for frame in frames.frames.iter().rev() {
+                for symbol in frame.iter().rev() {
+                    write!(&mut line, ";{}", symbol).unwrap();
+                }
+            }
+            write!(&mut line, " {}", count).unwrap();
+            line
+        })
+        .collect();
+    if lines.is_empty() {
+        return Ok(());
+    }
+    inferno::flamegraph::from_lines(
+        &mut inferno::flamegraph::Options::default(),
+        lines.iter().map(String::as_str),
+        writer,
+    )
 }
 
 pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
@@ -240,6 +267,31 @@ mod tests {
     use tokio::runtime;
 
     use super::*;
+
+    #[test]
+    fn test_flamegraph_renders_samples_and_escapes_symbol_names() {
+        let frames = pprof::Frames {
+            frames: vec![vec![pprof::Symbol {
+                name: Some(b"function<&str>".to_vec()),
+                addr: None,
+                lineno: None,
+                filename: None,
+            }]],
+            thread_name: "test-thread".to_owned(),
+            thread_id: 1,
+            sample_timestamp: std::time::SystemTime::UNIX_EPOCH,
+        };
+        let report = pprof::Report {
+            data: [(frames, 3)].into_iter().collect(),
+            timing: Default::default(),
+        };
+        let mut svg = Vec::new();
+        write_flamegraph(&report, &mut svg).unwrap();
+        let svg = String::from_utf8(svg).unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("test-thread (3 samples"));
+        assert!(svg.contains("function&lt;&amp;str&gt; (3 samples"));
+    }
 
     #[test]
     fn test_extract_thread_name() {
