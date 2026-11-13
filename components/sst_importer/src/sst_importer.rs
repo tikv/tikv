@@ -1857,9 +1857,9 @@ impl<E: KvEngine> SstImporter<E> {
         );
         let mut smallest_key = None;
         let mut largest_key = None;
-        let mut total_key = 0;
+        let mut total_key: u64 = 0;
         let mut ts_not_expected = 0;
-        let mut not_in_range = 0;
+        let mut not_in_range: u64 = 0;
         let start = Instant::now();
 
         loop {
@@ -1868,7 +1868,6 @@ impl<E: KvEngine> SstImporter<E> {
             }
             total_key += 1;
             event_iter.next()?;
-            INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
 
             if !event_iter
                 .key()
@@ -1894,19 +1893,24 @@ impl<E: KvEngine> SstImporter<E> {
                 // key not in range, we can simply skip this key here.
                 // the client make sure the correct region will download and apply the same
                 // file.
-                INPORTER_APPLY_COUNT
-                    .with_label_values(&["key_not_in_region"])
-                    .inc();
                 not_in_range += 1;
                 continue;
             }
 
-            build_fn(key.clone(), value);
-            smallest_key = smallest_key
-                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.min(key.clone())));
-            largest_key = largest_key
-                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
+            if smallest_key.as_ref().is_none_or(|s: &Vec<u8>| key < *s) {
+                smallest_key = Some(key.clone());
+            }
+            if largest_key.as_ref().is_none_or(|l: &Vec<u8>| key > *l) {
+                largest_key = Some(key.clone());
+            }
+            build_fn(key, value);
         }
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_meet"])
+            .inc_by(total_key);
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_not_in_region"])
+            .inc_by(not_in_range);
         if not_in_range != 0 || ts_not_expected != 0 {
             info!("build download request file done";
                 "total_keys" => %total_key,
