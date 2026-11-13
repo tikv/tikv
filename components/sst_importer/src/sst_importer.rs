@@ -235,6 +235,25 @@ pub struct SstImporter<E: KvEngine> {
     multi_master_keys_backend: MultiMasterKeyBackend,
 }
 
+/// Adds the keys an apply read to `INPORTER_APPLY_COUNT` once, when the apply
+/// of a file ends, also when it fails part way.
+#[derive(Default)]
+struct ApplyKeyCounts {
+    meet: u64,
+    not_in_region: u64,
+}
+
+impl Drop for ApplyKeyCounts {
+    fn drop(&mut self) {
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_meet"])
+            .inc_by(self.meet);
+        INPORTER_APPLY_COUNT
+            .with_label_values(&["key_not_in_region"])
+            .inc_by(self.not_in_region);
+    }
+}
+
 impl<E: KvEngine> SstImporter<E> {
     pub fn new<P: AsRef<Path>>(
         cfg: &Config,
@@ -1857,18 +1876,16 @@ impl<E: KvEngine> SstImporter<E> {
         );
         let mut smallest_key = None;
         let mut largest_key = None;
-        let mut total_key = 0;
+        let mut counts = ApplyKeyCounts::default();
         let mut ts_not_expected = 0;
-        let mut not_in_range = 0;
         let start = Instant::now();
 
         loop {
             if !event_iter.valid() {
                 break;
             }
-            total_key += 1;
             event_iter.next()?;
-            INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
+            counts.meet += 1;
 
             if !event_iter
                 .key()
@@ -1894,24 +1911,23 @@ impl<E: KvEngine> SstImporter<E> {
                 // key not in range, we can simply skip this key here.
                 // the client make sure the correct region will download and apply the same
                 // file.
-                INPORTER_APPLY_COUNT
-                    .with_label_values(&["key_not_in_region"])
-                    .inc();
-                not_in_range += 1;
+                counts.not_in_region += 1;
                 continue;
             }
 
-            build_fn(key.clone(), value);
-            smallest_key = smallest_key
-                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.min(key.clone())));
-            largest_key = largest_key
-                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
+            if smallest_key.as_ref().is_none_or(|s: &Vec<u8>| key < *s) {
+                smallest_key = Some(key.clone());
+            }
+            if largest_key.as_ref().is_none_or(|l: &Vec<u8>| key > *l) {
+                largest_key = Some(key.clone());
+            }
+            build_fn(key, value);
         }
-        if not_in_range != 0 || ts_not_expected != 0 {
+        if counts.not_in_region != 0 || ts_not_expected != 0 {
             info!("build download request file done";
-                "total_keys" => %total_key,
+                "total_keys" => %counts.meet,
                 "ts_filtered_keys" => %ts_not_expected,
-                "range_filtered_keys" => %not_in_range);
+                "range_filtered_keys" => %counts.not_in_region);
         }
 
         IMPORTER_APPLY_DURATION
