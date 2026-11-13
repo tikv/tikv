@@ -282,9 +282,13 @@ impl CompactionRunInfoBuilder {
         &mut self,
         s: Arc<dyn ExternalStorage>,
         shard: Option<ShardConfig>,
+        ts_window: Option<(u64, u64)>,
     ) -> Result<()> {
         self.normalize_spans();
-        let migration = self.migration_of(self.find_expiring_files(s.clone(), shard).await?);
+        let migration = self.migration_of(
+            self.find_expiring_files(s.clone(), shard, ts_window)
+                .await?,
+        );
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -316,13 +320,18 @@ impl CompactionRunInfoBuilder {
         migration
     }
 
+    /// Metadata outside `ts_window` aren't read, so one with no data file left
+    /// is marked by the first compaction whose window covers it, not by every
+    /// compaction.
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
         shard: Option<ShardConfig>,
+        ts_window: Option<(u64, u64)>,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let mut ext = LoadFromExt::default();
         ext.shard = shard;
+        ext.ts_window = ts_window;
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
@@ -426,7 +435,7 @@ mod test {
     impl CompactionRunInfoBuilder {
         async fn mig(&mut self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
             self.normalize_spans();
-            Ok(self.migration_of(self.find_expiring_files(s, None).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, None, None).await?))
         }
     }
 

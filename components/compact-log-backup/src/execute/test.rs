@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     ops::RangeInclusive,
     sync::{
@@ -11,8 +11,12 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use external_storage::{BackendConfig, ExternalStorage};
-use futures::{future::FutureExt, io::AsyncReadExt, stream::TryStreamExt};
+use external_storage::{BackendConfig, ExternalStorage, UnpinReader};
+use futures::{
+    future::FutureExt,
+    io::{AsyncReadExt, Cursor},
+    stream::TryStreamExt,
+};
 use kvproto::brpb::StorageBackend;
 use protobuf::Message;
 use tokio::sync::mpsc::Sender;
@@ -28,7 +32,7 @@ use crate::{
     },
     execute::hooking::{AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx},
     storage::{LOCK_PREFIX, hash_meta_edit},
-    test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
+    test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_min_max, gen_step},
 };
 
 #[derive(Clone)]
@@ -898,4 +902,309 @@ async fn test_sharding_by_store_and_union_matches_unsharded() {
         );
         assert_eq!(hash_meta_edit(union_edit), hash_meta_edit(&expected_edit));
     }
+}
+
+const WINDOW_FROM: u64 = 1000;
+const WINDOW_UNTIL: u64 = 2000;
+
+#[derive(Clone, Copy)]
+enum NameFormat {
+    Tagged,
+    Legacy,
+    Unparsable,
+}
+
+/// A flush of one store, with the ts range and the min begin ts of default CF
+/// its metadata name carries.
+struct WindowFlush {
+    id: u64,
+    format: NameFormat,
+    min_begin_ts: u64,
+    files: Vec<(&'static str, bool, u64, u64)>,
+}
+
+impl WindowFlush {
+    fn min_ts(&self) -> u64 {
+        self.files.iter().map(|f| f.2).min().unwrap()
+    }
+
+    fn max_ts(&self) -> u64 {
+        self.files.iter().map(|f| f.3).max().unwrap()
+    }
+
+    fn intersects_window(&self) -> bool {
+        self.max_ts() >= WINDOW_FROM && self.min_ts() <= WINDOW_UNTIL
+    }
+
+    /// Whether the compaction reads its metadata.
+    fn meta_in_window(&self, shift_ts: u64) -> bool {
+        matches!(self.format, NameFormat::Unparsable)
+            || (self.max_ts() >= shift_ts && self.min_ts() <= WINDOW_UNTIL)
+    }
+
+    /// Whether the compaction takes any of its files, which are kept from
+    /// `shift_ts` in default CF and from `WINDOW_FROM` in write CF.
+    fn has_compacted_files(&self, shift_ts: u64) -> bool {
+        self.files.iter().any(|&(cf, is_meta, min_ts, max_ts)| {
+            let from_ts = if cf == "default" {
+                shift_ts
+            } else {
+                WINDOW_FROM
+            };
+            !is_meta && max_ts >= from_ts && min_ts <= WINDOW_UNTIL
+        })
+    }
+
+    fn meta_path(&self) -> String {
+        let (min_ts, max_ts) = (self.min_ts(), self.max_ts());
+        match self.format {
+            NameFormat::Tagged => format!(
+                "v1/backupmeta/{:016X}{:016X}-d{:016X}l{:016X}u{:016X}p{:016X}.meta",
+                max_ts, self.id, self.min_begin_ts, min_ts, max_ts, 1
+            ),
+            NameFormat::Legacy => format!(
+                "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+                max_ts, self.min_begin_ts, min_ts, max_ts
+            ),
+            NameFormat::Unparsable => format!("v1/backupmeta/flush-{}.meta", self.id),
+        }
+    }
+
+    /// A name no ts window can exclude, which gives `--cal-shift-ts` the
+    /// same shift ts as [`Self::meta_path`].
+    fn unfiltered_meta_path(&self) -> String {
+        if matches!(self.format, NameFormat::Unparsable) {
+            return self.meta_path();
+        }
+        let min_begin_ts = if self.intersects_window() {
+            self.min_begin_ts
+        } else {
+            0
+        };
+        format!(
+            "v1/backupmeta/{:016X}{:016X}-d{:016X}l{:016X}u{:016X}.meta",
+            self.max_ts(),
+            self.id,
+            min_begin_ts,
+            0,
+            u64::MAX
+        )
+    }
+
+    fn builders(&self) -> Vec<LogFileBuilder> {
+        let id = self.id;
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(n, &(cf, is_meta, min_ts, max_ts))| {
+                LogFileBuilder::from_iter(
+                    KvGen::new(
+                        gen_min_max(id as i64, n as i64 * 10, n as i64 * 10 + 5, min_ts, max_ts),
+                        move |_| vec![id as u8; 16],
+                    ),
+                    |v| {
+                        v.cf = cf;
+                        v.is_meta = is_meta;
+                        v.region_id = id;
+                    },
+                )
+            })
+            .collect()
+    }
+
+    async fn save(&self, st: &TmpStorage, meta_path: &str) {
+        let log_path = format!("v1/20260320/12/{}/flush.log", self.id);
+        st.build_flush(&log_path, meta_path, self.builders()).await;
+    }
+}
+
+fn window_flushes(cal_shift_ts: bool) -> Vec<WindowFlush> {
+    use NameFormat::*;
+    let flush = |id, format, min_begin_ts, files| WindowFlush {
+        id,
+        format,
+        min_begin_ts,
+        files,
+    };
+    let mut flushes = vec![
+        flush(
+            1,
+            Tagged,
+            900,
+            vec![("write", false, 1200, 1300), ("default", false, 1100, 1150)],
+        ),
+        flush(
+            2,
+            Legacy,
+            800,
+            vec![("write", false, 1500, 1600), ("default", false, 1400, 1450)],
+        ),
+        // Default CF records of transactions committed in the window, older than `from`.
+        flush(
+            3,
+            Tagged,
+            850,
+            vec![("default", false, 850, 950), ("write", false, 860, 990)],
+        ),
+        flush(4, Legacy, 820, vec![("default", false, 820, 980)]),
+        flush(5, Tagged, 1700, vec![("default", true, 1700, 1800)]),
+        flush(
+            6,
+            Legacy,
+            500,
+            vec![("write", false, 500, 600), ("default", false, 500, 550)],
+        ),
+        flush(
+            7,
+            Tagged,
+            2500,
+            vec![("write", false, 2500, 2600), ("default", false, 2500, 2550)],
+        ),
+        flush(8, Legacy, 2200, vec![("default", false, 2200, 2300)]),
+        // Only meta KV files: marked all data files compacted only when in the window.
+        flush(9, Legacy, 300, vec![("default", true, 300, 400)]),
+        flush(10, Tagged, 3000, vec![("default", true, 3000, 3100)]),
+    ];
+    if !cal_shift_ts {
+        flushes.push(flush(11, Unparsable, 0, vec![("write", false, 100, 200)]));
+    }
+    flushes
+}
+
+fn normalized_subcompactions(subcs: Vec<kvproto::brpb::LogFileSubcompaction>) -> Vec<Vec<u8>> {
+    let mut out = subcs
+        .into_iter()
+        .map(|subc| {
+            let mut meta = subc.get_meta().clone();
+            meta.mut_sources().sort_by(|a, b| a.path.cmp(&b.path));
+            for source in meta.mut_sources().iter_mut() {
+                source.mut_spans().sort_by_key(|s| s.offset);
+            }
+            meta.write_to_bytes().unwrap()
+        })
+        .collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
+fn normalized_meta_edits(
+    mig: &kvproto::brpb::Migration,
+    rename: impl Fn(&str) -> String,
+) -> BTreeMap<String, kvproto::brpb::MetaEdit> {
+    mig.edit_meta
+        .iter()
+        .map(|edit| {
+            let mut edit = edit.clone();
+            edit.set_path(rename(edit.get_path()));
+            edit.mut_delete_physical_files().sort();
+            edit.mut_delete_logical_files()
+                .sort_by(|a, b| a.path.cmp(&b.path));
+            for file in edit.mut_delete_logical_files().iter_mut() {
+                file.mut_spans().sort_by_key(|s| s.offset);
+            }
+            (edit.get_path().to_owned(), edit)
+        })
+        .collect()
+}
+
+async fn run_window_exec(st: &TmpStorage, cal_shift_ts: bool) -> kvproto::brpb::Migration {
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.from_ts = WINDOW_FROM;
+    exec.cfg.until_ts = WINDOW_UNTIL;
+    exec.cfg.calculate_shift_ts = cal_shift_ts;
+    exec.out_prefix = exec.cfg.recommended_prefix("window");
+    exec.run_with_storage_async(st.storage().clone(), SaveMeta::default())
+        .await
+        .unwrap();
+    let mut migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    migs.pop().unwrap().1
+}
+
+async fn check_window_matches_unfiltered(cal_shift_ts: bool) {
+    let flushes = window_flushes(cal_shift_ts);
+    let st = TmpStorage::create();
+    let st_unfiltered = TmpStorage::create();
+    let mut path_of_unfiltered = HashMap::new();
+    for flush in &flushes {
+        flush.save(&st, &flush.meta_path()).await;
+        flush
+            .save(&st_unfiltered, &flush.unfiltered_meta_path())
+            .await;
+        path_of_unfiltered.insert(flush.unfiltered_meta_path(), flush.meta_path());
+    }
+
+    let shift_ts = if cal_shift_ts { 800 } else { WINDOW_FROM };
+    for flush in flushes.iter().filter(|f| !f.meta_in_window(shift_ts)) {
+        st.storage()
+            .write(
+                &flush.meta_path(),
+                UnpinReader(Box::new(Cursor::new(vec![0xFF]))),
+                1,
+            )
+            .await
+            .unwrap();
+    }
+
+    let mig = run_window_exec(&st, cal_shift_ts).await;
+    let unfiltered_mig = run_window_exec(&st_unfiltered, cal_shift_ts).await;
+
+    for flush in &flushes {
+        let in_window = flush.meta_in_window(shift_ts);
+        let edit = mig
+            .edit_meta
+            .iter()
+            .find(|e| e.get_path() == flush.meta_path());
+        let has_data = flush.files.iter().any(|f| !f.1);
+        if !has_data {
+            assert_eq!(
+                edit.map(|e| e.all_data_files_compacted),
+                in_window.then_some(true),
+                "flush {}",
+                flush.id
+            );
+        } else {
+            assert_eq!(
+                edit.is_some(),
+                flush.has_compacted_files(shift_ts),
+                "flush {}",
+                flush.id
+            );
+        }
+    }
+
+    let mut expected_edits =
+        normalized_meta_edits(&unfiltered_mig, |p| path_of_unfiltered[p].clone());
+    expected_edits.retain(|path, _| {
+        flushes
+            .iter()
+            .any(|f| &f.meta_path() == path && f.meta_in_window(shift_ts))
+    });
+    assert_eq!(
+        normalized_meta_edits(&mig, |p| p.to_owned()),
+        expected_edits
+    );
+    let (c, uc) = (&mig.compactions[0], &unfiltered_mig.compactions[0]);
+    assert_eq!(c.artifacts_hash, uc.artifacts_hash);
+    assert_eq!(c.input_min_ts, uc.input_min_ts);
+    assert_eq!(c.input_max_ts, uc.input_max_ts);
+    assert_eq!(
+        normalized_subcompactions(st.load_subcompactions(c.get_artifacts()).await.unwrap()),
+        normalized_subcompactions(
+            st_unfiltered
+                .load_subcompactions(uc.get_artifacts())
+                .await
+                .unwrap()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_window_skips_metas_and_matches_unfiltered() {
+    check_window_matches_unfiltered(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_window_with_shift_ts_skips_metas_and_matches_unfiltered() {
+    check_window_matches_unfiltered(true).await;
 }

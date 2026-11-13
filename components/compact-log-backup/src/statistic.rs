@@ -85,6 +85,9 @@ pub struct LoadMetaStatistic {
     pub meta_filtered_out_by_migration: u64,
     /// How many empty meta files are skipped by file name?
     pub empty_meta_files_skipped: u64,
+    /// How many meta files are skipped because the ts range in their names
+    /// doesn't intersect the compaction?
+    pub meta_files_out_of_window: u64,
 }
 
 /// The statistic of loading data files for a subcompaction.
