@@ -68,7 +68,6 @@ zstd = "0.14.3"
 
 [dev-dependencies]
 pprof = { version = "0.15", default-features = false, features = [
-  "flamegraph",
   "protobuf-codec",
 ] }
 tempfile = "3.0"

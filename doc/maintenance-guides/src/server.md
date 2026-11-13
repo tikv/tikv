@@ -126,6 +126,10 @@ High-risk service contracts:
 
 - `status_server/mod.rs` exposes HTTP endpoints for config, metrics, profiles,
   resource-manager state, pause/resume, and debugging.
+- CPU profiles keep pprof's sampling and protobuf output, while SVG flamegraphs
+  are rendered from public stack samples by inferno. Keep pprof's `flamegraph`
+  feature disabled across normal and dev dependencies to avoid its legacy XML
+  dependency chain.
 
 ### GC and lock manager
 
