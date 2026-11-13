@@ -474,7 +474,11 @@ impl ExecHooks for SaveMeta {
                 .await?;
         } else {
             self.collector
-                .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
+                .write_migration(
+                    Arc::clone(cx.storage),
+                    cx.this.cfg.shard,
+                    Some(cx.this.cfg.meta_ts_window()),
+                )
                 .await?;
         }
         info!("Migration written."; "duration" => ?begin.elapsed());

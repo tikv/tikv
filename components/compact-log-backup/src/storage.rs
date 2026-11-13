@@ -197,7 +197,7 @@ pub struct LogFileId {
 /// {flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
 #[cfg(test)]
 fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
-    parse_backupmeta_path(path).ok().map(|v| v.store_id)
+    parse_backupmeta_path(path).ok().and_then(|v| v.store_id)
 }
 
 #[cfg(test)]
@@ -226,14 +226,20 @@ fn validate_store_id_for_sharding(
     Ok(())
 }
 
+#[derive(Debug)]
 struct ParsedBackupMetaName {
-    store_id: u64,
+    /// `None` for names written before the store id was added to them.
+    store_id: Option<u64>,
     min_begin_ts_in_default_cf: u64,
     min_ts: u64,
     max_ts: u64,
     is_empty: bool,
 }
 
+/// Parses the name of a backup metadata. Accepts both
+/// `{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
+/// and the older `{flush_ts}-{min_begin_ts}-{min_ts}-{max_ts}.meta`
+/// (optionally with a `-SYNTHETIC{hex}` suffix before `.meta`).
 fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
     let stem = Path::new(path)
         .file_stem()
@@ -250,20 +256,51 @@ fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
                 format!("backup metadata path is not valid utf8: {path}"),
             )
         })?;
-    let parsed = backup_stream::utils::parse_backupmeta_filename(stem).map_err(|err| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("cannot parse backup metadata path {path}: {err}"),
-        )
-    })?;
-    Ok(ParsedBackupMetaName {
-        store_id: parsed.store_id,
-        min_begin_ts_in_default_cf: parsed.min_begin_ts,
-        min_ts: parsed.min_ts,
-        max_ts: parsed.max_ts,
-        is_empty: parsed
-            .flags
-            .is_some_and(|flags| flags & backup_stream::utils::BACKUP_META_FLAG_EMPTY != 0),
+    match backup_stream::utils::parse_backupmeta_filename(stem) {
+        Ok(parsed) => Ok(ParsedBackupMetaName {
+            store_id: Some(parsed.store_id),
+            min_begin_ts_in_default_cf: parsed.min_begin_ts,
+            min_ts: parsed.min_ts,
+            max_ts: parsed.max_ts,
+            is_empty: parsed
+                .flags
+                .is_some_and(|flags| flags & backup_stream::utils::BACKUP_META_FLAG_EMPTY != 0),
+        }),
+        Err(err) => parse_legacy_backupmeta_filename(stem).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("cannot parse backup metadata path {path}: {err}"),
+            )
+        }),
+    }
+}
+
+fn parse_legacy_backupmeta_filename(stem: &str) -> Option<ParsedBackupMetaName> {
+    fn hex_u64(part: Option<&str>) -> Option<u64> {
+        let part = part.filter(|p| p.len() == 16 && p.bytes().all(|c| c.is_ascii_hexdigit()))?;
+        u64::from_str_radix(part, 16).ok()
+    }
+
+    let mut parts = stem.split('-');
+    let _flush_ts = hex_u64(parts.next())?;
+    let min_begin_ts_in_default_cf = hex_u64(parts.next())?;
+    let min_ts = hex_u64(parts.next())?;
+    let max_ts = hex_u64(parts.next())?;
+    if let Some(suffix) = parts.next() {
+        let uuid = suffix.strip_prefix("SYNTHETIC")?;
+        if uuid.is_empty() || !uuid.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(ParsedBackupMetaName {
+        store_id: None,
+        min_begin_ts_in_default_cf,
+        min_ts,
+        max_ts,
+        is_empty: false,
     })
 }
 
@@ -288,6 +325,9 @@ pub struct LoadFromExt<'a> {
     /// Optional shard filter applied from the backupmeta path before reading
     /// the metadata file.
     pub shard: Option<ShardConfig>,
+    /// Inclusive ts range. A metadata whose name says it holds no record in
+    /// this range is skipped without being read.
+    pub ts_window: Option<(u64, u64)>,
     /// Max number of running tasks to fetch metadatas
     pub prefetch_running_count: usize,
     /// Max number of spawning tasks to fetch metadatas
@@ -318,6 +358,7 @@ impl Default for LoadFromExt<'_> {
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
             shard: None,
+            ts_window: None,
             prefetch_running_count: 128,
             prefetch_buffer_count: 1024,
         }
@@ -480,10 +521,26 @@ impl<'a> StreamMetaStorage<'a> {
                         self.stat.empty_meta_files_skipped += 1;
                         continue;
                     }
+                    if let (Ok(parsed), Some((from_ts, until_ts))) =
+                        (&parsed_backupmeta, self.ext.ts_window)
+                    {
+                        if !intersects_ts_window(parsed.min_ts, parsed.max_ts, from_ts, until_ts) {
+                            self.stat.meta_files_out_of_window += 1;
+                            continue;
+                        }
+                    }
                     let path_store_id = match self.ext.shard {
                         Some(shard) => {
-                            let store_id = match parsed_backupmeta {
-                                Ok(parsed) => parsed.store_id,
+                            let store_id = parsed_backupmeta.and_then(|parsed| {
+                                parsed.store_id.ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        format!("no store id in backup metadata path {}", load.key),
+                                    )
+                                })
+                            });
+                            let store_id = match store_id {
+                                Ok(store_id) => store_id,
                                 Err(err) => {
                                     self.prefetch.push_back(Prefetch::ready(Err(err.into())));
                                     cx.waker().wake_by_ref();
@@ -1046,7 +1103,8 @@ mod test {
 
     use super::{
         CountObjectsExt, LoadFromExt, MetaFile, StreamMetaStorage,
-        parse_approx_ts_range_from_backupmeta_path, parse_store_id_from_backupmeta_path,
+        parse_approx_ts_range_from_backupmeta_path, parse_backupmeta_path,
+        parse_store_id_from_backupmeta_path,
     };
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
@@ -1096,6 +1154,43 @@ mod test {
             ),
             None
         );
+    }
+
+    #[test]
+    fn test_parse_legacy_backupmeta_path() {
+        let parsed = parse_backupmeta_path(
+            "v1/backupmeta/06868F6CB6D801EB-06868F63DD3401AD-06868F63DD3401CE-06868F6CB79C0003.meta",
+        )
+        .unwrap();
+        assert_eq!(parsed.store_id, None);
+        assert_eq!(parsed.min_begin_ts_in_default_cf, 0x06868F63DD3401AD);
+        assert_eq!(parsed.min_ts, 0x06868F63DD3401CE);
+        assert_eq!(parsed.max_ts, 0x06868F6CB79C0003);
+        assert!(!parsed.is_empty);
+
+        let parsed = parse_backupmeta_path(
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8-SYNTHETIC8F3A1B.meta",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                parsed.min_begin_ts_in_default_cf,
+                parsed.min_ts,
+                parsed.max_ts
+            ),
+            (0x32, 0x64, 0xC8)
+        );
+
+        for bad in [
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064.meta",
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8-0000000000000001.meta",
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8-SYNTHETIC.meta",
+            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8-SYNTHETIC1-2.meta",
+            "v1/backupmeta/000000000000012G-0000000000000032-0000000000000064-00000000000000C8.meta",
+            "v1/backupmeta/12C-0000000000000032-0000000000000064-00000000000000C8.meta",
+        ] {
+            parse_backupmeta_path(bad).unwrap_err();
+        }
     }
 
     #[test]
@@ -1407,6 +1502,107 @@ mod test {
         .unwrap();
         assert_eq!(result.count, 4);
         assert_eq!(result.shift_ts, 0x20);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_updates_shift_ts_from_legacy_names() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        let names = [
+            "v1/backupmeta/000000000000012C-0000000000000020-0000000000000064-00000000000000C8.meta",
+            "v1/backupmeta/000000000000012D-0000000000000030-0000000000000040-00000000000000D0-SYNTHETIC1.meta",
+            // out of range, should not affect shift_ts
+            "v1/backupmeta/000000000000012E-0000000000000010-0000000000000100-0000000000000120.meta",
+        ];
+        for name in names {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![]))), 0)
+                .await
+                .unwrap();
+        }
+
+        let result = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: true,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.shift_ts, 0x20);
+    }
+
+    #[tokio::test]
+    async fn test_load_from_ext_skips_metas_out_of_window_before_reading() {
+        use external_storage::UnpinReader;
+        use futures::io::Cursor;
+
+        let new_name = |n: u64, min_ts: u64, max_ts: u64| {
+            format!(
+                "v1/backupmeta/{:016X}{:016X}-d{:016X}l{:016X}u{:016X}p{:016X}.meta",
+                max_ts, n, min_ts, min_ts, max_ts, 0
+            )
+        };
+        let legacy_name = |min_ts: u64, max_ts: u64| {
+            format!(
+                "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+                max_ts, min_ts, min_ts, max_ts
+            )
+        };
+        let (from_ts, until_ts) = (1000, 2000);
+        let to_read = [
+            new_name(1, 1100, 1200),
+            legacy_name(1300, 1400),
+            new_name(2, 900, 1000),
+            legacy_name(2000, 2100),
+            new_name(3, 500, 3000),
+            "v1/backupmeta/not-a-parsable-meta-name.meta".to_owned(),
+        ];
+        let not_to_read = [
+            new_name(4, 500, 999),
+            legacy_name(500, 999),
+            new_name(5, 2001, 2100),
+            legacy_name(2001, 2100),
+        ];
+
+        let st = TmpStorage::create();
+        let mut expected = vec![];
+        for (i, name) in to_read.iter().enumerate() {
+            let log = format!("{i}.log");
+            let builders = (0..2).map(|n| {
+                LogFileBuilder::from_iter(
+                    KvGen::new(gen_step(1, n, 2), |_| b"v".to_vec()).take(3),
+                    |v| v.region_id = n as u64,
+                )
+            });
+            expected.push(st.build_flush(&log, name, builders).await);
+        }
+        for name in &not_to_read {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![0xFF]))), 1)
+                .await
+                .unwrap();
+        }
+
+        let mut ext = LoadFromExt::default();
+        ext.ts_window = Some((from_ts, until_ts));
+        let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
+        let mut sst = StreamMetaStorage::load_from_ext(&storage, ext)
+            .await
+            .unwrap();
+        let mut result = (&mut sst).try_collect::<Vec<_>>().await.unwrap();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        expected.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(result, expected);
+
+        let stat = sst.take_statistic();
+        assert_eq!(stat.meta_files_in, to_read.len() as u64);
+        assert_eq!(stat.meta_files_out_of_window, not_to_read.len() as u64);
     }
 
     #[tokio::test]
