@@ -117,9 +117,9 @@ High-risk config contracts:
   runs on TiKV's standard thread wrapper with a bounded per-endpoint wait; the
   wait timeout cannot cancel libc, NSS, or system DNS resolution, so at most two
   one-shot resolver threads may outlive the startup wait.
-- Forwarded third-party logs must not expose credentials. TiKV filters
-  Debug/Trace records from the affected legacy `azure_core` transport until
-  an SDK upgrade, patch, or logging fix replaces that temporary mitigation.
+- Forwarded third-party logs must not expose credentials. Keep Azure SDK
+  request-log sanitization intact, and exclude Authorization values and SAS
+  signatures from custom authentication and error diagnostics.
 - Service pause/resume must stay consistent with the small control plane in
   `components/service`.
 
