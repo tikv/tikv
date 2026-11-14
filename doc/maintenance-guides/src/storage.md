@@ -230,6 +230,11 @@ Start triage with:
 - Integration tests often belong in `components/test_storage`.
 - Hot-path metrics exist throughout scheduler, MVCC, read pools, and flow
   control.
+- Normal unsafe-destroy-range flow-control bookkeeping is logged at DEBUG.
+  Abnormal pending-byte jumps remain visible at INFO, while
+  `tikv_scheduler_throttle_action_total` distinguishes `pending_bytes_jump`
+  from `pending_bytes_no_jump`. Log suppression must preserve the pending-byte
+  jump guards and flow-control recovery conditions.
 
 ## Common Failure Modes
 
