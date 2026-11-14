@@ -1,16 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{
-    env, io,
-    ops::Deref,
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
+use std::{env, io, num::NonZero, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
-use azure_core::auth::{AccessToken, TokenCredential};
-use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
-use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
-use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
+use azure_core::{
+    credentials::{Secret, TokenCredential},
+    http::{ClientOptions, Transport},
+};
+use azure_identity::ClientSecretCredential;
+use azure_storage_blob::{
+    BlobContainerClient, BlobServiceClient, BlobServiceClientOptions,
+    models::{
+        AccessTier, BlobClientDownloadOptions, BlockBlobClientUploadOptions,
+        EncryptionAlgorithmType,
+    },
+};
 use cloud::{
     blob::{
         BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
@@ -21,16 +24,15 @@ use cloud::{
 use futures::TryFutureExt;
 use futures_util::{TryStreamExt, future::FutureExt, io::AsyncRead, stream, stream::StreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
-use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug, defer,
     stream::{RetryError, retry},
     time::Instant,
 };
-use time::OffsetDateTime;
-use tokio::{
-    sync::Mutex,
-    time::{Duration, timeout},
+use tokio::time::{Duration, timeout};
+
+use crate::token_credentials::{
+    default_credentials::DefaultAzureCredential, shared_key::SharedKeyPolicy,
 };
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -45,9 +47,9 @@ const ENV_SHARED_KEY: &str = "AZURE_STORAGE_KEY";
 /// client_secret:  $AZURE_CLIENT_SECRET,
 #[derive(Clone, Debug)]
 struct CredentialInfo {
-    client_id: ClientId,
+    client_id: String,
     tenant_id: String,
-    client_secret: ClientSecret,
+    client_secret: Secret,
 }
 
 #[derive(Clone, Debug)]
@@ -124,8 +126,7 @@ impl Config {
             env::var(ENV_CLIENT_SECRET).ok(),
         ) {
             if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
-                let client_id = ClientId::new(client_id);
-                let client_secret = ClientSecret::new(client_secret);
+                let client_secret = Secret::new(client_secret);
                 return Some(CredentialInfo {
                     client_id,
                     tenant_id,
@@ -185,46 +186,6 @@ impl Config {
             ))
         }
     }
-
-    pub fn parse_plaintext_account_url(&self) -> Option<String> {
-        if let (Some(account_name), Some(shared_key)) =
-            (self.account_name.as_ref(), self.shared_key.as_ref())
-        {
-            let blob_endpoint = match self.bucket.endpoint.as_ref() {
-                Some(s) => s.to_string(),
-                None => format!("https://{}.blob.core.windows.net", account_name),
-            };
-            Some(
-                ConnectionStringBuilder::new()
-                    .account_name(account_name)
-                    .account_key(shared_key)
-                    .blob_endpoint(&blob_endpoint)
-                    .build(),
-            )
-        } else {
-            None
-        }
-    }
-
-    pub fn parse_env_plaintext_account_url(&self) -> Option<String> {
-        if let (Some(account_name), Some(shared_key)) =
-            (self.env_account_name.as_ref(), self.env_shared_key.as_ref())
-        {
-            let blob_endpoint = match self.bucket.endpoint.as_ref() {
-                Some(s) => s.to_string(),
-                None => format!("https://{}.blob.core.windows.net", account_name),
-            };
-            Some(
-                ConnectionStringBuilder::new()
-                    .account_name(account_name)
-                    .account_key(shared_key)
-                    .blob_endpoint(&blob_endpoint)
-                    .build(),
-            )
-        } else {
-            None
-        }
-    }
 }
 
 impl BlobConfig for Config {
@@ -248,7 +209,9 @@ impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
             RequestError::InvalidInput(e, tag) => {
-                Self::new(io::ErrorKind::InvalidInput, format!("{}: {:?}", tag, &e))
+                // The SDK's Display omits the transport error source, whose
+                // Debug representation can include a URL containing a SAS token.
+                Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
             }
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
@@ -263,9 +226,24 @@ impl RetryError for RequestError {
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
+fn blob_client_options() -> io::Result<ClientOptions> {
+    // Preserve the outer operation deadlines. The SDK's default read timeout
+    // also covers sending the body and aborts slow Put Blob requests after 60s.
+    let client = reqwest::Client::builder()
+        .tls_backend_native()
+        .connect_timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(io::Error::other)?;
+    Ok(ClientOptions {
+        transport: Some(Transport::new(Arc::new(client))),
+        ..Default::default()
+    })
+}
+
 /// A helper for uploading a large file to Azure storage.
 struct AzureUploader {
-    client_builder: Arc<dyn ContainerBuilder>,
+    container_client: Arc<BlobContainerClient>,
     name: String,
 
     storage_class: Option<AccessTier>,
@@ -276,9 +254,9 @@ struct AzureUploader {
 impl AzureUploader {
     /// Creates a new uploader with a given target location and upload
     /// configuration.
-    fn new(client_builder: Arc<dyn ContainerBuilder>, config: &Config, name: String) -> Self {
+    fn new(container_client: Arc<BlobContainerClient>, config: &Config, name: String) -> Self {
         AzureUploader {
-            client_builder,
+            container_client,
             name,
 
             storage_class: Self::parse_storage_class(none_to_empty(
@@ -290,7 +268,12 @@ impl AzureUploader {
     }
 
     fn parse_storage_class(storage_class: String) -> Option<AccessTier> {
-        AccessTier::from_str(storage_class.as_str()).ok()
+        // The supported SDK accepts unknown values, including the empty string.
+        // Preserve the legacy behavior of omitting absent or unrecognized tiers.
+        match AccessTier::from_str(storage_class.as_str()).ok()? {
+            AccessTier::UnknownValue(_) => None,
+            tier => Some(tier),
+        }
     }
 
     /// Executes the upload process.
@@ -316,17 +299,16 @@ impl AzureUploader {
     /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         let res = timeout(Self::get_timeout(), async {
-            let builder = self
-                .client_builder
-                .get_client()
-                .await
-                .map_err(|e| e.to_string())?
+            let client = self
+                .container_client
                 .blob_client(&self.name)
-                .put_block_blob(data.to_vec());
-
-            let builder = self.adjust_put_builder(builder);
-
-            builder.await?;
+                .block_blob_client();
+            client
+                .upload(
+                    azure_core::Bytes::copy_from_slice(data).into(),
+                    Some(self.upload_options(data.len())),
+                )
+                .await?;
             Ok(())
         })
         .await;
@@ -344,205 +326,28 @@ impl AzureUploader {
         }
     }
 
-    #[inline]
-    fn adjust_put_builder(&self, builder: PutBlockBlobBuilder) -> PutBlockBlobBuilder {
-        // the encryption scope and the access tier can not be both in the HTTP headers
+    fn upload_options(&self, content_length: usize) -> BlockBlobClientUploadOptions<'static> {
+        let mut options = BlockBlobClientUploadOptions {
+            // Preserve a single Put Blob request, including for empty blobs. Use the
+            // buffered body's actual length rather than the caller's estimate.
+            partition_size: NonZero::new((content_length as u64).max(1)),
+            parallel: NonZero::new(1),
+            ..Default::default()
+        };
         if let Some(scope) = &self.encryption_scope {
-            return builder.encryption_scope(scope.deref().clone());
+            options.encryption_scope = Some(scope.to_string());
+        } else if let Some(key) = &self.encryption_customer {
+            options.encryption_key = Some(key.encryption_key.clone());
+            options.encryption_key_sha256 = Some(key.encryption_key_sha256.clone());
+            options.encryption_algorithm = Some(EncryptionAlgorithmType::Aes256);
+        } else {
+            options.tier = self.storage_class.clone();
         }
-
-        // the encryption customer provided key and the access tier can not be both in
-        // the HTTP headers
-        if let Some(key) = &self.encryption_customer {
-            return builder.encryption_key::<(String, String)>(key.clone().into());
-        }
-
-        if let Some(tier) = self.storage_class {
-            return builder.access_tier(tier);
-        }
-
-        builder
+        options
     }
 
     fn get_timeout() -> Duration {
         CONNECTION_TIMEOUT
-    }
-}
-
-// if use azure ad to access the azure blob,
-// it need to update the token at regular intervals,
-// so wrap the client builder
-#[async_trait]
-trait ContainerBuilder: 'static + Send + Sync {
-    async fn get_client(&self) -> io::Result<Arc<ContainerClient>>;
-}
-
-/// Load the container client by the default behavior of the Azure SDK.
-///
-/// Also see [`DefaultAzureCredential`].
-struct DefaultContainerBuilder {
-    config: Config,
-    cred: Arc<DefaultAzureCredential>,
-}
-
-impl DefaultContainerBuilder {
-    fn new(config: Config) -> Self {
-        Self {
-            config,
-            cred: Arc::<DefaultAzureCredential>::default(),
-        }
-    }
-}
-
-#[async_trait]
-impl ContainerBuilder for DefaultContainerBuilder {
-    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
-        let account_name = self.config.get_account_name()?;
-        let bucket = (*self.config.bucket.bucket).to_owned();
-
-        let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
-        let scopes = vec![&token_resource as &str];
-        let token = self
-            .cred
-            .get_token(&scopes)
-            .await
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("failed to get token from Azure AD, err: {:?}", e),
-                )
-            })?
-            .token;
-
-        let client = BlobServiceClient::new(
-            account_name,
-            StorageCredentials::bearer_token(token.secret().to_string()),
-        )
-        .container_client(bucket);
-        Ok(Arc::new(client))
-    }
-}
-
-struct SharedKeyContainerBuilder {
-    container_client: Arc<ContainerClient>,
-}
-
-#[async_trait]
-impl ContainerBuilder for SharedKeyContainerBuilder {
-    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
-        Ok(self.container_client.clone())
-    }
-}
-
-type TokenCacheType = Arc<RwLock<Option<(AccessToken, Arc<ContainerClient>)>>>;
-struct TokenCredContainerBuilder {
-    account_name: String,
-    container_name: String,
-    token_resource: String,
-    token_cred: Arc<ClientSecretCredential>,
-    token_cache: TokenCacheType,
-
-    modify_place: Arc<Mutex<bool>>,
-}
-
-impl TokenCredContainerBuilder {
-    fn new(
-        account_name: String,
-        container_name: String,
-        token_resource: String,
-        token_cred: Arc<ClientSecretCredential>,
-    ) -> Self {
-        Self {
-            account_name,
-            container_name,
-            token_resource,
-            token_cred,
-            token_cache: Arc::new(RwLock::new(None)),
-
-            modify_place: Arc::new(Mutex::new(true)),
-        }
-    }
-}
-
-// if the token only has 5 minutes left.
-// Threads will try to modify it without blocked: try_lock
-// The thread doesn't get the lock will continue to use the token.
-const TOKEN_UPDATE_LEFT_TIME_MINS: i64 = 5;
-// if the token only has 2 minutes left.
-// Threads will try to modify it with blocked: lock
-const TOKEN_EXPIRE_LEFT_TIME_MINS: i64 = 2;
-
-#[async_trait]
-impl ContainerBuilder for TokenCredContainerBuilder {
-    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
-        // only the thread get the modify_lock can update the token,
-        // so that this thread can get the token before lock wirte-lock
-        // avoid to block other threads too much time.
-        let mut modify_lock = None;
-        {
-            let token_response = self.token_cache.read().unwrap();
-            if let Some(ref t) = *token_response {
-                let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
-                // keep token updated 5 minutes before it expires
-                if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
-                    return Ok(t.1.clone());
-                }
-
-                if interval > TOKEN_EXPIRE_LEFT_TIME_MINS {
-                    // there still have time to use the token,
-                    // and only need one thread to update token.
-                    if let Ok(l) = self.modify_place.try_lock() {
-                        modify_lock = Some(l);
-                    } else {
-                        // otherwise, continue to use the current token
-                        return Ok(t.1.clone());
-                    }
-                }
-            }
-        } // release the read lock
-
-        // give up getting the client from cache, try update it
-        if modify_lock.is_none() {
-            modify_lock = Some(self.modify_place.lock().await);
-        }
-
-        if let Some(_lock) = modify_lock {
-            // check whether there is another thread already updates the token.
-            {
-                let token_response = self.token_cache.read().unwrap();
-                if let Some(ref t) = *token_response {
-                    let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
-                    // token is already updated
-                    if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
-                        return Ok(t.1.clone());
-                    }
-                }
-            }
-            // release read lock, the thread still have modify lock,
-            // so no other threads can write the token_cache, so read lock is not blocked.
-            let scopes = vec![&self.token_resource as &str];
-            let token =
-                self.token_cred.get_token(&scopes).await.map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e))
-                })?;
-            let blob_service = BlobServiceClient::new(
-                self.account_name.clone(),
-                StorageCredentials::bearer_token(token.token.secret().to_string()),
-            );
-            let storage_client =
-                Arc::new(blob_service.container_client(self.container_name.clone()));
-
-            {
-                let mut token_response = self.token_cache.write().unwrap();
-                *token_response = Some((token, storage_client.clone()));
-            }
-            Ok(storage_client)
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "failed to get either modify_lock or client",
-            ))
-        }
     }
 }
 
@@ -551,7 +356,7 @@ const STORAGE_NAME: &str = "azure";
 #[derive(Clone)]
 pub struct AzureStorage {
     config: Config,
-    client_builder: Arc<dyn ContainerBuilder>,
+    container_client: Arc<BlobContainerClient>,
 }
 
 impl AzureStorage {
@@ -559,129 +364,74 @@ impl AzureStorage {
         Self::new(Config::from_input(input)?)
     }
 
-    /// Mock a dummpy AzureStorage with a shared key Config for
-    /// testing by Azurite tool.
-    ///
-    /// This function should only be used for testing Blob with a
-    /// local Azurite server.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    fn from_dummy_input(input: InputConfig) -> io::Result<Self> {
-        let config = Config::from_input(input)?;
-        let bucket = (*config.bucket.bucket).to_owned();
-        Ok(AzureStorage {
-            config,
-            client_builder: Arc::new(SharedKeyContainerBuilder {
-                container_client: Arc::new(
-                    ClientBuilder::emulator()
-                        .blob_service_client()
-                        .container_client(bucket),
-                ),
-            }),
-        })
+    pub fn new(config: Config) -> io::Result<AzureStorage> {
+        Self::new_with_options(config, blob_client_options()?)
     }
 
-    pub fn new(config: Config) -> io::Result<AzureStorage> {
+    fn new_with_options(
+        config: Config,
+        mut client_options: ClientOptions,
+    ) -> io::Result<AzureStorage> {
         Self::check_config(&config)?;
-
         let account_name = config.get_account_name()?;
-        let bucket = (*config.bucket.bucket).to_owned();
-        // priority:
-        //   explicit sas token > explicit shared key > env Azure AD > env shared key
-        if let Some(sas_token) = config.sas_token.as_ref() {
-            let token = sas_token.deref();
-            let storage_credentials = StorageCredentials::sas_token(token).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid configurations for SAS token, err: {}", e),
-                )
-            })?;
-            let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
-            );
-
-            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
-            Ok(AzureStorage {
-                config,
-                client_builder,
-            })
-        } else if let Some(connection_string) = config.parse_plaintext_account_url() {
-            let storage_credentials = ConnectionString::new(&connection_string)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid configurations for SharedKey, err: {}", e),
-                    )
-                })?
-                .storage_credentials()
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid credentials for blob, err: {}", e),
-                    )
-                })?;
-            let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
-            );
-
-            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
-            Ok(AzureStorage {
-                config,
-                client_builder,
-            })
-        } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
-            let cred = ClientSecretCredential::new(
-                azure_core::new_http_client(),
-                credential_info.client_id.to_string(),
-                credential_info.client_secret.secret().clone(),
-                credential_info.tenant_id.clone(),
-                Default::default(),
-            );
-
-            let client_builder = Arc::new(TokenCredContainerBuilder::new(
-                account_name,
-                bucket,
-                token_resource,
-                Arc::new(cred),
+        let endpoint = config
+            .bucket
+            .endpoint
+            .as_ref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("https://{}.blob.core.windows.net", account_name));
+        let mut service_url = url::Url::parse(&endpoint).map_err(io::Error::other)?;
+        let credential: Option<Arc<dyn TokenCredential>>;
+        // Keep the existing precedence: SAS, explicit shared key, environment
+        // client secret, environment shared key, then the default identity chain.
+        if let Some(sas_token) = &config.sas_token {
+            service_url
+                .query_pairs_mut()
+                .extend_pairs(url::form_urlencoded::parse(
+                    sas_token.trim_start_matches('?').as_bytes(),
+                ));
+            credential = None;
+        } else if let (Some(_), Some(shared_key)) = (&config.account_name, &config.shared_key) {
+            client_options.per_try_policies.push(Arc::new(
+                SharedKeyPolicy::new(account_name.clone(), shared_key.to_string())
+                    .map_err(io::Error::other)?,
             ));
-            // get token later
-            Ok(AzureStorage {
-                config,
-                client_builder,
-            })
-        } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
-            let storage_credentials = ConnectionString::new(&connection_string)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invald configurations for SharedKey from ENV, err: {}", e),
-                    )
-                })?
-                .storage_credentials()
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid credentials for blob, err: {}", e),
-                    )
-                })?;
-            let container_client = Arc::new(
-                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            credential = None;
+        } else if let Some(info) = &config.credential_info {
+            credential = Some(
+                ClientSecretCredential::new(
+                    &info.tenant_id,
+                    info.client_id.clone(),
+                    info.client_secret.clone(),
+                    None,
+                )
+                .map_err(io::Error::other)?,
             );
-
-            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
-            Ok(AzureStorage {
-                config,
-                client_builder,
-            })
+        } else if let (Some(env_account), Some(shared_key)) =
+            (&config.env_account_name, &config.env_shared_key)
+        {
+            client_options.per_try_policies.push(Arc::new(
+                SharedKeyPolicy::new(env_account.to_string(), shared_key.to_string())
+                    .map_err(io::Error::other)?,
+            ));
+            credential = None;
         } else {
-            // When we cannot detect any user-specified configuration, fall back to the SDK
-            // default.
-            Ok(AzureStorage {
-                config: config.clone(),
-                client_builder: Arc::new(DefaultContainerBuilder::new(config)),
-            })
+            credential = Some(DefaultAzureCredential::new().map_err(io::Error::other)?);
         }
+        let client = BlobServiceClient::new(
+            service_url,
+            credential,
+            Some(BlobServiceClientOptions {
+                client_options,
+                ..Default::default()
+            }),
+        )
+        .map_err(io::Error::other)?;
+        let container_client = Arc::new(client.blob_container_client(&config.bucket.bucket));
+        Ok(Self {
+            config,
+            container_client,
+        })
     }
 
     fn check_config(config: &Config) -> io::Result<()> {
@@ -731,27 +481,22 @@ impl AzureStorage {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {
-            let blob_client = self.client_builder.get_client().await?.blob_client(name);
-
-            let builder = if let Some(r) = range {
-                blob_client.get().range(r)
-            } else {
-                blob_client.get()
+            let blob_client = self.container_client.blob_client(&name);
+            let mut options = BlobClientDownloadOptions {
+                range: range.map(Into::into),
+                // Preserve the old SDK's sequential 16 MiB range reads. File-level
+                // concurrency is already managed by the backup/restore callers.
+                parallel: NonZero::new(1),
+                partition_size: NonZero::new(16 * 1024 * 1024),
+                ..Default::default()
             };
-
-            let builder = if let Some(key) = &self.config.encryption_customer {
-                builder.encryption_key::<(String, String)>(key.clone().into())
-            } else {
-                builder
-            };
-
-            let mut chunk: Vec<u8> = vec![];
-            let mut stream = builder.into_stream();
-            while let Some(value) = stream.next().await {
-                let value = value?.data.collect().await?;
-                chunk.extend(&value);
+            if let Some(key) = &self.config.encryption_customer {
+                options.encryption_key = Some(key.encryption_key.clone());
+                options.encryption_key_sha256 = Some(key.encryption_key_sha256.clone());
+                options.encryption_algorithm = Some(EncryptionAlgorithmType::Aes256);
             }
-            azure_core::Result::Ok(chunk)
+            let response = blob_client.download(Some(options)).await?;
+            response.body.collect().await
         };
         let stream = stream::once(
             t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
@@ -777,7 +522,7 @@ impl BlobStorage for AzureStorage {
         let name = self.maybe_prefix_key(name);
         debug!("save file to Azure storage"; "key" => %name);
 
-        let uploader = AzureUploader::new(self.client_builder.clone(), &self.config, name);
+        let uploader = AzureUploader::new(self.container_client.clone(), &self.config, name);
 
         uploader.run(&mut reader, content_length).await
     }
@@ -810,9 +555,451 @@ impl DeletableStorage for AzureStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use azure_core::http::{
+        AsyncRawResponse, Body, HttpClient, Method, Request, Transport, headers::Headers,
+    };
     use futures::AsyncReadExt;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct MockTransport {
+        requests: Mutex<Vec<Request>>,
+    }
+
+    #[async_trait]
+    impl HttpClient for MockTransport {
+        async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
+            self.requests.lock().unwrap().push(request.clone());
+            let mut headers = Headers::new();
+            if request.method() == Method::Put {
+                Ok(AsyncRawResponse::from_bytes(201.into(), headers, ""))
+            } else {
+                headers.insert("content-length", "4");
+                headers.insert("content-range", "bytes 20-23/100");
+                headers.insert("etag", "\"test-version\"");
+                Ok(AsyncRawResponse::from_bytes(206.into(), headers, "data"))
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct RangeDownloadTransport {
+        data: azure_core::Bytes,
+        requests: Mutex<Vec<Request>>,
+        active_requests: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpClient for RangeDownloadTransport {
+        async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
+            assert_eq!(request.method(), Method::Get);
+            assert_eq!(
+                self.active_requests.fetch_add(1, Ordering::SeqCst),
+                0,
+                "a range request started before the previous response body was consumed"
+            );
+            self.requests.lock().unwrap().push(request.clone());
+            let (start, end) = request
+                .headers()
+                .get_optional_str(&"range".into())
+                .unwrap()
+                .strip_prefix("bytes=")
+                .unwrap()
+                .split_once('-')
+                .unwrap();
+            let start: usize = start.parse().unwrap();
+            let end = (end.parse::<usize>().unwrap() + 1).min(self.data.len());
+            let body = self.data.slice(start..end);
+            let mut headers = Headers::new();
+            headers.insert("content-length", body.len().to_string());
+            headers.insert(
+                "content-range",
+                format!("bytes {}-{}/{}", start, end - 1, self.data.len()),
+            );
+            headers.insert("etag", "\"test-version\"");
+            let active_requests = self.active_requests.clone();
+            Ok(AsyncRawResponse::new(
+                206.into(),
+                headers,
+                Box::pin(stream::once(async move {
+                    // Keep the response in flight while other SDK tasks can run.
+                    tokio::task::yield_now().await;
+                    active_requests.fetch_sub(1, Ordering::SeqCst);
+                    Ok(body)
+                })),
+            ))
+        }
+    }
+
+    fn mock_config() -> Config {
+        let mut bucket = BucketConf::default(StringNonEmpty::static_str("container"));
+        bucket.endpoint = Some(StringNonEmpty::static_str("https://storage.example"));
+        bucket.prefix = Some(StringNonEmpty::static_str("backup/prefix"));
+        Config {
+            bucket,
+            account_name: Some(StringNonEmpty::static_str("account")),
+            shared_key: Some(StringNonEmpty::static_str("c2VjcmV0")),
+            sas_token: None,
+            credential_info: None,
+            env_account_name: None,
+            env_shared_key: None,
+            encryption_scope: None,
+            encryption_customer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upload_survives_sdk_read_timeout_and_obeys_operation_deadline() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+            sync::oneshot,
+        };
+
+        for elapsed in [
+            Duration::from_secs(61),
+            CONNECTION_TIMEOUT + Duration::from_secs(1),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (received_tx, received_rx) = oneshot::channel();
+            let (respond_tx, respond_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.ends_with(b"\r\n\r\ndata") {
+                        break;
+                    }
+                }
+                received_tx.send(()).unwrap();
+                if respond_rx.await.unwrap() {
+                    socket.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                }
+            });
+            let mut config = mock_config();
+            config.bucket.endpoint = StringNonEmpty::opt(format!("http://{address}"));
+            let storage = AzureStorage::new(config).unwrap();
+            let uploader =
+                AzureUploader::new(storage.container_client, &storage.config, "file".to_owned());
+            let upload =
+                tokio::spawn(
+                    async move { uploader.upload(b"data").await.map_err(io::Error::from) },
+                );
+
+            // Wait for a real HTTP request before advancing only Tokio's clock.
+            timeout(Duration::from_secs(5), received_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::pause();
+            tokio::time::advance(elapsed).await;
+            tokio::task::yield_now().await;
+            tokio::time::resume();
+            let should_succeed = elapsed < CONNECTION_TIMEOUT;
+            respond_tx.send(should_succeed).unwrap();
+            let result = timeout(Duration::from_secs(5), upload)
+                .await
+                .unwrap()
+                .unwrap();
+            if should_succeed {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upload_transport_error_omits_sas_signature() {
+        use azure_core::http::RetryOptions;
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            assert_ne!(socket.read(&mut buffer).await.unwrap(), 0);
+            socket
+                .write_all(b"invalid HTTP response\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let mut config = mock_config();
+        config.bucket.endpoint = StringNonEmpty::opt(format!("http://{address}"));
+        config.sas_token = StringNonEmpty::opt("sig=secret%2Bsignature&sp=w".to_owned());
+        let storage = AzureStorage::new_with_options(
+            config,
+            ClientOptions {
+                retry: RetryOptions::none(),
+                ..blob_client_options().unwrap()
+            },
+        )
+        .unwrap();
+        let error = timeout(
+            Duration::from_secs(5),
+            storage.put("file", PutResource(Box::new(&b"data"[..])), 4),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        for message in [error.to_string(), format!("{error:?}")] {
+            assert!(message.contains("upload block failed"));
+            assert!(!message.contains("sig="), "{message}");
+            assert!(!message.contains("signature"), "{message}");
+            assert!(!message.contains(&address.to_string()), "{message}");
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_blob_upload_uses_single_put_for_empty_and_large_bodies() {
+        for size in [0, 4 * 1024 * 1024, 4 * 1024 * 1024 + 1, 17 * 1024 * 1024] {
+            let data = vec![42; size];
+            let transport = Arc::new(MockTransport::default());
+            let storage = AzureStorage::new_with_options(
+                mock_config(),
+                ClientOptions {
+                    transport: Some(Transport::new(transport.clone())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            // Deliberately underestimate the length: only the actual body size
+            // should determine whether the SDK uses a single Put Blob request.
+            storage
+                .put("file", PutResource(Box::new(data.as_slice())), 0)
+                .await
+                .unwrap();
+            let requests = transport.requests.lock().unwrap();
+            assert_eq!(
+                requests.len(),
+                1,
+                "unexpected request count for {size} bytes"
+            );
+            let request = &requests[0];
+            assert_eq!(request.method(), Method::Put);
+            assert!(request.url().query_pairs().all(|(name, _)| name != "comp"));
+            assert_eq!(
+                request.headers().get_optional_str(&"x-ms-blob-type".into()),
+                Some("BlockBlob")
+            );
+            match request.body() {
+                Body::Bytes(bytes) => assert_eq!(bytes.as_ref(), data.as_slice()),
+                Body::SeekableStream(_) => panic!("expected the buffered upload body"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blob_download_reads_sequential_16_mib_ranges() {
+        let chunk_size = 16 * 1024 * 1024;
+        let data = azure_core::Bytes::from(
+            (0..2 * chunk_size + 37)
+                .map(|i| (i % 251) as u8)
+                .collect::<Vec<_>>(),
+        );
+        for range in [None, Some((chunk_size - 7, chunk_size + 19))] {
+            let transport = Arc::new(RangeDownloadTransport {
+                data: data.clone(),
+                requests: Mutex::new(Vec::new()),
+                active_requests: Arc::new(AtomicUsize::new(0)),
+            });
+            let storage = AzureStorage::new_with_options(
+                mock_config(),
+                ClientOptions {
+                    transport: Some(Transport::new(transport.clone())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let (mut reader, expected, expected_ranges) = match range {
+                None => (
+                    storage.get("file"),
+                    data.as_ref(),
+                    vec![
+                        format!("bytes=0-{}", chunk_size - 1),
+                        format!("bytes={}-{}", chunk_size, 2 * chunk_size - 1),
+                        format!("bytes={}-{}", 2 * chunk_size, data.len() - 1),
+                    ],
+                ),
+                Some((offset, len)) => (
+                    storage.get_part("file", offset as u64, len as u64),
+                    &data[offset..offset + len],
+                    vec![
+                        format!("bytes={}-{}", offset, offset + chunk_size - 1),
+                        format!("bytes={}-{}", offset + chunk_size, offset + len - 1),
+                    ],
+                ),
+            };
+            let mut downloaded = Vec::new();
+            reader.read_to_end(&mut downloaded).await.unwrap();
+            assert_eq!(downloaded, expected);
+            assert_eq!(transport.active_requests.load(Ordering::SeqCst), 0);
+            let requests = transport.requests.lock().unwrap();
+            let ranges: Vec<_> = requests
+                .iter()
+                .map(|request| request.headers().get_optional_str(&"range".into()).unwrap())
+                .collect();
+            assert_eq!(ranges, expected_ranges);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blob_upload_omits_absent_or_unknown_access_tier() {
+        for tier in [None, Some(StringNonEmpty::static_str("unknown"))] {
+            let mut config = mock_config();
+            config.bucket.storage_class = tier;
+            let transport = Arc::new(MockTransport::default());
+            let storage = AzureStorage::new_with_options(
+                config,
+                ClientOptions {
+                    transport: Some(Transport::new(transport.clone())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            storage
+                .put("file", PutResource(Box::new(&b"data"[..])), 4)
+                .await
+                .unwrap();
+            let requests = transport.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0]
+                    .headers()
+                    .get_optional_str(&"x-ms-access-tier".into())
+                    .is_none()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blob_upload_and_range_read_preserve_customer_encryption() {
+        let mut config = mock_config();
+        config.encryption_customer = Some(EncryptionCustomer {
+            encryption_key: base64::encode([7; 32]),
+            encryption_key_sha256: base64::encode([8; 32]),
+        });
+        let transport = Arc::new(MockTransport::default());
+        let storage = AzureStorage::new_with_options(
+            config.clone(),
+            ClientOptions {
+                transport: Some(Transport::new(transport.clone())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        storage
+            .put("file", PutResource(Box::new(&b"data"[..])), 4)
+            .await
+            .unwrap();
+        let mut bytes = Vec::new();
+        storage
+            .get_part("file", 20, 4)
+            .read_to_end(&mut bytes)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"data");
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in requests.iter() {
+            assert_eq!(request.url().host_str(), Some("storage.example"));
+            // The supported SDK escapes separators inside the blob name.
+            assert_eq!(request.url().path(), "/container/backup%2Fprefix%2Ffile");
+            let headers = request.headers();
+            assert_eq!(
+                headers.get_optional_str(&"x-ms-encryption-key".into()),
+                Some(
+                    config
+                        .encryption_customer
+                        .as_ref()
+                        .unwrap()
+                        .encryption_key
+                        .as_str()
+                )
+            );
+            assert_eq!(
+                headers.get_optional_str(&"x-ms-encryption-algorithm".into()),
+                Some("AES256")
+            );
+            assert!(
+                headers
+                    .get_optional_str(&"authorization".into())
+                    .unwrap()
+                    .starts_with("SharedKey account:")
+            );
+            assert!(
+                headers
+                    .get_optional_str(&"x-ms-access-tier".into())
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            requests[1].headers().get_optional_str(&"range".into()),
+            Some("bytes=20-23")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_blob_sas_precedes_shared_key_and_preserves_access_tier() {
+        let mut config = mock_config();
+        config.sas_token = Some(StringNonEmpty::static_str("?sig=test%2Bsignature&sp=rw"));
+        config.shared_key = Some(StringNonEmpty::static_str("invalid-base64-key"));
+        config.bucket.storage_class = Some(StringNonEmpty::static_str("Cool"));
+        let transport = Arc::new(MockTransport::default());
+        let storage = AzureStorage::new_with_options(
+            config,
+            ClientOptions {
+                transport: Some(Transport::new(transport.clone())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        storage
+            .put("file", PutResource(Box::new(&b"data"[..])), 4)
+            .await
+            .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(
+            request
+                .url()
+                .query_pairs()
+                .find(|(name, _)| name == "sig")
+                .unwrap()
+                .1,
+            "test+signature"
+        );
+        assert!(
+            request
+                .headers()
+                .get_optional_str(&"authorization".into())
+                .is_none()
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get_optional_str(&"x-ms-access-tier".into()),
+            Some("Cool")
+        );
+    }
 
     #[test]
     fn test_url_of_backend() {
@@ -893,7 +1080,6 @@ mod tests {
     #[tokio::test]
     // test in Azurite emulator
     async fn test_azblob_storage() {
-        use futures_util::stream;
         let mut input = InputConfig::default();
         input.set_account_name("devstoreaccount1".to_owned());
         input.set_bucket("test".to_owned());
@@ -901,27 +1087,43 @@ mod tests {
         input.set_endpoint("http://127.0.0.1:10000/devstoreaccount1".to_owned());
         input.set_prefix("backup 01/prefix/".to_owned());
 
-        let storage = AzureStorage::from_dummy_input(input).unwrap();
+        let storage = AzureStorage::from_input(input).unwrap();
         assert_eq!(storage.maybe_prefix_key("t"), "backup 01/prefix/t");
-        let mut magic_contents = String::new();
-        for _ in 0..4096 {
-            // 4 KiB
-            magic_contents
-                .push_str("qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890\n");
-        }
-        let size = magic_contents.len() as u64;
-        let stream = stream::once(async move { Ok(magic_contents) })
-            .boxed()
-            .into_async_read();
-        storage
-            .put("t", PutResource(Box::new(stream)), size)
-            .await
-            .unwrap();
+        // Reuse the blob name to check replacement by smaller and empty bodies,
+        // as well as SharedKey signing above both SDK transfer thresholds.
+        let chunk_size = 16 * 1024 * 1024;
+        for size in [2 * chunk_size + 37, 4 * 1024 * 1024 + 1, 0] {
+            let data: Vec<_> = (0..size).map(|i| (i % 251) as u8).collect();
+            storage
+                .put("t", PutResource(Box::new(data.as_slice())), size as u64)
+                .await
+                .unwrap();
 
-        let mut reader = storage.get("t");
-        let mut buf = Vec::new();
-        let get_size = reader.read_to_end(&mut buf).await.unwrap() as u64;
-        assert_eq!(get_size, size);
+            let mut buf = Vec::new();
+            storage.get("t").read_to_end(&mut buf).await.unwrap();
+            assert_eq!(buf, data);
+
+            if size > 0 {
+                let mut part = Vec::new();
+                storage
+                    .get_part("t", 123, 321)
+                    .read_to_end(&mut part)
+                    .await
+                    .unwrap();
+                assert_eq!(part, data[123..444]);
+            }
+            if size > 2 * chunk_size {
+                let offset = chunk_size - 7;
+                let len = chunk_size + 19;
+                let mut part = Vec::new();
+                storage
+                    .get_part("t", offset as u64, len as u64)
+                    .read_to_end(&mut part)
+                    .await
+                    .unwrap();
+                assert_eq!(part, data[offset..offset + len]);
+            }
+        }
     }
 
     #[test]
