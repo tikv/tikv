@@ -180,9 +180,10 @@ impl RegionChangeObserver for BackupStreamObserver {
                 );
             }
             RegionChangeEvent::Update(_) => {
-                // Runs on the apply thread, right when the new range takes effect. Narrow the
-                // subscription's range now so a resolve running before `RefreshResolver` is
-                // handled doesn't claim the range this region just gave up.
+                // Runs on the peer thread, after the split applied but before the new child
+                // peers exist (so before any child write). Narrow the subscription's range now
+                // so a resolve running before `RefreshResolver` is handled doesn't claim the
+                // range this region just gave up.
                 if let Some(subs) = self.subs.get() {
                     subs.narrow_range_on_version_change(ctx.region());
                 }
@@ -363,9 +364,14 @@ mod tests {
         let sub = subs.get_subscription_of(42).unwrap();
         assert_eq!(sub.value().meta.get_end_key(), b"0005");
         // ...and the refresh op is still sent.
-        assert_matches!(
-            rx.recv_timeout(Duration::from_millis(20)),
-            Ok(Some(Task::ModifyObserve(ObserveOp::RefreshResolver { region }))) if region.id == 42
+        let task = rx.recv_timeout(Duration::from_millis(20));
+        assert!(
+            matches!(
+                &task,
+                Ok(Some(Task::ModifyObserve(ObserveOp::RefreshResolver { region }))) if region.id == 42
+            ),
+            "it is {:?}",
+            task
         );
     }
 

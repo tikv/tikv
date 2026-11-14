@@ -371,7 +371,16 @@ impl SubscriptionTracer {
         let old_epoch = subscription.meta.get_region_epoch();
         let new_epoch = new_region.get_region_epoch();
         if old_epoch.version == new_epoch.version {
-            subscription.meta = new_region.clone();
+            let mut meta = new_region.clone();
+            // The event may be stale: `narrow_range_on_version_change` can have shrunk the
+            // range after it was queued (e.g. a conf change followed by a split, both
+            // handled before this refresh runs). At the same version the narrowed range is
+            // the truth, so never widen it back.
+            if utils::region_encloses(&meta, &subscription.meta) {
+                meta.set_start_key(subscription.meta.get_start_key().to_vec());
+                meta.set_end_key(subscription.meta.get_end_key().to_vec());
+            }
+            subscription.meta = meta;
             return true;
         }
 
@@ -381,7 +390,7 @@ impl SubscriptionTracer {
     /// Synchronously narrow the key range recorded in the subscription's meta
     /// after the region shrank (e.g. a split), without touching its epoch.
     ///
-    /// The observer learns about a split on the apply thread, while the
+    /// The observer learns about a split on the peer FSM thread, while the
     /// subscription manager only learns it later via `RefreshResolver`. Until
     /// then `meta` would keep claiming the pre-split range, and a resolve in
     /// that window would report a resolved ts for keys this region no longer
@@ -729,6 +738,31 @@ mod test {
         assert!(subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"b")));
         assert_eq!(meta(&subs), (b"a".to_vec(), b"b".to_vec(), 1));
         assert!(!subs.try_update_region(&region_of(1, 2, b"a", b"b")));
+    }
+
+    #[test]
+    fn test_stale_same_version_refresh_does_not_widen() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+        let range = |subs: &SubscriptionTracer| {
+            let sub = subs.get_subscription_of(1).unwrap();
+            let m = &sub.value().meta;
+            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
+        };
+
+        // A split narrows the range, then a stale conf-change refresh (same version as
+        // the subscription, queued before the split) is handled.
+        assert!(subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"b")));
+        let mut stale = region_of(1, 1, b"a", b"c");
+        stale.mut_region_epoch().set_conf_ver(7);
+        assert!(subs.try_update_region(&stale));
+        assert_eq!(range(&subs), (b"a".to_vec(), b"b".to_vec()));
+        // Other fields are still taken from the event.
+        let sub = subs.get_subscription_of(1).unwrap();
+        assert_eq!(sub.value().meta.get_region_epoch().conf_ver, 7);
     }
 
     #[test]
