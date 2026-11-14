@@ -199,8 +199,11 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer(Arc::new(DashMap::new()), txn_status_cache.clone());
+        observer.set_subscriptions(subs.clone());
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
+        let mut checkpoint_mgr = CheckpointManager::default();
+        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 range_router.clone(),
@@ -219,10 +222,9 @@ where
             (config.num_threads.div_ceil(2)).max(1),
             resolver,
             resolved_ts_config.advance_ts_interval.0,
+            Arc::clone(&checkpoint_mgr.resolved_ts),
         );
         pool.spawn(root!(op_loop));
-        let mut checkpoint_mgr = CheckpointManager::default();
-        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let ep = Endpoint {
             initial_scan_semaphore,
             meta_client,
@@ -328,7 +330,7 @@ where
         tracing_active_tree::frame!("on_fatal_error_of_task"; f; %err, %task)
     }
 
-    fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
+    fn on_fatal_error(&mut self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
         let tasks = self.range_router.select_task(select.reference());
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
@@ -609,7 +611,7 @@ where
         }; from_idx, to_idx, region, current_term = term));
     }
 
-    pub fn handle_watch_task(&self, op: TaskOp) {
+    pub fn handle_watch_task(&mut self, op: TaskOp) {
         match op {
             TaskOp::AddTask(task) => {
                 self.on_register(task);
@@ -806,7 +808,7 @@ where
         ReadableDuration::hours(CHECKPOINT_SAFEPOINT_TTL_IF_ERROR).0
     }
 
-    pub fn on_pause(&self, task: &str) {
+    pub fn on_pause(&mut self, task: &str) {
         self.unload_task(task);
 
         metrics::update_task_status(TaskStatus::Paused, task);
@@ -832,7 +834,7 @@ where
         }
     }
 
-    pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+    pub fn on_unregister(&mut self, task_name: &str) -> Option<StreamBackupTaskInfo> {
         let info = self.unload_task(task_name);
         self.clean_pause_guard_id_for_task(task_name);
         self.pool.block_on(remove_flush_safe_point(
@@ -858,14 +860,24 @@ where
 
     /// unload a task from memory: this would stop observe the changes required
     /// by the task temporarily.
-    fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
+    fn unload_task(&mut self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
+
+        // The resolved ts corresponds to the temp files dropped below, so we need to clear it to
+        // avoid inheritance from it when the backup task resumes.
+        self.checkpoint_mgr.reset_for_unload();
 
         // for now, we support one concurrent task only.
         // so simply clear all info would be fine.
         self.observer.ranges.wl().clear();
+        // Unregister the task before clearing `subs`. The subscription manager
+        // registers a subscription and then checks the task is still
+        // registered, dropping the subscription if not. This order guarantees
+        // that one of the two sees the other: either `subs.clear()` removes the
+        // new subscription, or the manager sees the task is gone.
+        let info = router.unregister_task(task);
         self.subs.clear();
-        router.unregister_task(task)
+        info
     }
 
     /// Obtain the current `min_ts` and `pd_tso` from PD.
@@ -1272,8 +1284,10 @@ where
             RegionCheckpointOperation::Resolved {
                 checkpoints,
                 start_time,
+                generation,
             } => {
-                self.checkpoint_mgr.resolve_regions(checkpoints);
+                self.checkpoint_mgr
+                    .resolve_regions_of_generation(generation, checkpoints);
                 metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
             }
             RegionCheckpointOperation::FlushWith(checkpoints) => {
@@ -1339,6 +1353,7 @@ where
                     }
                 };
                 let start_time = Instant::now();
+                let generation = self.checkpoint_mgr.generation;
                 // We need to reschedule the `Resolve` task to queue, because the subscription
                 // is asynchronous -- there may be transactions committed before
                 // the min_ts we prepared but haven't been observed yet.
@@ -1346,12 +1361,17 @@ where
                     self.scheduler,
                     Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolve {
                         min_ts,
-                        start_time
+                        start_time,
+                        generation,
                     })
                 );
             }
             #[allow(clippy::blocks_in_conditions)]
-            RegionCheckpointOperation::Resolve { min_ts, start_time } => {
+            RegionCheckpointOperation::Resolve {
+                min_ts,
+                start_time,
+                generation,
+            } => {
                 let sched = self.scheduler.clone();
                 try_send!(
                     self.scheduler,
@@ -1361,6 +1381,7 @@ where
                                 Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved {
                                     checkpoints: resolved.take_resolve_result(),
                                     start_time,
+                                    generation,
                                 });
                             try_send!(sched, t);
                         }),
@@ -1445,10 +1466,15 @@ pub enum RegionCheckpointOperation {
     Resolve {
         min_ts: TimeStamp,
         start_time: Instant,
+        /// The `CheckpointManager` generation when this resolve was prepared.
+        generation: u64,
     },
     Resolved {
         checkpoints: Vec<ResolveResult>,
         start_time: Instant,
+        /// Results of an older generation are dropped: the task was unloaded
+        /// while they were in flight.
+        generation: u64,
     },
     Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
     Subscribe(Subscription),

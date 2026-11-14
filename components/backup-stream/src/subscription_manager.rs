@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use engine_traits::KvEngine;
 use futures::FutureExt;
@@ -24,6 +28,7 @@ use txn_types::TimeStamp;
 
 use crate::{
     Task, annotate,
+    checkpoint_manager::LastFlushTsOfRegion,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -310,6 +315,9 @@ pub struct RegionSubscriptionManager<S, R> {
     scans: Arc<FutureWaitGroup>,
 
     advance_ts_interval: Duration,
+    // This belongs to the CheckpointManager and is read here to allow new regions to inherit the
+    // resolved ts from old regions.
+    resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
 }
 
 /// Create a pool for doing initial scanning.
@@ -346,6 +354,7 @@ where
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
         advance_ts_interval: Duration,
+        resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
     ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
@@ -366,6 +375,7 @@ where
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
             advance_ts_interval,
+            resolved_ts,
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -564,11 +574,48 @@ where
         tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
     }
 
+    /// The max resolved ts among tracked regions that fully enclose `region`.
+    fn enclosing_resolved_ts(&self, region: &Region) -> Option<TimeStamp> {
+        let resolved_ts = self.resolved_ts.lock().unwrap();
+        resolved_ts
+            .values()
+            .filter(|cp| utils::region_encloses(&cp.region, region))
+            .map(|cp| cp.checkpoint)
+            .max()
+    }
+
+    /// Returns whether the task of `region` has been unloaded, dropping the
+    /// subscription of `handle` if so.
+    ///
+    /// Unloading runs on the endpoint thread, not in this loop, so it can
+    /// complete between a caller's liveness check and its `register_region`.
+    /// Nothing would clear the subscription registered afterwards: the observer
+    /// is hibernating, so no `Stop` is ever sent.
+    ///
+    /// This must be called after the subscription is registered. With the
+    /// unloading order (unregister the task, then clear `subs`), either its
+    /// `subs.clear()` sees our subscription, or we see the task gone here.
+    fn drop_subscription_if_task_unloaded(&self, region: &Region, handle: &ObserveHandle) -> bool {
+        if self.find_task_by_region(region).is_some() {
+            return false;
+        }
+        let removed = self
+            .subs
+            .deregister_region_if(region, |old, _| old.handle().id == handle.id);
+        if removed {
+            warn!("the task was unloaded while starting to observe, dropped the subscription.";
+                utils::slog_region(region), "handle" => ?handle);
+        }
+        true
+    }
+
     #[instrument(skip_all, fields(id = region.id))]
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
+            let tso = self.enclosing_resolved_ts(region);
+
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -577,10 +624,14 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
+                        let tso = match tso {
+                            Some(tso) => tso,
+                            None => self.get_last_checkpoint_of(&for_task, region).await?,
+                        };
                         self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
-                            self.get_last_checkpoint_of(&for_task, region).await?,
+                            tso,
                             handle.clone(),
                         )
                         .await;
@@ -626,7 +677,12 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-                let tso = self.get_last_checkpoint_of(&for_task, region).await?;
+                // If a tracked region fully encloses this one (it was split from it), start
+                // from the parent's resolved ts: this region has no checkpoint of its own.
+                let tso = match self.enclosing_resolved_ts(region) {
+                    Some(tso) => tso,
+                    None => self.get_last_checkpoint_of(&for_task, region).await?,
+                };
                 self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
                     .await;
             }
@@ -798,6 +854,11 @@ where
     ) {
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+        // The task may have been unloaded since the caller checked it, so don't scan
+        // for it.
+        if self.drop_subscription_if_task_unloaded(region, &handle) {
+            return;
+        }
         let feedback_channel = match self.messenger.upgrade() {
             Some(ch) => ch,
             None => {
@@ -856,6 +917,7 @@ mod test {
     use super::{InitialScan, RegionSubscriptionManager, spawn_executors_to};
     use crate::{
         BackupStreamResolver, ObserveOp, Task,
+        checkpoint_manager::LastFlushTsOfRegion,
         errors::Error,
         metadata::{MetadataClient, StreamTask, store::SlashEtcStore},
         router::{Router, RouterInner},
@@ -974,6 +1036,9 @@ mod test {
         handle: Option<Sender<ObserveOp>>,
         regions: RegionMem,
         subs: SubscriptionTracer,
+        resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>>,
+        range_router: Router,
+        task_name: &'static str,
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -1070,10 +1135,12 @@ mod test {
                 1024 * 1024,
             ))
             .unwrap();
+            let resolved_ts: Arc<Mutex<HashMap<u64, LastFlushTsOfRegion>>> = Default::default();
+            let range_router = Router(Arc::new(router));
             let subs_mgr = RegionSubscriptionManager {
                 regions: regions.clone(),
                 meta_cli,
-                range_router: Router(Arc::new(router)),
+                range_router: range_router.clone(),
                 scheduler,
                 subs: subs.clone(),
                 failure_count: Default::default(),
@@ -1082,6 +1149,7 @@ mod test {
                 scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: FutureWaitGroup::new(),
                 advance_ts_interval: Duration::from_secs(1),
+                resolved_ts: Arc::clone(&resolved_ts),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);
@@ -1136,6 +1204,9 @@ mod test {
                 bg_tasks,
                 cancel,
                 subs,
+                resolved_ts,
+                range_router,
+                task_name,
             }
         }
 
@@ -1152,6 +1223,15 @@ mod test {
 
         fn start_region(&self, region: Region) {
             self.run(ObserveOp::Start { region })
+        }
+
+        /// Pretend the checkpoint manager has resolved `region` up to
+        /// `checkpoint`.
+        fn track_resolved_ts(&self, region: Region, checkpoint: TimeStamp) {
+            self.resolved_ts
+                .lock()
+                .unwrap()
+                .insert(region.get_id(), LastFlushTsOfRegion { region, checkpoint });
         }
 
         fn insert_region(&self, region: Region) {
@@ -1253,6 +1333,163 @@ mod test {
             self.rt
                 .block_on(tokio::time::advance(Duration::from_millis(n)))
         }
+    }
+
+    type ScanRecords = Arc<Mutex<Vec<(u64, TimeStamp)>>>;
+
+    /// An initial scan that always succeeds and records the `(region id, start
+    /// ts)` of every scan it is asked to perform, so that tests can assert on
+    /// the checkpoint a subscription was started from.
+    fn recording_initial_scan() -> (ScanRecords, impl InitialScan) {
+        let records: ScanRecords = Default::default();
+        let out = Arc::clone(&records);
+        let init = FuncInitialScan(move |region: &Region, start_ts, _| {
+            out.lock().unwrap().push((region.get_id(), start_ts));
+            Ok(Statistics::default())
+        });
+        (records, init)
+    }
+
+    /// Regions split off a tracked parent have no checkpoint of their own, so
+    /// they must start scanning from the parent's resolved ts instead of
+    /// rewinding all the way to the task's checkpoint.
+    #[test]
+    fn test_inherit_resolved_ts_of_split_parent() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        // The parent region [a, c) has been resolved up to 100, then split into [a, b) (keeping the
+        // id) and [b, c) (a fresh id).
+        suite.track_resolved_ts(suite.region(1, 1, 1, b"a", b"c"), TimeStamp::new(100));
+        suite.insert_and_start_region(suite.region(1, 2, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.wait_initial_scan_all_finish(2);
+        suite.wait_shutdown();
+
+        let mut scans = scans.lock().unwrap().clone();
+        scans.sort();
+        assert_eq!(scans, [(1, TimeStamp::new(100)), (2, TimeStamp::new(100))]);
+    }
+
+    /// Only a region that *fully* encloses the new one may lend its resolved
+    /// ts; anything else has to fall back to the task's checkpoint.
+    #[test]
+    fn test_no_inherit_without_enclosing_parent() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        // A disjoint sibling [c, d), a partial overlap [ab, c), and a region
+        // [a, ab) that the new one encloses (the merge direction) are all
+        // unusable, however advanced they are.
+        suite.track_resolved_ts(suite.region(2, 1, 1, b"c", b"d"), TimeStamp::new(100));
+        suite.track_resolved_ts(suite.region(3, 1, 1, b"ab", b"c"), TimeStamp::new(200));
+        suite.track_resolved_ts(suite.region(4, 1, 1, b"a", b"ab"), TimeStamp::new(300));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+
+        assert_eq!(*scans.lock().unwrap(), [(1, suite.task_start_ts)]);
+    }
+
+    /// When more than one tracked region encloses the new one, the most
+    /// advanced resolved ts wins.
+    #[test]
+    fn test_inherit_max_enclosing_resolved_ts() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        suite.track_resolved_ts(suite.region(2, 1, 1, b"a", b"c"), TimeStamp::new(100));
+        suite.track_resolved_ts(suite.region(3, 1, 1, b"", b""), TimeStamp::new(150));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+
+        assert_eq!(*scans.lock().unwrap(), [(1, TimeStamp::new(150))]);
+    }
+
+    /// `RefreshResolver` tears the subscription down and starts a new initial
+    /// scan; that scan should inherit the resolved ts too.
+    #[test]
+    fn test_refresh_resolver_inherits_resolved_ts() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.wait_initial_scan_all_finish(1);
+        // The region was resolved up to 100 and then split, keeping [a, az).
+        suite.track_resolved_ts(suite.region(1, 1, 1, b"a", b"b"), TimeStamp::new(100));
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+
+        // The first scan had nothing to inherit from, the second one does.
+        assert_eq!(
+            *scans.lock().unwrap(),
+            [(1, suite.task_start_ts), (1, TimeStamp::new(100))]
+        );
+    }
+
+    /// A refresh that finds no enclosing region keeps using the task's
+    /// checkpoint.
+    #[test]
+    fn test_refresh_resolver_without_enclosing_parent() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.wait_initial_scan_all_finish(1);
+        // Resolved ts of an unrelated region must not be picked up.
+        suite.track_resolved_ts(suite.region(2, 1, 1, b"c", b"d"), TimeStamp::new(100));
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+
+        assert_eq!(
+            *scans.lock().unwrap(),
+            [(1, suite.task_start_ts), (1, suite.task_start_ts)]
+        );
+    }
+
+    /// The task is unloaded (on the endpoint thread) after the loop found it
+    /// registered but before the subscription is registered. No `Stop` will
+    /// ever clear the subscription as the observer is hibernating, so the loop
+    /// must drop it itself.
+    #[test]
+    #[cfg(feature = "failpoints")]
+    fn test_start_observe_dropped_when_task_unloaded_midway() {
+        let (scans, init) = recording_initial_scan();
+        let mut suite = Suite::new(init);
+        let _guard = suite.rt.enter();
+
+        // Unload exactly like `Endpoint::unload_task`: unregister, then clear `subs`.
+        let router = suite.range_router.clone();
+        let subs = suite.subs.clone();
+        let task_name = suite.task_name;
+        fail::cfg_callback("try_start_observe0", move || {
+            router.unregister_task(task_name);
+            subs.clear();
+        })
+        .unwrap();
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        // Round-trips the loop, so the `Start` above has been handled.
+        suite.sync();
+        suite.wait_shutdown();
+        fail::remove("try_start_observe0");
+
+        assert!(suite.subs.get_subscription_of(1).is_none());
+        // Nothing should be scanned for a task that no longer exists.
+        assert!(scans.lock().unwrap().is_empty());
     }
 
     #[test]
