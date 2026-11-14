@@ -110,6 +110,7 @@ hybrid_engine = { workspace = true }
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
 in_memory_engine = { workspace = true }
+inferno = { version = "0.12.8", default-features = false, features = ["nameattr"] }
 itertools = "0.10"
 keyed_priority_queue = "0.4"
 keys = { workspace = true }
@@ -138,7 +139,6 @@ pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
 pprof = { version = "0.15", default-features = false, features = [
-  "flamegraph",
   "protobuf-codec",
 ] }
 prometheus = { version = "0.13", features = ["nightly"] }

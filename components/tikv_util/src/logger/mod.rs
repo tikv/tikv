@@ -39,14 +39,7 @@ const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-// azure_core 0.18.0 can expose live Authorization headers through Debug/Trace
-// request logs, so suppress them here.
-// TODO: Remove this filter after the legacy Azure SDK is upgraded or patched.
-fn should_emit_log(module: &str, level: Level, disabled_targets: &[String]) -> bool {
-    let is_azure_core = module == "azure_core" || module.starts_with("azure_core::");
-    if is_azure_core && matches!(level, Level::Debug | Level::Trace) {
-        return false;
-    }
+fn should_emit_log(module: &str, disabled_targets: &[String]) -> bool {
     if disabled_targets.is_empty() {
         return true;
     }
@@ -76,9 +69,7 @@ where
 
     // The module name looks like `raftstore::store::fsm::store` or
     // `grpcio::log_util`. Filtering uses its highest-level component.
-    let filter = move |record: &Record<'_>| {
-        should_emit_log(record.module(), record.level(), &disabled_targets)
-    };
+    let filter = move |record: &Record<'_>| should_emit_log(record.module(), &disabled_targets);
 
     fn build_log_drain<I>(
         drain: I,
@@ -752,44 +743,21 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_credential_bearing_azure_core_logs() {
-        let disabled_targets = vec![];
-        assert!(!should_emit_log(
-            "azure_core::policies::transport",
-            Level::Debug,
-            &disabled_targets,
-        ));
-        assert!(!should_emit_log(
+    fn test_filter_logs_by_disabled_root_module() {
+        let disabled_targets = vec!["azure_core".to_owned()];
+        for module in [
             "azure_core",
-            Level::Debug,
-            &disabled_targets,
-        ));
-        assert!(!should_emit_log(
-            "azure_core::policies::retry_policies::retry_policy",
-            Level::Trace,
-            &disabled_targets,
-        ));
-        assert!(should_emit_log(
             "azure_core::policies::transport",
-            Level::Info,
-            &disabled_targets,
-        ));
-        assert!(should_emit_log(
-            "azure_core_extra",
-            Level::Debug,
-            &disabled_targets,
-        ));
-        assert!(should_emit_log(
-            "azure_storage::clients",
-            Level::Debug,
-            &disabled_targets,
-        ));
-
-        let disabled_targets = vec!["azure_storage".to_owned()];
+            "azure_core::policies::retry_policies::retry_policy",
+        ] {
+            assert!(should_emit_log(module, &[]));
+            assert!(!should_emit_log(module, &disabled_targets));
+        }
+        assert!(should_emit_log("azure_core_extra", &disabled_targets));
+        assert!(should_emit_log("azure_storage::clients", &disabled_targets));
         assert!(!should_emit_log(
             "azure_storage::clients",
-            Level::Info,
-            &disabled_targets,
+            &["azure_storage".to_owned()],
         ));
     }
 
