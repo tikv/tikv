@@ -1772,7 +1772,7 @@ mod tests {
 
         #[async_trait]
         impl RequestHandler for RecordCompletion {
-            async fn handle_request(&mut self) -> Result<HandlerOutput> {
+            async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
                 let response = self.inner.handle_request().await;
                 // Record on the worker, not on the threads waiting for responses.
                 self.completed.send(self.name).unwrap();
@@ -1836,7 +1836,7 @@ mod tests {
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
-            ConcurrencyManager::new_for_test(1.into()),
+            ConcurrencyManager::new(1.into()),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
