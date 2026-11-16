@@ -47,6 +47,8 @@ deny = [
     { crate = "h2:<0.3", reason = "not part of the temporary h2 0.3 exception" },
     { crate = "h2:>=0.3,<0.4", wrappers = ["aws-smithy-http-client", "hyper", "reqwest"], reason = "only the existing h2 0.3 dependency chains are temporarily accepted" },
     { crate = "h2:>=0.4,<0.4.16", reason = "upgrade h2 0.4 to at least 0.4.16" },
+    # The remaining legacy XML parser is limited to the old Azure SDK.
+    { crate = "quick-xml:<0.41.0", wrappers = ["azure_core"], reason = "temporary legacy Azure SDK exception" },
     # Only the currently reviewed azure_core 0.18.0 release is covered by the
     # temporary RUSTSEC-2026-0275 exception below.
     { crate = "azure_core:<0.18.0", reason = "not part of the temporary azure_core 0.18.0 exception" },
@@ -84,16 +86,8 @@ ignore = [
     #
     # See: https://github.com/http-rs/http-types/issues/534
     "RUSTSEC-2026-0174",
-    # Ignore RUSTSEC-2026-0194 and RUSTSEC-2026-0195 temporarily. Both come
-    # from quick-xml through two transitive chains:
-    #   1. pprof -> inferno -> quick-xml, which TiKV uses only to generate
-    #      local flamegraph SVG output rather than parse untrusted XML input.
-    #   2. azure_core 0.18 -> quick-xml, which requires an Azure SDK upgrade
-    #      instead of a lockfile-only update to reach quick-xml >= 0.41.
-    # The remaining practical exposure is limited to XML returned by the
-    # configured Azure endpoint over TLS, so we accept the temporary DoS risk
-    # until we schedule the SDK upgrade and pprof/inferno dependency refresh.
-    # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
+    # Only the legacy Azure SDK still pulls affected quick-xml. The separate
+    # Azure SDK upgrade removes this chain and these temporary exceptions.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
     # Ignore RUSTSEC-2026-0253 for now: Cargo.lock shows `lru` 0.16.3 is pulled
