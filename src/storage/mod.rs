@@ -382,6 +382,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         unsafe { with_perf_context::<E, _, _>(cmd, f) }
     }
 
+    /// Re-enters the thread-local performance context for every poll. A read
+    /// may yield and resume on a different worker, so no TLS borrow may span
+    /// the await itself.
+    async fn with_perf_context_async<Fut: Future>(cmd: CommandKind, future: Fut) -> Fut::Output {
+        futures::pin_mut!(future);
+        futures::future::poll_fn(|cx| Self::with_perf_context(cmd, || future.as_mut().poll(cx)))
+            .await
+    }
+
     #[inline]
     fn with_tls_engine<R>(f: impl FnOnce(&mut E) -> R) -> R {
         // Safety: the read pools ensure that a TLS engine exists.
@@ -1399,56 +1408,61 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
                     let requested_keys = keys.len() as u64;
-                    let (result, stats) = Self::with_perf_context(CMD, || {
-                        let _guard = sample.observe_cpu();
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                            bypass_locks,
-                            access_locks,
-                            false,
-                        );
-                        let mut stats = Statistics::default();
-                        let result = snap_store
-                            .batch_get(&keys, load_commit_ts, &mut statistics)
-                            .map_err(Error::from)
-                            .map(|v| {
-                                let kv_pairs: Vec<_> = v
-                                    .into_iter()
-                                    .zip(keys)
-                                    .enumerate()
-                                    .filter(|&(i, (ref v, ref k))| {
-                                        metrics::tls_collect_read_flow(
-                                            ctx.get_region_id(),
-                                            Some(k.as_encoded()),
-                                            Some(k.as_encoded()),
-                                            &statistics[i],
-                                            buckets.as_ref(),
-                                        );
-                                        stats.add(&statistics[i]);
-                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                    })
-                                    .map(|(_, (v, k))| match v {
-                                        Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                        Err(e) => Err(Error::from(e)),
-                                        _ => unreachable!(),
-                                    })
-                                    .collect();
-                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                    .get(CMD)
-                                    .observe(kv_pairs.len() as f64);
-                                let out_bytes = kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
-                                        as u64
+                    let (cpu_time, (result, stats)) = Self::with_perf_context_async(
+                        CMD,
+                        sample.observe_cpu_async(async {
+                            let mut snap_store = SnapshotStore::new(
+                                snapshot,
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                                bypass_locks,
+                                access_locks,
+                                false,
+                            );
+                            let mut stats = Statistics::default();
+                            let result = snap_store
+                                .batch_get_with_reschedule(&keys, load_commit_ts, &mut statistics)
+                                .await
+                                .map_err(Error::from)
+                                .map(|v| {
+                                    let kv_pairs: Vec<_> = v
+                                        .into_iter()
+                                        .zip(keys)
+                                        .enumerate()
+                                        .filter(|&(i, (ref v, ref k))| {
+                                            metrics::tls_collect_read_flow(
+                                                ctx.get_region_id(),
+                                                Some(k.as_encoded()),
+                                                Some(k.as_encoded()),
+                                                &statistics[i],
+                                                buckets.as_ref(),
+                                            );
+                                            stats.add(&statistics[i]);
+                                            !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                        })
+                                        .map(|(_, (v, k))| match v {
+                                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                            Err(e) => Err(Error::from(e)),
+                                            _ => unreachable!(),
+                                        })
+                                        .collect();
+                                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                        .get(CMD)
+                                        .observe(kv_pairs.len() as f64);
+                                    let out_bytes = kv_pairs.iter().fold(0u64, |acc, r| {
+                                        acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
+                                            as u64
+                                    });
+                                    record_network_out_bytes(out_bytes);
+                                    update_background_egress(&egress_limiter, out_bytes, true);
+                                    kv_pairs
                                 });
-                                record_network_out_bytes(out_bytes);
-                                update_background_egress(&egress_limiter, out_bytes, true);
-                                kv_pairs
-                            });
-                        (result, stats)
-                    });
+                            (result, stats)
+                        }),
+                    )
+                    .await;
+                    sample.add_cpu_time(cpu_time);
                     if let Err(
                         e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                             mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
@@ -1665,7 +1679,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                Self::with_perf_context(CMD, || {
+                Self::with_perf_context_async(CMD, async {
                     let begin_instant = Instant::now();
                     let buckets = snapshot.ext().get_buckets();
 
@@ -1687,7 +1701,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         start_key,
                         end_key,
                     )?;
-                    let res = scanner.scan(limit, sample_step);
+                    let res = txn::scan_with_reschedule(&mut scanner, limit, sample_step).await;
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
@@ -1724,6 +1738,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .collect()
                     })
                 })
+                .await
             }
             .in_resource_metering_tag(resource_tag),
             priority,
@@ -4661,6 +4676,27 @@ mod tests {
             200.into(),
         ))
         .unwrap();
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+
+        // BatchGet retains response-byte charging through its async read loop.
+        let (storage, bg_limiter) = new_storage();
+        let (pairs, _) = block_on(storage.batch_get(
+            ctx_with_source(""),
+            vec![Key::from_raw(b"x")],
+            200.into(),
+            false,
+        ))
+        .unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        let (pairs, _) = block_on(storage.batch_get(
+            ctx_with_source("internal_ddl"),
+            vec![Key::from_raw(b"x")],
+            200.into(),
+            false,
+        ))
+        .unwrap();
+        assert_eq!(pairs.len(), 1);
         assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
 
         // Scan: same, on a fresh limiter.

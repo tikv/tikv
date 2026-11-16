@@ -112,6 +112,35 @@ High-risk contracts:
 - `mvcc/reader/*` owns reads, scanners, point getters, and conflict detection.
 - `mvcc/txn.rs` owns write-side MVCC mutation handling.
 
+### Cooperative transactional reads
+
+- `SnapshotStore::batch_get_with_reschedule` and
+  `txn::scan_with_reschedule` check the poll-scoped scheduling budget every
+  32 completed storage calls. Sampling skips and per-key lock errors count
+  toward the Scan cadence; BatchGet retains one PointGetter and one statistics
+  entry per input key.
+- The synchronous Store/Scanner APIs remain available. Without a cooperative
+  context, the new entry points use those synchronous paths.
+- `Storage::with_perf_context_async` scopes the existing engine performance
+  observer to each synchronous poll, and BatchGet uses `observe_cpu_async`.
+  Thread-local observer guards must never survive an await or worker migration.
+  The observer reports each poll's RocksDB block-read delta before the resource
+  metering tag detaches, preserving detailed TopSQL I/O attribution across
+  cooperative yields. Background egress is charged once from the completed
+  result's response bytes, independently of these per-poll observations.
+- `tikv_util::task_reschedule` supplies the poll wall-time slice;
+  `cooperative_checkpoint` also checks the shared read CPU budget. These are
+  safe points between calls, not preemption inside a RocksDB/MVCC call. Raw KV
+  and transaction-write loops are outside this checkpoint integration.
+- Existing processing wall-time and stage-latency measurements can now include
+  waits after cooperative requeue. Use the fair-pool per-poll CPU/wall metrics
+  when distinguishing actual execution from scheduling and IO waits.
+- BatchGet's legacy `QuotaLimiter` sample is aggregated/consumed after the
+  operation completes. Cancellation at a new yield point can discard a partial
+  sample before that step; it does not yet have RAII partial settlement. The
+  new read queue's VT and global CPU budget are settled by poll guards and do
+  not share this limitation.
+
 ### Raw KV
 
 - `raw/*` implements raw-key APIs and their optional MVCC wrappers.

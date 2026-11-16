@@ -84170,7 +84170,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Historical baseline and current CPU utilization % per resource group (100% = 1 core).",
+          "description": "Historical and current shared read/write RU usage per resource group, in CPU-equivalent percent (100% = 1 core). This history supports foreground write admission; it does not set the unified read pool's scheduling priority or CPU budget.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -84272,7 +84272,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "CPU Utilization % per Resource Group",
+          "title": "Resource Group RU Usage (CPU Equivalent)",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -84451,7 +84451,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in centi-cores (cores * 100).",
+          "description": "Current measured CPU usage and configured CPU target of the unified read pool, in centi-cores (cores * 100). With resource control enabled, the target is the shared read CPU budget; there is no historical floor or pressure-driven thread scaling.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -84584,7 +84584,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+          "description": "Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background throttling and foreground write admission. The unified read pool uses its separate configured CPU budget.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -84983,7 +84983,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Rate of deprioritized (phase 1), delayed, and rejected requests.",
+          "description": "Rate of requests delayed or rejected by foreground write or background admission control.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -85053,21 +85053,6 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_two_phase_throttled_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "deprioritized-{{resource_group}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_two_phase_throttled_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            },
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_resource_control_admission_delayed_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
               "format": "time_series",
               "hide": false,
@@ -85100,7 +85085,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Deprioritized / Delayed / Rejected Requests",
+          "title": "Delayed / Rejected Requests",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -85279,7 +85264,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Delay duration imposed by foreground admission control.",
+          "description": "Delay duration imposed by foreground write or background admission control.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -85442,7 +85427,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the queue capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` is neither: it counts requests that bypassed the estimated-wait gate because resource control owns the read queue for them, so it should rise as the other two fall.",
+          "description": "Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the task-capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` counts requests with a nonzero threshold that bypass the FIFO wait estimate because the unified read pool uses group fair scheduling. It does not imply admission succeeded or that the pool is overloaded.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -85981,7 +85966,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Throttling a noisy group shows up here first, and separating the two is the reason this metric keeps its `type` label.",
+          "description": "Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Compare the types to distinguish scheduling waits from snapshot acquisition.",
           "editable": true,
           "error": false,
           "fieldConfig": {

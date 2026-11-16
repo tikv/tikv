@@ -23,6 +23,8 @@ pub fn group_label(name: &str) -> &str {
 
 const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
 const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
+// Local scheduler identity; never serialized into ResourceControlContext.
+const SCHEDULER_ID_MASK: u8 = 0b0010_0000;
 
 #[derive(Clone, Default)]
 pub struct TaskMetadata<'a> {
@@ -72,6 +74,39 @@ impl TaskMetadata<'_> {
         self.metadata.into_owned()
     }
 
+    pub(crate) fn with_scheduler_id(self, id: u64) -> Vec<u8> {
+        let mut bytes = self.to_vec();
+        if bytes.is_empty() {
+            bytes.push(0);
+        }
+        let offset = if bytes[0] & OVERRIDE_PRIORITY_MASK != 0 {
+            5
+        } else {
+            1
+        };
+        if bytes[0] & SCHEDULER_ID_MASK != 0 {
+            bytes[offset..offset + 8].copy_from_slice(&id.to_ne_bytes());
+        } else {
+            bytes[0] |= SCHEDULER_ID_MASK;
+            bytes.splice(offset..offset, id.to_ne_bytes());
+        }
+        bytes
+    }
+
+    pub(crate) fn scheduler_id(&self) -> Option<u64> {
+        if self.metadata.first().copied().unwrap_or(0) & SCHEDULER_ID_MASK == 0 {
+            return None;
+        }
+        let offset = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
+            5
+        } else {
+            1
+        };
+        Some(u64::from_ne_bytes(
+            self.metadata[offset..offset + 8].try_into().unwrap(),
+        ))
+    }
+
     pub fn override_priority(&self) -> u32 {
         if self.metadata.is_empty() {
             return 0;
@@ -89,11 +124,14 @@ impl TaskMetadata<'_> {
         if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {
             return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
         }
-        let start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
+        let mut start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
             5
         } else {
             1
         };
+        if self.metadata[0] & SCHEDULER_ID_MASK != 0 {
+            start += 8;
+        }
         &self.metadata[start..]
     }
 }
@@ -178,8 +216,12 @@ mod tests {
             });
             assert_eq!(metadata.override_priority(), priority);
             assert_eq!(metadata.group_name(), group_name.as_bytes());
-            let vec = metadata.to_vec();
+            let vec = metadata.with_scheduler_id(1234);
+            let with_id = TaskMetadata::from(vec.as_slice());
+            assert_eq!(with_id.scheduler_id(), Some(1234));
+            let vec = with_id.with_scheduler_id(5678);
             let metadata1 = TaskMetadata::from(vec.as_slice());
+            assert_eq!(metadata1.scheduler_id(), Some(5678));
             assert_eq!(metadata1.override_priority(), priority);
             assert_eq!(metadata1.group_name(), group_name.as_bytes());
         }

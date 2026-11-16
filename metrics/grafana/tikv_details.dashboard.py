@@ -10748,8 +10748,8 @@ def LoadShedding() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="CPU Utilization % per Resource Group",
-                description="Historical baseline and current CPU utilization % per resource group (100% = 1 core).",
+                title="Resource Group RU Usage (CPU Equivalent)",
+                description="Historical and current shared read/write RU usage per resource group, in CPU-equivalent percent (100% = 1 core). This history supports foreground write admission; it does not set the unified read pool's scheduling priority or CPU budget.",
                 yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
                 targets=[
                     target(
@@ -10783,7 +10783,7 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Unified Read Pool CPU",
-                description="Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in centi-cores (cores * 100).",
+                description="Current measured CPU usage and configured CPU target of the unified read pool, in centi-cores (cores * 100). With resource control enabled, the target is the shared read CPU budget; there is no historical floor or pressure-driven thread scaling.",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
@@ -10797,7 +10797,7 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Resource Pressure Scores",
-                description="Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+                description="Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background throttling and foreground write admission. The unified read pool uses its separate configured CPU budget.",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
@@ -10840,21 +10840,14 @@ def LoadShedding() -> RowPanel:
             ),
         ]
     )
-    # Row 3: Deprioritized/delayed/rejected + currently delayed
+    # Row 3: Delayed/rejected + currently delayed
     layout.row(
         [
             graph_panel(
-                title="Deprioritized / Delayed / Rejected Requests",
-                description="Rate of deprioritized (phase 1), delayed, and rejected requests.",
+                title="Delayed / Rejected Requests",
+                description="Rate of requests delayed or rejected by foreground write or background admission control.",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_resource_control_two_phase_throttled_requests_total",
-                            by_labels=["resource_group"],
-                        ).extra(" > 0"),
-                        legend_format="deprioritized-{{resource_group}}",
-                    ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_admission_delayed_requests_total",
@@ -10889,7 +10882,7 @@ def LoadShedding() -> RowPanel:
         [
             graph_panel(
                 title="Admission Delay Duration",
-                description="Delay duration imposed by foreground admission control.",
+                description="Delay duration imposed by foreground write or background admission control.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
@@ -10922,7 +10915,7 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Read Pool Rejections",
-                description="Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the queue capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` is neither: it counts requests that bypassed the estimated-wait gate because resource control owns the read queue for them, so it should rise as the other two fall.",
+                description="Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the task-capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` counts requests with a nonzero threshold that bypass the FIFO wait estimate because the unified read pool uses group fair scheduling. It does not imply admission succeeded or that the pool is overloaded.",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
@@ -10990,7 +10983,7 @@ def ResourceGroups() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Coprocessor Request Wait Duration by Resource Group",
-                description="Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Throttling a noisy group shows up here first, and separating the two is the reason this metric keeps its `type` label.",
+                description="Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Compare the types to distinguish scheduling waits from snapshot acquisition.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_coprocessor_request_wait_seconds_by_group",
                 by_labels=["resource_group", "type"],

@@ -11,6 +11,7 @@ use tidb_query_common::{
     Result, execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
+pub(crate) use tikv_util::cooperative_checkpoint;
 use tipb::FieldType;
 
 /// Combines an `ExecSummaryCollector` with another type. This inner type `T`
@@ -126,7 +127,11 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     }
 
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(scan_rows).await
+        let result = (**self).next_batch(scan_rows).await;
+        // Production executor trees connect parents and children through a
+        // boxed executor, so this is their common post-batch safe point.
+        cooperative_checkpoint().await;
+        result
     }
 
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {

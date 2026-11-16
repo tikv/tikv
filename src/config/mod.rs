@@ -17,6 +17,7 @@ use std::{
     path::Path,
     str,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use api_version::ApiV1Ttl;
@@ -2505,6 +2506,23 @@ pub struct UnifiedReadPoolConfig {
     #[online_config(skip)]
     pub stack_size: ReadableSize,
     pub max_tasks_per_worker: usize,
+    /// Base live-task limit per resource group, scaled by its finite RU weight.
+    /// max-tasks-per-worker times configured max-thread-count remains the
+    /// global limit across all groups.
+    #[online_config(skip)]
+    pub max_tasks_per_resource_group: usize,
+    /// Unified RC read-pool CPU budget as a fraction of the process CPU quota.
+    #[online_config(skip)]
+    pub read_cpu_ratio: f64,
+    /// Temporary scheduling charge for an in-flight poll, refunded at
+    /// settlement.
+    #[online_config(skip)]
+    pub slice_precharge: ReadableDuration,
+    /// Cooperative execution target; indivisible operations may exceed it.
+    #[online_config(skip)]
+    pub max_time_slice: ReadableDuration,
+    /// Only applies without resource control. RC pools keep configured workers
+    /// and use the shared CPU gate to control execution.
     pub auto_adjust_pool_size: bool,
     /// Maximum CPU usage percentage for the unified read pool (0.0-1.0).
     /// When set to 0, uses the busy thread scaling algorithm only.
@@ -2514,6 +2532,8 @@ pub struct UnifiedReadPoolConfig {
     /// - Prevents scale up when it would exceed threshold - 10% leeway Example:
     ///   0.8 means read pool should not use more than 80% of available CPU
     ///   cores.
+    /// Ignored when resource control is enabled: read-cpu-ratio owns the CPU
+    /// budget and the pool stays at max-thread-count.
     pub cpu_threshold: f64,
     // FIXME: Add more configs when they are effective in yatp
 }
@@ -2546,7 +2566,24 @@ impl UnifiedReadPoolConfig {
         if self.max_tasks_per_worker <= 1 {
             return Err("readpool.unified.max-tasks-per-worker should be > 1".into());
         }
-        if self.cpu_threshold < 0.0 || self.cpu_threshold > 1.0 {
+        if self.max_tasks_per_resource_group == 0 {
+            return Err("readpool.unified.max-tasks-per-resource-group should be > 0".into());
+        }
+        if !self.read_cpu_ratio.is_finite()
+            || self.read_cpu_ratio <= 0.0
+            || self.read_cpu_ratio > 1.0
+        {
+            return Err(
+                "readpool.unified.read-cpu-ratio should be finite and in (0.0, 1.0]".into(),
+            );
+        }
+        if self.slice_precharge.0 > Duration::from_millis(10) {
+            return Err("readpool.unified.slice-precharge should be <= 10ms".into());
+        }
+        if self.max_time_slice.0.is_zero() {
+            return Err("readpool.unified.max-time-slice should be > 0".into());
+        }
+        if !self.cpu_threshold.is_finite() || self.cpu_threshold < 0.0 || self.cpu_threshold > 1.0 {
             return Err("readpool.unified.cpu-threshold should be between 0.0 and 1.0".into());
         }
         Ok(())
@@ -2566,6 +2603,10 @@ impl Default for UnifiedReadPoolConfig {
             max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_resource_group: 65_536,
+            read_cpu_ratio: 0.6,
+            slice_precharge: ReadableDuration::micros(500),
+            max_time_slice: ReadableDuration::millis(1),
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0, // 0 means no threshold (disabled)
         }
@@ -2585,6 +2626,7 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
+            ..Default::default()
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2626,6 +2668,40 @@ mod unified_read_pool_tests {
             ..cfg
         };
         invalid_cfg.validate().unwrap_err();
+
+        for read_cpu_ratio in [0.0, -0.1, 1.1, f64::INFINITY, f64::NAN] {
+            UnifiedReadPoolConfig {
+                read_cpu_ratio,
+                ..cfg
+            }
+            .validate()
+            .unwrap_err();
+        }
+        UnifiedReadPoolConfig {
+            max_tasks_per_resource_group: 0,
+            ..cfg
+        }
+        .validate()
+        .unwrap_err();
+        UnifiedReadPoolConfig {
+            slice_precharge: ReadableDuration::millis(11),
+            ..cfg
+        }
+        .validate()
+        .unwrap_err();
+        UnifiedReadPoolConfig {
+            max_time_slice: ReadableDuration::millis(0),
+            ..cfg
+        }
+        .validate()
+        .unwrap_err();
+        // Disabling precharge does not disable actual accounting or the gate.
+        UnifiedReadPoolConfig {
+            slice_precharge: ReadableDuration::micros(0),
+            ..cfg
+        }
+        .validate()
+        .unwrap();
     }
 }
 
@@ -2922,6 +2998,7 @@ mod readpool_tests {
             max_tasks_per_worker: 0,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
+            ..Default::default()
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {

@@ -27,7 +27,7 @@ use super::{
     endpoint::{make_error_batch_response, make_error_response},
     metrics::record_coprocessor_response_size,
 };
-use crate::read_pool::ReadPoolHandle;
+use crate::read_pool::{ReadPoolCancellationGuard, ReadPoolHandle};
 
 /// A batched task response with an optional unserialized result. While the
 /// result is present, `response.data` is empty; it is either merged into the
@@ -113,31 +113,54 @@ impl BatchMergeFinalizer {
             poll_tracker,
         )
         .in_resource_metering_tag(merge_execution_tag);
-        // The slot keeps the merge cancelable until the pool task takes it:
-        // the scope-exit cleanup empties it whenever the caller stops waiting.
-        let merge_slot = Arc::new(std::sync::Mutex::new(Some(merge_work)));
+        // Transfer work and cancellation ownership together. Before the pool
+        // task takes this slot, caller cancellation releases both the results
+        // and its fair-pool capacity. After that handoff the merge is detached
+        // from the caller and runs to completion, including across yields.
+        let merge_slot = Arc::new(std::sync::Mutex::new((
+            Some(merge_work),
+            None::<ReadPoolCancellationGuard>,
+        )));
         defer!({
-            drop(merge_slot.lock().unwrap().take());
+            let abandoned = {
+                let mut slot = merge_slot.lock().unwrap();
+                (slot.0.take(), slot.1.take())
+            };
+            // Canceling can drop the pool task, which also owns this slot.
+            // Never run either destructor while holding the slot lock.
+            drop(abandoned);
         });
         let pool_merge_slot = Arc::clone(&merge_slot);
         let (response_tx, response_rx) = oneshot::channel();
         let pool_task = async move {
-            let merge = pool_merge_slot.lock().unwrap().take();
+            let (merge, cancellation) = {
+                let mut slot = pool_merge_slot.lock().unwrap();
+                (slot.0.take(), slot.1.take())
+            };
+            if let Some(mut cancellation) = cancellation {
+                cancellation.disarm();
+            }
             if let Some(merge) = merge {
                 let _ = response_tx.send(merge.await);
             }
         };
         // The results were admitted and charged when produced, so the merge
-        // pays neither memory admission nor resource-group admission again;
-        // submission only enqueues, and `response_rx` reports completion.
+        // pays neither memory admission nor background-limiter admission
+        // again. Fair-pool live-task limits and its global CPU gate still
+        // apply; `response_rx` reports completion.
         // It is queued as delivery of completed work rather than new work:
         // high command priority and the highest group priority put it in
         // the top level and tier so a throttled group's finished results
         // are not starved behind other groups' scans. The group name stays,
-        // so the merge's CPU still counts against the group's virtual time.
+        // so the merge's CPU is attributed to the request's group and counts
+        // against its high-priority scheduling lane's virtual time.
         resource_control_ctx.override_priority = HIGH_PRIORITY as u64;
         let metadata = TaskMetadata::from_ctx(&resource_control_ctx);
-        let submission = read_pool.spawn(pool_task, CommandPri::High, task_id, metadata, None);
+        let (submission, cancellation) =
+            read_pool.spawn_with_cancellation(pool_task, CommandPri::High, task_id, metadata, None);
+        // Submission is lazy on every pool backend, so the pool task cannot
+        // take the slot before its cancellation guard is published here.
+        merge_slot.lock().unwrap().1 = Some(cancellation);
         // Error returns here and below drop the completed outputs along with
         // their execution details; the endpoint refills only the top task's
         // scan and time details from the tracker. Accepted for atomic retries.
@@ -434,13 +457,18 @@ mod tests {
     use ::tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken};
     use futures::{StreamExt, channel::oneshot, executor::block_on, future, stream};
     use kvproto::kvrpcpb;
+    use raftstore::store::{ReadStats, WriteStats};
+    use resource_control::ResourceGroupManager;
     use resource_metering::ResourceTagFactory;
     use tikv_alloc::trace::{MemoryTrace, MemoryTraceGuard};
+    use tikv_util::yatp_pool::{CleanupMethod, fair_queue::FairQueue};
 
     use super::*;
     use crate::{
-        config::CoprReadPoolConfig, coprocessor::readpool_impl::build_read_pool_for_test,
-        read_pool::ReadPool, storage::TestEngineBuilder,
+        config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
+        coprocessor::readpool_impl::build_read_pool_for_test,
+        read_pool::{ReadPool, build_yatp_read_pool},
+        storage::{FlowStatsReporter, TestEngineBuilder},
     };
 
     pub(crate) struct ConcatMergeable {
@@ -585,6 +613,36 @@ mod tests {
             },
             engine,
         ))
+    }
+
+    fn build_single_thread_fair_read_pool() -> (ReadPool, Arc<FairQueue>) {
+        #[derive(Clone)]
+        struct DummyReporter;
+        impl FlowStatsReporter for DummyReporter {
+            fn report_read_stats(&self, _read_stats: ReadStats) {}
+            fn report_write_stats(&self, _write_stats: WriteStats) {}
+        }
+
+        let pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                max_tasks_per_worker: 4,
+                ..Default::default()
+            },
+            DummyReporter,
+            TestEngineBuilder::new().build().unwrap(),
+            Some(Arc::new(ResourceGroupManager::default())),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let queue = match pool.handle() {
+            ReadPoolHandle::Yatp {
+                fair_queue: Some(queue),
+                ..
+            } => queue,
+            _ => unreachable!(),
+        };
+        (pool, queue)
     }
 
     /// Holds the only worker of the pool finalization uses so a queued task
@@ -806,6 +864,19 @@ mod tests {
     #[test]
     fn test_batch_merge_finalizer_dropped_caller_cancels_queued_merge() {
         let read_pool = build_single_thread_read_pool();
+        assert_dropped_caller_cancels_queued_merge(read_pool, None);
+    }
+
+    #[test]
+    fn test_batch_merge_finalizer_cancel_releases_fair_pool_capacity() {
+        let (read_pool, queue) = build_single_thread_fair_read_pool();
+        assert_dropped_caller_cancels_queued_merge(read_pool, Some(queue));
+    }
+
+    fn assert_dropped_caller_cancels_queued_merge(
+        read_pool: ReadPool,
+        queue: Option<Arc<FairQueue>>,
+    ) {
         let release_tx = hold_single_thread_read_pool(&read_pool.handle());
 
         let context = kvrpcpb::Context::default();
@@ -824,6 +895,10 @@ mod tests {
             Poll::Ready(finalize.as_mut().poll(cx))
         }));
         assert!(state.is_pending());
+        if let Some(queue) = &queue {
+            assert_eq!(queue.snapshot().live_tasks, 2);
+            assert_eq!(queue.snapshot().queued, 1);
+        }
         // A client cancellation drops the caller future while its merge is
         // still queued; the queued merge must drop with it, releasing its
         // held result before the worker is ever released.
@@ -833,7 +908,66 @@ mod tests {
             0,
             "the dropped caller retained its queued merge"
         );
+        if let Some(queue) = &queue {
+            assert_eq!(queue.snapshot().live_tasks, 1);
+            assert_eq!(queue.snapshot().queued, 0);
+        }
         release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn test_batch_merge_finalizer_started_fair_merge_survives_caller_cancel() {
+        struct StartedMerge {
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            finished: mpsc::Sender<()>,
+        }
+
+        impl MergeableResult for StartedMerge {
+            fn merge(&mut self, _other: Box<dyn MergeableResult>) {
+                self.started.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+
+            fn into_data(self: Box<Self>) -> super::super::Result<Vec<u8>> {
+                self.finished.send(()).unwrap();
+                Ok(vec![1, 2])
+            }
+        }
+
+        let (read_pool, queue) = build_single_thread_fair_read_pool();
+        let context = kvrpcpb::Context::default();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let result = StartedMerge {
+            started: started_tx,
+            release: release_rx,
+            finished: finished_tx,
+        };
+        let output = HandlerOutput::mergeable_with_trace(
+            coppb::Response::default(),
+            Box::new(result),
+            &tikv_alloc::mem_trace!(test_batch_merge_started_caller_cancel),
+        );
+        let finalizer = batch_merge_finalizer_for_test(&read_pool, &context, None);
+        let mut finalize = Box::pin(finalizer.finalize(
+            output,
+            vec![mergeable_batch_output(vec![2])],
+            ::tracker::INVALID_TRACKER_TOKEN,
+        ));
+        let state = block_on(future::poll_fn(|cx| {
+            Poll::Ready(finalize.as_mut().poll(cx))
+        }));
+        assert!(state.is_pending());
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(finalize);
+        assert_eq!(queue.snapshot().live_tasks, 1);
+        release_tx.send(()).unwrap();
+        // merge_batch_task_responses yields after merging the child. The
+        // detached task must survive that poll boundary and serialize even
+        // though its response receiver has gone away.
+        finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     #[test]

@@ -101,6 +101,12 @@
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
+## With resource control enabled, this pool keeps max-thread-count workers.
+## auto-adjust-pool-size and cpu-threshold do not control the RC pool;
+## read-cpu-ratio sets its CPU gate budget. Existing explicit quota-limiter and
+## background limits still apply. Without resource control, the existing thread
+## autoscaling and cpu-threshold behavior is unchanged.
+
 ## The minimal working thread count of the thread pool.
 # min-thread-count = 1
 
@@ -111,8 +117,33 @@
 ## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
 
-## Max running tasks of each worker, reject if exceeded.
+## Live-task capacity per configured worker. With resource control enabled,
+## this times max-thread-count is the global limit across all resource groups
+## and priorities, including queued, running, and async-waiting admitted tasks.
 # max-tasks-per-worker = 2000
+
+## The following four settings apply to RC unified read pools and require
+## a restart to take effect.
+
+## Base live-task capacity per resource group, scaled by its positive quota weight
+## with a minimum and an upper bound. The global live-task limit still applies.
+## Must be greater than 0.
+# max-tasks-per-resource-group = 65536
+
+## Shared read CPU budget as a fraction of the process CPU quota, in (0, 1].
+## The gate charges actual thread CPU time. This leaves configured headroom for
+## other work; it does not adapt to whole-node CPU pressure.
+# read-cpu-ratio = 0.6
+
+## Temporary scheduling precharge for a dispatched poll, settled against its
+## actual wall time. It is separate from the CPU gate and does not count as
+## consumed CPU. Set to "0us" to disable precharge; maximum is "10ms".
+# slice-precharge = "500us"
+
+## Target wall-time slice checked at cooperative safe points. Must be positive.
+## A synchronous storage call or indivisible computation can exceed this value;
+## it is not a hard preemption deadline.
+# max-time-slice = "1ms"
 
 [readpool.storage]
 ## Whether to use the unified read pool to handle storage requests.
@@ -177,8 +208,11 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
-## How resource control decides which resource groups caused a foreground CPU
-## overload, and so which ones it throttles and deprioritizes.
+## How resource control attributes a foreground CPU overload using shared
+## read/write usage. The selected groups' historical limiter applies only to
+## foreground write admission; unified reads use weighted group scheduling and
+## their own CPU budget. Client noisy-group feedback is enabled only with
+## enable-write-admission-control.
 ## Value options:
 ## - "baseline". Blame the groups furthest above their own quiet-window baseline,
 ##               so a group that is simply large is not blamed for an overload
@@ -202,18 +236,20 @@
 ##
 ## A baseline is taken only after the node's foreground CPU has stayed below
 ## 85% of fg-cpu-throttle-threshold (59.5% at the default of 70) for a full
-## historical-usage-window-mins (15 minutes by default). CPU is checked every
-## 10s, and one check above that line restarts the wait. On a busy node that
+## historical-usage-window-mins (15 minutes by default). CPU is checked at the
+## configured normal-control-interval or overloaded-control-interval, and one
+## check above that line restarts the wait. On a busy node that
 ## never drops that low, no group ever gets a baseline, not only right after a
 ## restart, and the default then behaves exactly like "current-usage".
 # noisy-detection = "baseline-fallback-current-usage"
 
-## RU charged to a resource group for every request that arrives, in addition to
-## the CPU that request's execution consumes, in microseconds.
+## Fixed microsecond-equivalent usage charged to a foreground group's historical
+## tracker for every request that arrives, in addition to measured poll wall time.
 ## Charged at the gRPC handler entry, before admission control, so a request that
 ## is rejected pays it too: a rejection consumes no read pool CPU, so without this
 ## a throttled group's measured usage falls as it is rejected, which relaxes the
 ## throttle while the group keeps loading the node.
+## This charge does not debit the unified read scheduler's VT or CPU budget.
 ## Set to 0 to disable.
 # request-base-cost-micros = 40
 
@@ -245,9 +281,10 @@
 ## and `readpool.coprocessor.use-unified-pool`). Set to 0 to disable egress throttling.
 # bg-egress-limit = "0B"
 
-## Period of the resource-control loop while the node is quiet: noisy-group detection, quota
-## throttling and the unified read pool's thread ladder all run on it. A group is named only after
-## two ticks of sustained overshoot, so this is how long an idle node takes to notice load.
+## Period of quota adjustment and historical noisy-group detection while the node is quiet.
+## A group is named only after two ticks of sustained overshoot, so this is how long an idle
+## node takes to notice load. RC unified read pools keep their configured worker count and
+## use readpool.unified.read-cpu-ratio for their separate CPU budget.
 ## Range 1s to 60s. Not hot-reloadable; changing it requires a restart.
 # normal-control-interval = "10s"
 
@@ -322,7 +359,9 @@
 # end-point-memory-quota = "0B"
 
 ## Maximum number of concurrently running background-limited Analyze tasks.
-## Leave unset (or set to 0) to share the ordinary coprocessor semaphore.
+## A positive limit applies to both legacy and resource-group fair Yatp pools.
+## Leave unset (or set to 0) to use the ordinary request policy: a shared
+## semaphore in legacy pools, or no semaphore in resource-group fair pools.
 # end-point-max-bg-concurrency = 0
 
 ## Max bytes that snapshot can interact with disk in one second. It should be

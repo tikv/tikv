@@ -66,6 +66,13 @@ High-risk service contracts:
 - advertised store and status addresses published through PD store metadata
 - request batching and stream callback completion
 - region-error and timeout mapping from storage/raftstore to RPCs
+- `HealthFeedback.noisy_groups` presence is distinct from an empty name list.
+  Without a resource manager the field stays absent. With a manager it stays
+  present, including when foreground write admission is disabled, so an empty
+  verdict clears earlier client state. Historical noisy names are exposed only
+  when `enable-write-admission-control` is enabled; the deprecated read flags
+  do not enable them. These names come from shared read/write usage attribution,
+  not from the unified read pool's weighted fair scheduler.
 
 ## Start Here
 

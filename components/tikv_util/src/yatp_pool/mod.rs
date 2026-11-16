@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod fair_queue;
 mod future_pool;
 pub mod metrics;
 
 use std::sync::Arc;
 
 use fail::fail_point;
+pub use fair_queue::{is_fair_cpu_dispatch_active, yield_if_fair_cpu_exhausted};
 pub use future_pool::{Full, FuturePool};
 use futures::{StreamExt, compat::Stream01CompatExt};
 use prometheus::local::LocalHistogram;
@@ -226,6 +228,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
+        let _dispatch = fair_queue::DispatchGuard::install();
         let extras = task_cell.mut_extras();
         let priority = priority_from_task_meta(extras.metadata());
         let start_time =
@@ -510,6 +513,22 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             pool.spawn(task);
         }
         pool
+    }
+
+    pub fn build_fair_pool(self, queue: Arc<fair_queue::FairQueue>) -> ThreadPool<TaskCell> {
+        let name = self
+            .name_prefix
+            .clone()
+            .unwrap_or_else(|| "yatp_pool".to_string());
+        let queue_builder = yatp::queue::CustomBuilder::new(
+            yatp::queue::CustomConfig::default().name(Some(name)),
+            queue,
+        );
+        // Group histories clean themselves on insertion. No internal cleanup
+        // future needs an admission permit or competes for CPU budget.
+        let (builder, runner) = self.create_builder();
+        let runner_builder = queue_builder.runner_builder(CloneRunnerBuilder(runner));
+        builder.build_with_queue_and_runner(queue_builder.into(), runner_builder)
     }
 
     #[cfg(test)]

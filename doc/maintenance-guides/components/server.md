@@ -92,6 +92,10 @@ High-risk config contracts:
 - `server.rs` is the main startup path for the existing raft-kv oriented stack.
 - `server2.rs` is the analogous startup path for the `RaftKv2` /
   `raftstore-v2` stack.
+- Both paths give the resource-controlled unified read pool its
+  `ResourceGroupManager` directly as the group-policy provider. They do not
+  derive a legacy `ResourceController` for that pool; transaction and Raft
+  workers retain their separate legacy controllers.
 - `raft_engine_switch.rs` owns the online raft-engine migration helper path and
   is easy to miss when changing engine bootstrap behavior.
 - `setup.rs` owns logging and early process environment setup.
