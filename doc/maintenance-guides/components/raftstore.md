@@ -1,4 +1,4 @@
-# Raftstore Peer Destruction
+# Raftstore Maintenance Notes
 
 ## Critical Invariants
 
@@ -15,3 +15,17 @@
   precedes the snapshot's Step1 notification. An independently destroyed source
   can release a `need_atomic` dependency only while its readiness flag is false;
   a ready source must finish through the atomic snapshot protocol.
+
+## Log Volume And Observability
+
+- Extra-message transport `Full` warnings are limited per poller, target store,
+  and message type. The next emitted warning reports the suppressed count;
+  `tikv_raftstore_extra_message_send_failure_total` counts every failure,
+  including suppressed ones. Other transport failures remain at WARN.
+- Network-delivered Raft local messages (`StepLocalMsg`) are logged at DEBUG
+  and counted by the `step_local_msg` message-drop reason. Other Raft handling
+  errors remain at WARN.
+- Snapshot precheck responses use sampled INFO logs and DEBUG for the remaining
+  responses. Use `tikv_raftstore_snap_gen_precheck_response_total` to compare
+  passed, rejected, and ignored outcomes; log samples are not a count of events.
+  Sampling must not change snapshot scheduling or precheck decisions.
