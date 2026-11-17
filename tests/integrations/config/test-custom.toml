@@ -211,6 +211,7 @@ apply-before-pause-wait-us = 123
 apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
+store-low-priority-pool-size = 2
 store-reschedule-duration = "2s"
 store-before-pause-wait-us = 123
 store-io-pool-size = 5

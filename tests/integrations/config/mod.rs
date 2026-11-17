@@ -182,6 +182,7 @@ fn test_serde_custom_tikv_config() {
     store_batch_system.max_batch_size = Some(21);
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
+    store_batch_system.low_priority_pool_size = 2;
     value.raft_store = RaftstoreConfig {
         prevote: false,
         raftdb_path: "/var".to_owned(),

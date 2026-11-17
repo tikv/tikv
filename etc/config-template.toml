@@ -594,6 +594,19 @@
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
 
+## Use how many threads to handle raft messages of regions demoted by
+## `enable-noisy-tenant-demotion`. Sized at startup; 0 means no such threads, and demotion
+## then cannot be enabled, online or otherwise.
+# store-low-priority-pool-size = 0
+
+## Move the regions of a resource group that resource control has marked noisy onto the
+## low-priority store pollers, so its raft work no longer delays other tenants' regions.
+## Requires `store-low-priority-pool-size` > 0. Online-configurable.
+## Attribution is per store and reads proposals, so a leader whose only traffic for a table is
+## read-index messages forwarded by followers is not demoted for it. API v1 table keys only;
+## not supported with `storage.engine = "raft-kv2"`.
+# enable-noisy-tenant-demotion = false
+
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
 # store-io-pool-size = 1

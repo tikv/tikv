@@ -7758,7 +7758,6 @@ mod tests {
         cfg.raftdb.defaultcf.max_compactions = None;
 
         cfg.rocksdb.defaultcf.titan.min_blob_size = None;
-
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
         cfg.raft_engine.optimize_for(

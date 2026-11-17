@@ -43,7 +43,67 @@ const DEFAULT_SNAP_WAIT_SPLIT_DURATION: ReadableDuration =
     ReadableDuration::secs(RAFTSTORE_V2_SPLIT_SIZE.0 / DEFAULT_SNAP_MAX_BYTES_PER_SEC / 3);
 
 with_prefix!(prefix_apply "apply-");
-with_prefix!(prefix_store "store-");
+with_prefix!(prefix_store_keys "store-");
+
+/// Reads the `store-` batch-system keys. The store and apply sections share
+/// `BatchSystemConfig`, whose serde default gives one low-priority poller, but
+/// the store pool must stay at zero unless asked for, so a missing
+/// `store-low-priority-pool-size` is filled in here instead.
+mod prefix_store {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use tikv_util::config::ReadableDuration;
+
+    use super::{BatchSystemConfig, prefix_store_keys};
+
+    // Every field of `BatchSystemConfig`, so a new one fails to compile here
+    // rather than being dropped on the store section.
+    #[derive(Deserialize)]
+    #[serde(default, rename_all = "kebab-case")]
+    struct StoreSection {
+        max_batch_size: Option<usize>,
+        pool_size: usize,
+        reschedule_duration: ReadableDuration,
+        low_priority_pool_size: usize,
+    }
+
+    impl Default for StoreSection {
+        fn default() -> Self {
+            let BatchSystemConfig {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: _,
+            } = BatchSystemConfig::default();
+            StoreSection {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: 0,
+            }
+        }
+    }
+
+    // Generic: the `OnlineConfig` derive serializes its own encoder type
+    // through this module too.
+    pub fn serialize<T: Serialize, S: Serializer>(cfg: &T, s: S) -> Result<S::Ok, S::Error> {
+        prefix_store_keys::serialize(cfg, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BatchSystemConfig, D::Error> {
+        let StoreSection {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        } = prefix_store_keys::deserialize(d)?;
+        Ok(BatchSystemConfig {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -325,6 +385,21 @@ pub struct Config {
     #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
+
+    /// Moves a noisy tenant's regions to the low-priority store pollers.
+    /// Does not affect resource control's other throttling.
+    ///
+    /// Requires `store-low-priority-pool-size` > 0. That pool is 0 by default
+    /// and is sized at startup, so set it explicitly on stores where this may
+    /// be turned on, including online.
+    ///
+    /// Scope: a table is attributed from the proposals this store sees, so a
+    /// leader whose only traffic for a table is `MsgReadIndex` forwarded by
+    /// followers does not demote that region; the follower store does.
+    /// Table ids are decoded from API v1 keys, so API v2 keyspaces are not
+    /// covered. Not supported with raftstore-v2 (`storage.engine =
+    /// "raft-kv2"`), which `validate` rejects.
+    pub enable_noisy_tenant_demotion: bool,
 
     /// If it is 0, it means io tasks are handled in store threads.
     pub store_io_pool_size: usize,
@@ -630,7 +705,14 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
-            store_batch_system: BatchSystemConfig::default(),
+            // Unlike the apply pool, the store low pool only exists when asked
+            // for: it is only used by `enable_noisy_tenant_demotion`. The
+            // `prefix_store` serde module keeps a config file in step.
+            store_batch_system: BatchSystemConfig {
+                low_priority_pool_size: 0,
+                ..BatchSystemConfig::default()
+            },
+            enable_noisy_tenant_demotion: false,
             store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
@@ -999,9 +1081,26 @@ impl Config {
                 limit
             ));
         }
-        if self.store_batch_system.low_priority_pool_size > 0 {
-            // The store thread pool doesn't need a low-priority thread currently.
-            self.store_batch_system.low_priority_pool_size = 0;
+        let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size;
+        // raftstore-v2 has neither the attribution nor the priority routing, so
+        // the flag would silently do nothing there.
+        if self.enable_noisy_tenant_demotion && raft_kv_v2 {
+            return Err(box_err!(
+                "enable-noisy-tenant-demotion is not supported with storage.engine = \"raft-kv2\""
+            ));
+        }
+        // With no low poller, demoted regions would never be polled again.
+        if self.enable_noisy_tenant_demotion && store_low_priority_pool_size == 0 {
+            return Err(box_err!(
+                "enable-noisy-tenant-demotion needs store-low-priority-pool-size set greater \
+                 than 0, or demoted regions stop being polled"
+            ));
+        }
+        if store_low_priority_pool_size > limit {
+            return Err(box_err!(
+                "store-low-priority-pool-size should be less than or equal to: {}",
+                limit
+            ));
         }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 || size > 10240 {
@@ -1488,6 +1587,18 @@ impl ConfigManager for RaftstoreConfigManager {
                         );
                     }
                 }
+                // The pools are sized at startup, so an online enable must find
+                // the low store pool already there.
+                if let Some(ConfigValue::Bool(true)) = change.get("enable_noisy_tenant_demotion")
+                {
+                    if cfg.store_batch_system.low_priority_pool_size == 0 {
+                        return Err(
+                            "enable-noisy-tenant-demotion needs store-low-priority-pool-size > 0, \
+                             which is sized at startup; set it and restart"
+                                .into(),
+                        );
+                    }
+                }
                 cfg.update(change)
             })?;
         }
@@ -1697,6 +1808,60 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        // By default the store low pool has no threads; apply keeps the
+        // shared default. The same holds for a file that leaves them out.
+        cfg = Config::new();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
+        let from_file: Config = toml::from_str("").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 0);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
+        let from_file: Config = toml::from_str("store-low-priority-pool-size = 2").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 2);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
+        assert_eq!(
+            cfg.apply_batch_system.low_priority_pool_size, 1,
+            "the apply pool keeps the shared default"
+        );
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
+
+        cfg = Config::new();
+        cfg.store_batch_system.low_priority_pool_size = 4;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(
+            cfg.store_batch_system.low_priority_pool_size, 4,
+            "a configured size is kept, not clamped"
+        );
+
+        // A zero pool would strand demoted regions.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = 0;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        // raftstore-v2 has no demotion path.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = 1;
+        cfg.optimize_for(true);
+        cfg.validate(split_size, false, ReadableSize(0), true)
+            .unwrap_err();
+
+        // ...unless demotion is off.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = false;
+        cfg.store_batch_system.low_priority_pool_size = 0;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(10241);

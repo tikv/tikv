@@ -176,7 +176,7 @@ pub struct Cluster<T: Simulator> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub resource_manager: Option<Arc<ResourceGroupManager>>,
     pub force_partition_mgr: ForcePartitionRangeManager,
 }
 
