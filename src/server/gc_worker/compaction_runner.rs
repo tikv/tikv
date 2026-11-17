@@ -482,6 +482,9 @@ fn calculate_compaction_score(
             0.0
         } else if estimated_reclaimable_bytes > 0 {
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else if num_tombstones == 0 {
+            // Zero thresholds admit every Region; one with no garbage stays at zero.
+            0.0
         } else if !missing_range_properties {
             UNMEASURED_RECLAIMABLE_SCORE
         } else {
@@ -501,6 +504,9 @@ fn calculate_compaction_score(
             // Rank admitted candidates by physical impact instead of version count.
             // Use MiB-sized units so the additive MVCC-read score remains useful.
             estimated_reclaimable_bytes as f64 / RECLAIMABLE_BYTES_PER_SCORE
+        } else if num_tombstones == 0 && num_discardable == 0 {
+            // Zero thresholds admit every Region; one with no garbage stays at zero.
+            0.0
         } else if !missing_range_properties {
             // The Region's counts come from whole SSTs and may include keys outside
             // it, so they can't rank it. The version-count fallback is in different
@@ -1283,6 +1289,40 @@ mod tests {
         assert_eq!(
             calculate_compaction_score(40, 0, 100, 0, true, 0, &config),
             16.0
+        );
+    }
+
+    #[test]
+    fn test_zero_thresholds_keep_clean_regions_at_zero() {
+        let mut config = GcConfig::default();
+        config.auto_compaction.redundant_rows_threshold = 0;
+        config.auto_compaction.redundant_rows_percent_threshold = 0;
+        config.auto_compaction.tombstones_num_threshold = 0;
+        config.auto_compaction.tombstones_percent_threshold = 0;
+
+        // Zero thresholds admit every Region, but one with no garbage must not
+        // take the one-byte score and occupy a candidate slot.
+        for missing_range_properties in [false, true] {
+            assert_eq!(
+                calculate_compaction_score(0, 0, 100, 0, missing_range_properties, 0, &config),
+                0.0
+            );
+        }
+        assert_eq!(
+            calculate_compaction_score(0, 1, 100, 0, false, 0, &config),
+            UNMEASURED_RECLAIMABLE_SCORE
+        );
+
+        config.enable_compaction_filter = false;
+        for missing_range_properties in [false, true] {
+            assert_eq!(
+                calculate_compaction_score(0, 0, 100, 0, missing_range_properties, 0, &config),
+                0.0
+            );
+        }
+        assert_eq!(
+            calculate_compaction_score(1, 0, 100, 0, false, 0, &config),
+            UNMEASURED_RECLAIMABLE_SCORE
         );
     }
 

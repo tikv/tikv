@@ -144,7 +144,8 @@ High-risk service contracts:
   Region with range properties but no reclaimable bytes, such as one smaller
   than a range-properties sample, gets the base score of one reclaimable byte,
   so it stays a candidate but ranks below Regions with measured reclaimable
-  bytes. When `mvcc-read-aware-enabled` is set, the final
+  bytes. A Region with no tombstones or discardable versions scores zero, even
+  when zero thresholds admit it. When `mvcc-read-aware-enabled` is set, the final
   score adds `mvcc_versions_scanned * mvcc-read-weight` to the base score and can
   raise it.
   The default byte threshold is 384 MiB, aligned with the default
