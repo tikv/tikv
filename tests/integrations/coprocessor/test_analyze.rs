@@ -373,6 +373,7 @@ fn test_background_batch_egress_charged_once_returned() {
     use raftstore::store::{ReadStats, WriteStats};
     use resource_control::ResourceGroupManager;
     use resource_metering::ResourceTagFactory;
+    use test_storage::new_raft_engine;
     use tikv::{
         config::UnifiedReadPoolConfig,
         coprocessor::Endpoint,
@@ -398,7 +399,7 @@ fn test_background_batch_egress_charged_once_returned() {
         Endpoint::new(
             &Config::default(),
             read_pool.handle(),
-            ConcurrencyManager::new_for_test(1.into()),
+            ConcurrencyManager::new(1.into()),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             Some(manager),
