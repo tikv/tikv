@@ -86,6 +86,11 @@ use crate::storage::{
     types::PessimisticLockParameters,
 };
 
+// Bound per-key wait records as well as the fan-out to shared holders. A
+// shrinking wrapper cannot gain members while these requests wait for it.
+const MAX_SHARED_LOCK_WAITERS: usize = 1024;
+const MAX_SHARED_LOCK_WAIT_EDGES: usize = 16 * 1024;
+
 // A resumed entry can be requeued without new lock information. API V1 also
 // permits an empty raw key, with the holder identified by its timestamp.
 fn has_lock_info(info: &kvrpcpb::LockInfo) -> bool {
@@ -305,40 +310,56 @@ impl<L: LockManager> LockWaitQueues<L> {
         // immediately as DuplicateInFlight / SecondUpgrader instead of entering the
         // ordinary wait queue; otherwise it would keep its shared lock while queued
         // behind the current upgrader and create an unresolvable deadlock.
-        if lock_wait_entry.is_lock_upgrade {
-            let pending_upgrader = key_state.value().pending_upgrader;
-            match pending_upgrader {
-                None => {
-                    key_state.pending_upgrader = Some(PendingUpgrader {
-                        start_ts: lock_wait_entry.parameters.start_ts,
-                        token: lock_wait_entry.lock_wait_token,
-                    });
-                }
-                Some(pending_upgrader) => {
-                    // Release the queue-map guard before invoking external callback.
-                    drop(key_state);
+        if let Some(pending_upgrader) = key_state
+            .pending_upgrader
+            .filter(|_| lock_wait_entry.is_lock_upgrade)
+        {
+            // Release the queue-map guard before invoking external callback.
+            drop(key_state);
 
-                    let cb = lock_wait_entry.key_cb.unwrap().into_inner();
-                    let reason = if pending_upgrader.start_ts == lock_wait_entry.parameters.start_ts
-                    {
-                        LOCK_UPGRADE_CONFLICT_COUNTER_VEC.duplicate_in_flight.inc();
-                        kvrpcpb::LockUpgradeConflictReason::DuplicateInFlight
-                    } else {
-                        LOCK_UPGRADE_CONFLICT_COUNTER_VEC.second_upgrader.inc();
-                        kvrpcpb::LockUpgradeConflictReason::SecondUpgrader
-                    };
-                    let err = StorageError::from(TxnError::from(MvccError::from(
-                        MvccErrorInner::LockUpgradeConflict {
-                            start_ts: lock_wait_entry.parameters.start_ts,
-                            owner_start_ts: pending_upgrader.start_ts,
-                            key: lock_wait_entry.key.clone().into_raw().unwrap(),
-                            reason,
-                        },
-                    )));
-                    cb(Err(err.into()), true);
-                    return false;
+            let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+            let reason = if pending_upgrader.start_ts == lock_wait_entry.parameters.start_ts {
+                LOCK_UPGRADE_CONFLICT_COUNTER_VEC.duplicate_in_flight.inc();
+                kvrpcpb::LockUpgradeConflictReason::DuplicateInFlight
+            } else {
+                LOCK_UPGRADE_CONFLICT_COUNTER_VEC.second_upgrader.inc();
+                kvrpcpb::LockUpgradeConflictReason::SecondUpgrader
+            };
+            let err = StorageError::from(TxnError::from(MvccError::from(
+                MvccErrorInner::LockUpgradeConflict {
+                    start_ts: lock_wait_entry.parameters.start_ts,
+                    owner_start_ts: pending_upgrader.start_ts,
+                    key: lock_wait_entry.key.clone().into_raw().unwrap(),
+                    reason,
+                },
+            )));
+            cb(Err(err.into()), true);
+            return false;
+        }
+
+        let holders = key_state.current_lock.get_shared_lock_infos().len();
+        if holders != 0 || lock_wait_entry.is_shared_lock || lock_wait_entry.is_lock_upgrade {
+            let capacity = MAX_SHARED_LOCK_WAITERS.min(MAX_SHARED_LOCK_WAIT_EDGES / holders.max(1));
+            if key_state.queue.len() >= capacity {
+                drop(key_state);
+                if new_key {
+                    self.inner
+                        .queue_map
+                        .remove_if(&lock_wait_entry.key, |_, state| state.queue.is_empty());
                 }
+                let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+                cb(
+                    Err(StorageError::from(StorageErrorInner::SharedLockWaitQueueFull).into()),
+                    true,
+                );
+                return false;
             }
+        }
+        if lock_wait_entry.is_lock_upgrade {
+            key_state.pending_upgrader = Some(PendingUpgrader {
+                start_ts: lock_wait_entry.parameters.start_ts,
+                token: lock_wait_entry.lock_wait_token,
+            });
         }
 
         key_state
@@ -1728,6 +1749,66 @@ mod tests {
         b.iter(|| {
             queues.update_lock_wait(lock_info.clone());
         });
+    }
+
+    #[test]
+    fn test_shared_readers_waiting_on_an_exclusive_holder_are_bounded() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"writer";
+        let blocker = queues.make_lock_info_pb(key, 1);
+        let mut handles = Vec::with_capacity(MAX_SHARED_LOCK_WAITERS);
+        for i in 0..MAX_SHARED_LOCK_WAITERS {
+            let (mut entry, handle) =
+                queues.make_mock_lock_wait_entry(key, (i + 2) as u64, blocker.clone());
+            entry.is_shared_lock = true;
+            assert!(queues.push_lock_wait(entry, blocker.clone()));
+            handles.push(handle);
+        }
+        let (mut entry, rejected) =
+            queues.make_mock_lock_wait_entry(key, u32::MAX as u64, blocker.clone());
+        entry.is_shared_lock = true;
+        assert!(!queues.push_lock_wait(entry, blocker));
+        assert!(matches!(
+            *rejected.wait_for_result().unwrap_err().0.0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert_eq!(queues.get_queue_length_of_key(key), MAX_SHARED_LOCK_WAITERS);
+    }
+
+    #[test]
+    fn test_shared_wait_capacity_rejects_only_new_waiters() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"hot";
+        let mut wrapper = queues.make_lock_info_pb(key, 0);
+        wrapper.set_lock_type(kvrpcpb::Op::SharedLock);
+        wrapper.set_shared_lock_infos(
+            (1..=1024)
+                .map(|ts| queues.make_lock_info_pb(key, ts))
+                .collect(),
+        );
+        let limit = MAX_SHARED_LOCK_WAIT_EDGES / wrapper.get_shared_lock_infos().len();
+        let mut handles = Vec::new();
+        for i in 0..limit {
+            let (entry, handle) =
+                queues.make_mock_lock_wait_entry(key, (2000 + i) as u64, wrapper.clone());
+            assert!(queues.push_lock_wait(entry, wrapper.clone()));
+            handles.push(handle);
+        }
+        let (entry, rejected) = queues.make_mock_lock_wait_entry(key, 5000, wrapper.clone());
+        assert!(!queues.push_lock_wait(entry, wrapper.clone()));
+        let err = rejected.wait_for_result().unwrap_err();
+        let region_error = crate::storage::errors::extract_region_error_from_error(&err.0).unwrap();
+        assert_eq!(
+            region_error.get_server_is_busy().get_reason(),
+            "shared lock wait queue is full"
+        );
+        assert_eq!(queues.get_queue_length_of_key(key), limit);
+        queues
+            .remove_by_token(&Key::from_raw(key), handles.pop().unwrap().token)
+            .unwrap();
+        let (entry, _handle) = queues.make_mock_lock_wait_entry(key, 6000, wrapper.clone());
+        assert!(queues.push_lock_wait(entry, wrapper));
+        assert_eq!(queues.get_queue_length_of_key(key), limit);
     }
 
     #[test]

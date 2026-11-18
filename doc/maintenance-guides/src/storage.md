@@ -273,7 +273,10 @@ Shared lock upgrades keep the requesting transaction's member while waiting.
 There is one pending upgrader per key. Removing another member can make that
 upgrader the sole holder without unlocking the key. After the write succeeds,
 the scheduler notifies the matching wait token while it still owns the key
-latch. The client retries acquire and rechecks the holder state.
+latch. The client retries acquire and rechecks the holder state. When
+admitting a shared read, upgrade, or wait on a shared wrapper, each key has a budget of
+1,024 waiting requests and 16,384 waiter/holder pairs. Exceeding either
+returns ServerIsBusy before a new wait or upgrade slot is registered.
 
 ## Reading Map And Companion Docs
 

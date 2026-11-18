@@ -49,6 +49,9 @@ pub enum ErrorInner {
     #[error("scheduler is too busy")]
     SchedTooBusy,
 
+    #[error("shared lock wait queue is full")]
+    SharedLockWaitQueueFull,
+
     #[error("gc worker is too busy")]
     GcWorkerTooBusy,
 
@@ -152,7 +155,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
-            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::SchedTooBusy | ErrorInner::SharedLockWaitQueueFull => {
+                error_code::storage::SCHED_TOO_BUSY
+            }
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
@@ -323,6 +328,13 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        Error(box ErrorInner::SharedLockWaitQueueFull) => {
+            let mut err = errorpb::Error::default();
+            let mut busy = errorpb::ServerIsBusy::default();
+            busy.set_reason(e.to_string());
+            err.set_server_is_busy(busy);
             Some(err)
         }
         Error(box ErrorInner::GcWorkerTooBusy) => {
