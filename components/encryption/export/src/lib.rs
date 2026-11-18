@@ -128,7 +128,7 @@ mod tests {
             endpoint: "endpoint".to_owned(),
             vendor: STORAGE_VENDOR_NAME_AZURE.to_owned(),
             azure: Some(AzureConfig {
-                tenant_id: "tenant_id".to_owned(),
+                tenant_id: "00000000-0000-0000-0000-000000000000".to_owned(),
                 client_id: "client_id".to_owned(),
                 keyvault_url: "https://keyvault_url.vault.azure.net".to_owned(),
                 hsm_name: "hsm_name".to_owned(),
