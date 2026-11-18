@@ -40,6 +40,7 @@ use tikv_util::{
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    resource_control::group_label,
     store::find_peer,
     time::Instant,
 };
@@ -240,7 +241,6 @@ impl<E: Engine> Endpoint<E> {
         } else {
             None
         };
-
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
@@ -656,7 +656,19 @@ impl<E: Engine> Endpoint<E> {
         });
         let deadline = req_ctx.deadline;
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
@@ -980,7 +992,19 @@ impl<E: Engine> Endpoint<E> {
 
         let task_id = req_ctx.build_task_id();
         let deadline = req_ctx.deadline;
-        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let future = Self::handle_stream_request_impl(
@@ -1009,7 +1033,7 @@ impl<E: Engine> Endpoint<E> {
         // yatp). On error yields one error item. Then chains with rx items.
         let stream = futures::stream::once(Box::pin(async move {
             match async_timeout(spawn_fut, deadline.remaining_duration()).await {
-                Ok(res) => res.err().map(|_| Err(Error::MaxPendingTasksExceeded)),
+                Ok(res) => res.err().map(Err),
                 Err(_) => Some(Err(Error::DeadlineExceeded)),
             }
         }))
@@ -2148,6 +2172,7 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::analyze_full_sampling,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 background_handler,
             );
@@ -2174,6 +2199,7 @@ mod tests {
                     ReqContext::default_for_test(),
                     ReqTag::test,
                     slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
                 )),
                 shared_handler,
             );
