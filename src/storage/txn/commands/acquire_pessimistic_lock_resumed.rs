@@ -154,6 +154,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 params.lock_only_if_exists,
                 true,
                 false,
+                params.is_shared_lock_upgrade,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -383,6 +384,7 @@ mod tests {
             is_first_lock: false,
             lock_only_if_exists: false,
             allow_lock_with_conflict: true,
+            is_shared_lock_upgrade: false,
         };
 
         let key = Key::from_raw(key);

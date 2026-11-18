@@ -53,6 +53,7 @@ fn make_waiter(
             is_first_lock: false,
             lock_only_if_exists: false,
             allow_lock_with_conflict: true,
+            is_shared_lock_upgrade: false,
         },
         should_not_exist: false,
         is_shared_lock: false,

@@ -54,6 +54,7 @@ command! {
             check_existence: bool,
             lock_only_if_exists: bool,
             allow_lock_with_conflict: bool,
+            is_shared_lock_upgrade: bool,
         }
         in_heap => {
             primary,
@@ -116,6 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.lock_only_if_exists,
                 self.allow_lock_with_conflict,
                 is_shared_lock,
+                self.is_shared_lock_upgrade,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -136,6 +138,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         is_first_lock: self.is_first_lock,
                         lock_only_if_exists: self.lock_only_if_exists,
                         allow_lock_with_conflict: self.allow_lock_with_conflict,
+                        is_shared_lock_upgrade: self.is_shared_lock_upgrade,
                     };
                     let lock_info = WriteResultLockInfo::new(
                         lock_info,
@@ -540,6 +543,7 @@ mod tests {
             Some(WaitTimeout::Default),
             false,
             TimeStamp::zero(),
+            false,
             false,
             false,
             false,

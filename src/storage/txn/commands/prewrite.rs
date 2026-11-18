@@ -2996,6 +2996,31 @@ mod tests {
     }
 
     #[test]
+    fn test_shared_prewrite_retry_after_commit() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let mut statistics = Statistics::default();
+        let key = b"shared-prewrite-retry";
+        let prewrite_shared = || {
+            PrewritePessimistic::with_defaults(
+                vec![(
+                    Mutation::make_shared_lock(Key::from_raw(key)),
+                    DoPessimisticCheck,
+                )],
+                key.to_vec(),
+                10.into(),
+                10.into(),
+            )
+        };
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 10, 2000);
+        prewrite_command(&mut engine, cm.clone(), &mut statistics, prewrite_shared()).unwrap();
+        must_commit(&mut engine, key, 10, 20);
+        prewrite_command(&mut engine, cm, &mut statistics, prewrite_shared()).unwrap();
+        must_unlocked(&mut engine, key);
+    }
+
+    #[test]
     fn test_shared_lock_prewrite_cannot_amend_pessimistic_lock() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new_for_test(1.into());

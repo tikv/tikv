@@ -244,6 +244,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
             allow_lock_with_conflict,
+            req.get_is_shared_lock_upgrade(),
             req.take_context(),
         )
     }
@@ -534,7 +535,8 @@ impl WriteResultLockInfo {
             ts: lock_info_pb.get_lock_version().into(),
             hash: key.gen_hash(),
         };
-        let is_lock_upgrade = !is_shared_lock_request
+        let is_lock_upgrade = parameters.is_shared_lock_upgrade
+            && !is_shared_lock_request
             && lock_info_pb
                 .get_shared_lock_infos()
                 .iter()
@@ -1150,6 +1152,7 @@ pub mod test_util {
             None,
             return_values,
             TimeStamp::zero(),
+            false,
             false,
             false,
             false,

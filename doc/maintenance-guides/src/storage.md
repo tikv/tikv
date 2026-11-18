@@ -160,6 +160,9 @@ High-risk contracts:
   A partial batch persists remaining holders and resumes at the same key.
   Its write budget includes the surviving wrapper and rollback records. An
   indivisible member and its remaining wrapper can exceed the batch target.
+- Shared-lock prewrite requires the transaction's own shared holder. An
+  explicit upgrade requires that holder or an exact replay of the resulting
+  exclusive lock. Missing holders cannot be recreated from MVCC history.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

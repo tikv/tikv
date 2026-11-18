@@ -97,7 +97,14 @@ pub fn prewrite_with_generation<S: Snapshot>(
         Some(lock_or_shared) => match lock_or_shared {
             Either::Left(lock) => {
                 if mutation.is_shared_lock {
-                    // Shared lock prewrite on existing exclusive lock
+                    if lock.ts == reader.start_ts {
+                        return Err(ErrorInner::PessimisticLockNotFound {
+                            start_ts: reader.start_ts,
+                            key: mutation.key.to_raw()?,
+                            reason: PessimisticLockNotFoundReason::LockTsMismatch,
+                        }
+                        .into());
+                    }
                     return Err(ErrorInner::KeyIsLocked(
                         lock.into_lock_info(mutation.key.to_raw()?),
                     )
@@ -125,6 +132,16 @@ pub fn prewrite_with_generation<S: Snapshot>(
                     // Remove our lock and proceed
                     match shared_locks.get_lock(&reader.start_ts)? {
                         Some(lock) => {
+                            if lock.primary != txn_props.primary
+                                || (!lock.is_pessimistic_lock() && lock.lock_type != LockType::Lock)
+                            {
+                                return Err(ErrorInner::PessimisticLockNotFound {
+                                    start_ts: reader.start_ts,
+                                    key: mutation.key.to_raw()?,
+                                    reason: PessimisticLockNotFoundReason::LockTsMismatch,
+                                }
+                                .into());
+                            }
                             let lock_status = mutation.check_lock(
                                 lock.clone(),
                                 pessimistic_action,
@@ -144,17 +161,14 @@ pub fn prewrite_with_generation<S: Snapshot>(
                         }
                     }
                 } else {
-                    // Our transaction doesn't have a lock in the shared locks
                     if mutation.is_shared_lock {
-                        // Trying to prewrite shared lock but no pessimistic lock to upgrade
                         return Err(ErrorInner::PessimisticLockNotFound {
                             start_ts: reader.start_ts,
-                            key: mutation.key.into_raw()?,
+                            key: mutation.key.to_raw()?,
                             reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
                         }
                         .into());
                     }
-                    // Non-shared prewrite blocked by existing shared locks
                     let lock_info = shared_locks.into_lock_info(mutation.key.to_raw()?);
                     return Err(ErrorInner::KeyIsLocked(lock_info).into());
                 }
@@ -162,16 +176,14 @@ pub fn prewrite_with_generation<S: Snapshot>(
         },
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             if mutation.is_shared_lock {
-                // Shared lock prewrite must have an existing shared pessimistic lock
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: reader.start_ts,
-                    key: mutation.key.into_raw()?,
+                    key: mutation.key.to_raw()?,
                     reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
                 }
                 .into());
             }
-            // pipelined DML can't go into this. Otherwise, assertions may need to be
-            // skipped for non-first flushes.
+            // Pipelined DML cannot enter the amend path.
             assert_eq!(generation, 0);
             amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
@@ -394,6 +406,13 @@ impl<'a> PrewriteMutation<'a> {
 
         let should_not_exist = mutation.should_not_exists();
         let is_shared_lock = matches!(mutation, Mutation::SharedLock(..));
+        if is_shared_lock
+            && (!txn_props.is_pessimistic() || !matches!(pessimistic_action, DoPessimisticCheck))
+        {
+            return Err(box_err!(
+                "shared prewrite requires a pessimistic shared-lock check"
+            ));
+        }
         let mutation_type = mutation.mutation_type();
         let lock_type = LockType::from_mutation(&mutation);
         let assertion = mutation.get_assertion();
@@ -747,18 +766,8 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
+            debug_assert_eq!(lock.lock_type, LockType::Lock);
             shared.update_lock(lock)?;
-            #[cfg(debug_assertions)]
-            {
-                let sub_lock_type = shared
-                    .get_lock(&self.txn_props.start_ts)?
-                    .map(|l| l.lock_type);
-                debug_assert!(
-                    matches!(sub_lock_type, Some(LockType::Lock)),
-                    "shared lock sub lock stored as {:?}",
-                    sub_lock_type
-                );
-            }
             txn.put_shared_locks(self.key, &shared, false);
         } else if try_one_pc {
             txn.put_locks_for_1pc(self.key, lock, lock_status.has_pessimistic_lock());
@@ -2984,6 +2993,146 @@ pub mod tests {
             });
             assert!(res.is_err());
         }
+    }
+
+    #[cfg(test)]
+    fn prewrite_shared_member(
+        engine: &mut RocksEngine,
+        key: &[u8],
+        primary: &[u8],
+        start: u64,
+    ) -> Result<()> {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(start.into(), snapshot, true);
+        let cm = ConcurrencyManager::new_for_test(100.into());
+        let mut txn = MvccTxn::new(start.into(), cm);
+        let props = shared_pessimistic_props(primary, start.into(), 100.into(), 2000);
+        prewrite(
+            &mut txn,
+            &mut reader,
+            &props,
+            Mutation::make_shared_lock(Key::from_raw(key)),
+            &None,
+            DoPessimisticCheck,
+            None,
+        )?;
+        write(engine, &Context::default(), txn.into_modifies());
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_prewrite_with_compatible_commit_history() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-history";
+        must_prewrite_put(&mut engine, key, b"initial", key, 1);
+        must_commit(&mut engine, key, 1, 2);
+        prepare_shared_pessimistic_lock(&mut engine, key, key, 10.into(), 10.into());
+        // T20 joins T10, prepares and commits. T10's own S remains throughout.
+        crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_acquire_shared_pessimistic_lock(
+            &mut engine, key, key, 20, 20, 2000,
+        );
+        prewrite_shared_member(&mut engine, key, key, 20).unwrap();
+        must_commit(&mut engine, key, 20, 30);
+        prewrite_shared_member(&mut engine, key, key, 10).unwrap();
+        // A repeated prepare must retain its idempotent result despite Lock@30.
+        prewrite_shared_member(&mut engine, key, key, 10).unwrap();
+        let mut shared = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared.len(), 1);
+        assert_eq!(
+            shared.get_lock(&10.into()).unwrap().unwrap().lock_type,
+            LockType::Lock
+        );
+        must_commit(&mut engine, key, 10, 40);
+    }
+
+    #[test]
+    fn test_shared_prewrite_requires_own_member_regardless_of_history() {
+        for has_history in [false, true] {
+            let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+            let key = b"missing-shared-member";
+            if has_history {
+                must_prewrite_lock(&mut engine, key, key, 20);
+                must_commit(&mut engine, key, 20, 30);
+            }
+            let assert_missing = |engine: &mut RocksEngine| {
+                assert!(matches!(
+                    prewrite_shared_member(engine, key, b"primary", 10),
+                    Err(Error(box ErrorInner::PessimisticLockNotFound {
+                        reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
+                        ..
+                    }))
+                ));
+            };
+            assert_missing(&mut engine);
+            must_unlocked(&mut engine, key);
+            prepare_shared_pessimistic_lock(&mut engine, key, key, 40.into(), 40.into());
+            assert_missing(&mut engine);
+            let shared = must_load_shared_lock(&mut engine, key);
+            assert_eq!(shared.len(), 1);
+            assert!(shared.contains_start_ts(40.into()));
+        }
+    }
+
+    #[test]
+    fn test_shared_prewrite_accepts_live_member_acquired_after_a_write() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"pre-read-write";
+        must_prewrite_put(&mut engine, key, b"changed-before-read", key, 20);
+        must_commit(&mut engine, key, 20, 30);
+        prepare_shared_pessimistic_lock(&mut engine, key, key, 10.into(), 100.into());
+        prewrite_shared_member(&mut engine, key, key, 10).unwrap();
+    }
+
+    #[test]
+    fn test_shared_prewrite_reports_foreign_exclusive_lock() {
+        for prepared in [false, true] {
+            let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+            let key = b"missing-shared-foreign-exclusive";
+            if prepared {
+                must_prewrite_lock(&mut engine, key, key, 20);
+            } else {
+                crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_succeed(
+                    &mut engine,
+                    key,
+                    key,
+                    20,
+                    20,
+                );
+            }
+            assert!(matches!(
+                prewrite_shared_member(&mut engine, key, key, 10),
+                Err(Error(box ErrorInner::KeyIsLocked(info))) if info.lock_version == 20
+            ));
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = SnapshotReader::new(10.into(), snapshot, true);
+            let Some(Either::Left(lock)) = reader.load_lock(&Key::from_raw(key)).unwrap() else {
+                panic!("foreign exclusive holder was changed");
+            };
+            assert_eq!(lock.ts, 20.into());
+            assert_eq!(lock.is_pessimistic_lock(), !prepared);
+        }
+    }
+
+    #[test]
+    fn test_shared_prewrite_rejects_own_mode_and_primary_mismatch() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"own-exclusive";
+        must_prewrite_lock(&mut engine, key, key, 10);
+        assert!(matches!(
+            prewrite_shared_member(&mut engine, key, key, 10),
+            Err(Error(box ErrorInner::PessimisticLockNotFound {
+                reason: PessimisticLockNotFoundReason::LockTsMismatch,
+                ..
+            }))
+        ));
+        must_locked(&mut engine, key, 10);
+
+        let shared_key = b"own-shared";
+        prepare_shared_pessimistic_lock(&mut engine, shared_key, b"primary", 10.into(), 20.into());
+        assert!(prewrite_shared_member(&mut engine, shared_key, b"wrong-primary", 10).is_err());
+        prewrite_shared_member(&mut engine, shared_key, b"primary", 10).unwrap();
+        // Same transaction and Prepared mode are insufficient when primary differs.
+        assert!(prewrite_shared_member(&mut engine, shared_key, b"wrong-primary", 10).is_err());
     }
 
     #[test]
