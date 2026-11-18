@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use azure_core::{Error as AzureError, credentials::TokenCredential};
+use azure_core::{Error as AzureError, credentials::TokenCredential, http::ClientOptions};
 use azure_identity::ClientSecretCredential;
 use azure_security_keyvault_keys::{
     KeyClient, KeyClientOptions,
@@ -59,11 +59,19 @@ impl AzureKms {
         config: Config,
         keyvault_credentials: Arc<dyn TokenCredential>,
         hsm_credentials: Arc<dyn TokenCredential>,
+        client_options: ClientOptions,
     ) -> Result<Self> {
         assert!(config.azure.is_some());
         let azure_cfg = config.azure.unwrap();
-        let keyvault_client = new_key_client(&azure_cfg.keyvault_url, keyvault_credentials)?;
-        let hsm_client = new_key_client(&azure_cfg.hsm_url, hsm_credentials)?;
+        let keyvault_client = new_key_client(
+            &azure_cfg.keyvault_url,
+            keyvault_credentials,
+            "7.2",
+            client_options.clone(),
+        )?;
+        // Managed HSM's /rng operation is defined in the stable 7.3 API.
+        let hsm_client =
+            new_key_client(&azure_cfg.hsm_url, hsm_credentials, "7.3", client_options)?;
         Ok(Self {
             client: keyvault_client,
             current_key_id: config.key_id,
@@ -101,6 +109,7 @@ impl AzureKms {
                 config,
                 Arc::new(keyvault_credential),
                 Arc::new(hsm_credential),
+                ClientOptions::default(),
             )
         } else if let Some(certificate_path) = azure_cfg.client_certificate_path.clone() {
             // Certificate recorded in a file to accessing KeyVault.
@@ -124,6 +133,7 @@ impl AzureKms {
                 config,
                 Arc::new(keyvault_credential),
                 Arc::new(hsm_credential),
+                ClientOptions::default(),
             )
         } else if let Some(client_secret) = azure_cfg.client_secret.clone() {
             let keyvault_credential = ClientSecretCredential::new(
@@ -140,7 +150,12 @@ impl AzureKms {
                 None,
             )
             .map_err(convert_azure_error)?;
-            Self::new_with_credentials(config, keyvault_credential, hsm_credential)
+            Self::new_with_credentials(
+                config,
+                keyvault_credential,
+                hsm_credential,
+                ClientOptions::default(),
+            )
         } else {
             Err(CloudError::KmsError(KmsError::Other(OtherError::from_box(
                 box_err!("invalid configurations for Azure KMS"),
@@ -254,14 +269,18 @@ fn required_value(value: Option<Vec<u8>>) -> Result<Vec<u8>> {
     })
 }
 
-fn new_key_client(url: &str, credentials: Arc<dyn TokenCredential>) -> Result<KeyClient> {
+fn new_key_client(
+    url: &str,
+    credentials: Arc<dyn TokenCredential>,
+    api_version: &str,
+    client_options: ClientOptions,
+) -> Result<KeyClient> {
     KeyClient::new(
         url,
         credentials,
         Some(KeyClientOptions {
-            // The legacy SDK sent 7.0. Keep the new SDK's requests on an explicit
-            // 7.2 contract; validate Key Vault and Managed HSM when backporting.
-            api_version: "7.2".to_owned(),
+            api_version: api_version.to_owned(),
+            client_options,
             ..Default::default()
         }),
     )
@@ -274,10 +293,7 @@ mod tests {
 
     use azure_core::{
         credentials::{AccessToken, TokenRequestOptions},
-        http::{
-            AsyncRawResponse, Body, ClientOptions, HttpClient, Method, Request, Transport,
-            headers::Headers,
-        },
+        http::{AsyncRawResponse, Body, HttpClient, Method, Request, Transport, headers::Headers},
     };
     use cloud::kms::{Location, SubConfigAzure};
     use serde_json::json;
@@ -360,31 +376,34 @@ mod tests {
     async fn test_kms_preserves_hsm_randomness_and_rsa_oaep_round_trip() {
         let transport = Arc::new(MockTransport::default());
         let credential = Arc::new(MockCredential::default());
-        let make_client = |url| {
-            KeyClient::new(
-                url,
-                credential.clone(),
-                Some(KeyClientOptions {
-                    api_version: "7.2".to_owned(),
-                    client_options: ClientOptions {
-                        transport: Some(Transport::new(transport.clone())),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            )
-            .unwrap()
+        let config = Config {
+            key_id: KeyId::new("ExampleKey".to_owned()).unwrap(),
+            vendor: STORAGE_VENDOR_NAME_AZURE.to_owned(),
+            location: Location {
+                region: String::new(),
+                endpoint: String::new(),
+            },
+            azure: Some(SubConfigAzure {
+                tenant_id: "tenant".into(),
+                client_id: "client".into(),
+                keyvault_url: "https://test.vault.azure.net".into(),
+                hsm_name: "test".into(),
+                hsm_url: "https://test.managedhsm.azure.net".into(),
+                ..Default::default()
+            }),
+            gcp: None,
+            aws: None,
         };
-        let kms = AzureKms {
-            tenant_id: "tenant".into(),
-            client_id: "client".into(),
-            client: make_client("https://test.vault.azure.net"),
-            current_key_id: KeyId::new("ExampleKey".to_owned()).unwrap(),
-            keyvault_url: "https://test.vault.azure.net".into(),
-            hsm_client: make_client("https://test.managedhsm.azure.net"),
-            hsm_name: "test".into(),
-            hsm_url: "https://test.managedhsm.azure.net".into(),
-        };
+        let kms = AzureKms::new_with_credentials(
+            config,
+            credential.clone(),
+            credential.clone(),
+            ClientOptions {
+                transport: Some(Transport::new(transport.clone())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let data_key = kms.generate_data_key().await.unwrap();
         assert_eq!(&*data_key.plaintext, &[7; 32]);
         assert_eq!(&*data_key.encrypted, &[9; 48]);
@@ -397,7 +416,6 @@ mod tests {
         assert_eq!(requests.len(), 3);
         for request in requests.iter() {
             assert_eq!(request.method(), Method::Post);
-            assert_eq!(request.url().query(), Some("api-version=7.2"));
         }
         let body = |request: &Request| match request.body() {
             Body::Bytes(bytes) => serde_json::from_slice::<serde_json::Value>(bytes).unwrap(),
@@ -408,12 +426,14 @@ mod tests {
             Some("test.managedhsm.azure.net")
         );
         assert_eq!(requests[0].url().path(), "/rng");
+        assert_eq!(requests[0].url().query(), Some("api-version=7.3"));
         assert_eq!(body(&requests[0]), json!({"count": 32}));
         for (request, operation, input) in [
             (&requests[1], "encrypt", vec![7; 32]),
             (&requests[2], "decrypt", vec![9; 48]),
         ] {
             assert_eq!(request.url().host_str(), Some("test.vault.azure.net"));
+            assert_eq!(request.url().query(), Some("api-version=7.2"));
             assert_eq!(
                 request.url().path(),
                 format!("/keys/ExampleKey//{operation}")
