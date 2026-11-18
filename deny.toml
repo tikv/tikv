@@ -91,6 +91,13 @@ ignore = [
     #
     # TODO: Remove after the legacy clients move off h2 0.3.
     "RUSTSEC-2026-0258",
+    # Temporarily accept chrono and chrono-tz's unmaintained advisories. They
+    # report maintenance status, not a specific vulnerability. Replacing TiKV's
+    # date/time and timezone handling needs a separate compatibility review.
+    # TODO: Migrate these dependencies and remove both exceptions.
+    # See: https://github.com/chronotope/chrono/issues/1768
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
