@@ -17,6 +17,101 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
 
+/// Keep an old shared primary alive while unrelated data commits. The feed
+/// must advance beyond that commit and later emit the upgraded holder's write.
+#[test]
+fn test_shared_read_does_not_pin_cdc_resolved_ts() {
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
+    let p = b"watermark";
+    let q = b"journal-entry";
+    let t = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_acquire_pessimistic_lock(
+        1,
+        vec![new_mutation(Op::SharedPessimisticLock, p, b"")],
+        p.to_vec(),
+        t,
+        t,
+    );
+
+    let req = suite.new_changedata_request(1);
+    let (mut tx, stream, recv) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(tx.send((req, WriteFlags::default()))).unwrap();
+    let initialized = recv(false);
+    assert_eq!(initialized.events.len(), 1);
+    assert_eq!(initialized.events[0].get_entries().entries.len(), 1);
+    assert_eq!(
+        initialized.events[0].get_entries().entries[0].get_type(),
+        EventLogType::Initialized
+    );
+
+    let expect_write_and_checkpoint =
+        |key: &[u8], value: &[u8], start: TimeStamp, commit: TimeStamp| {
+            let mut seen = Vec::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "checkpoint did not pass {commit}"
+                );
+                let event = recv(true);
+                for region in event.get_events() {
+                    assert!(!region.has_error(), "{region:?}");
+                    for row in region.get_entries().get_entries() {
+                        assert_eq!(row.get_key(), key);
+                        assert_eq!(row.get_start_ts(), start.into_inner());
+                        match row.get_type() {
+                            EventLogType::Prewrite => assert_eq!(row.get_value(), value),
+                            EventLogType::Commit => {
+                                assert_eq!(row.get_commit_ts(), commit.into_inner())
+                            }
+                            other => panic!("unexpected event {other:?}"),
+                        }
+                        seen.push(row.get_type());
+                    }
+                }
+                if event.get_resolved_ts().get_ts() >= commit.into_inner() {
+                    break;
+                }
+            }
+            assert_eq!(seen, vec![EventLogType::Prewrite, EventLogType::Commit]);
+        };
+
+    let u = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![new_mutation(Op::Put, q, b"entry")], q.to_vec(), u);
+    let u_commit = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![q.to_vec()], u, u_commit);
+    expect_write_and_checkpoint(q, b"entry", u, u_commit);
+
+    let f = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut upgrade = PessimisticLockRequest::default();
+    upgrade.set_context(suite.get_context(1));
+    upgrade.set_primary_lock(p.to_vec());
+    upgrade.set_mutations(vec![new_mutation(Op::PessimisticLock, p, b"")].into());
+    upgrade.set_start_version(t.into_inner());
+    upgrade.set_for_update_ts(f.into_inner());
+    upgrade.set_is_shared_lock_upgrade(true);
+    let resp = suite
+        .get_tikv_client(1)
+        .kv_pessimistic_lock(&upgrade)
+        .unwrap();
+    assert!(
+        !resp.has_region_error() && resp.errors.is_empty(),
+        "{resp:?}"
+    );
+    suite.must_kv_pessimistic_prewrite(
+        1,
+        vec![new_mutation(Op::Put, p, b"next")],
+        p.to_vec(),
+        t,
+        f,
+    );
+    let commit = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![p.to_vec()], t, commit);
+    expect_write_and_checkpoint(p, b"next", t, commit);
+    drop(stream);
+    suite.stop();
+}
+
 #[test]
 fn test_cdc_basic() {
     test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
