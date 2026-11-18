@@ -3,7 +3,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use azure_core::{Error as AzureError, credentials::TokenCredential, http::ClientOptions};
+use azure_core::{
+    Error as AzureError,
+    credentials::TokenCredential,
+    http::{
+        ClientOptions, Context, Request,
+        policies::{Policy, PolicyResult},
+    },
+};
 use azure_identity::ClientSecretCredential;
 use azure_security_keyvault_keys::{
     KeyClient, KeyClientOptions,
@@ -269,12 +276,35 @@ fn required_value(value: Option<Vec<u8>>) -> Result<Vec<u8>> {
     })
 }
 
+#[derive(Debug)]
+struct PreserveKmsRequestBody;
+
+#[async_trait]
+impl Policy for PreserveKmsRequestBody {
+    #[allow(elided_lifetimes_in_paths)]
+    async fn send(
+        &self,
+        ctx: &Context,
+        request: &mut Request,
+        next: &[Arc<dyn Policy>],
+    ) -> PolicyResult {
+        // The Key Vault SDK removes the body for its initial authentication
+        // probe. Save it before the retry policy so a 503 followed by a 401
+        // can still restore it from Context, without exposing it in the probe.
+        let ctx = ctx.to_borrowed().with_value(request.body().clone());
+        next[0].send(&ctx, request, &next[1..]).await
+    }
+}
+
 fn new_key_client(
     url: &str,
     credentials: Arc<dyn TokenCredential>,
     api_version: &str,
-    client_options: ClientOptions,
+    mut client_options: ClientOptions,
 ) -> Result<KeyClient> {
+    client_options
+        .per_call_policies
+        .push(Arc::new(PreserveKmsRequestBody));
     KeyClient::new(
         url,
         credentials,
@@ -289,7 +319,7 @@ fn new_key_client(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{collections::HashSet, sync::Mutex};
 
     use azure_core::{
         credentials::{AccessToken, TokenRequestOptions},
@@ -327,6 +357,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct MockTransport {
         requests: Mutex<Vec<Request>>,
+        retry_before_challenge: bool,
+        failed_hosts: Mutex<HashSet<String>>,
     }
 
     #[async_trait]
@@ -340,6 +372,15 @@ mod tests {
             {
                 // The supported SDK obtains a challenge without sending key material.
                 assert_eq!(request.body().is_empty(), Some(true));
+                if self.retry_before_challenge
+                    && self
+                        .failed_hosts
+                        .lock()
+                        .unwrap()
+                        .insert(request.url().host_str().unwrap().to_owned())
+                {
+                    return Ok(AsyncRawResponse::from_bytes(503.into(), headers, ""));
+                }
                 let resource = if request
                     .url()
                     .host_str()
@@ -374,7 +415,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_kms_preserves_hsm_randomness_and_rsa_oaep_round_trip() {
-        let transport = Arc::new(MockTransport::default());
+        check_kms_round_trip(false).await;
+    }
+
+    #[tokio::test]
+    async fn test_kms_preserves_request_body_after_retry_before_challenge() {
+        check_kms_round_trip(true).await;
+    }
+
+    async fn check_kms_round_trip(retry_before_challenge: bool) {
+        let transport = Arc::new(MockTransport {
+            retry_before_challenge,
+            ..Default::default()
+        });
         let credential = Arc::new(MockCredential::default());
         let config = Config {
             key_id: KeyId::new("ExampleKey".to_owned()).unwrap(),
@@ -410,6 +463,10 @@ mod tests {
         assert_eq!(
             kms.decrypt_data_key(&data_key.encrypted).await.unwrap(),
             vec![7; 32]
+        );
+        assert_eq!(
+            transport.failed_hosts.lock().unwrap().len(),
+            if retry_before_challenge { 2 } else { 0 }
         );
 
         let requests = transport.requests.lock().unwrap();
