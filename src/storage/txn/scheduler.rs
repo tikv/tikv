@@ -1126,7 +1126,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let wait_timeout = lock_info.parameters.wait_timeout;
         let allow_lock_with_conflict = lock_info.parameters.allow_lock_with_conflict;
 
+        let requested_lock_mode = if lock_info.parameters.is_shared_lock_upgrade {
+            kvproto::deadlock::RequestedLockMode::Upgrade
+        } else if lock_info.is_shared_lock_request {
+            kvproto::deadlock::RequestedLockMode::Shared
+        } else {
+            kvproto::deadlock::RequestedLockMode::Exclusive
+        };
         let diag_ctx = DiagnosticContext {
+            requested_lock_mode,
             key: lock_info.key.to_raw().unwrap(),
             resource_group_tag: ctx.get_resource_group_tag().into(),
             tracker,

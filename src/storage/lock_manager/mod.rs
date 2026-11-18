@@ -44,6 +44,7 @@ pub struct DiagnosticContext {
     /// same statement) Currently it is the encoded SQL digest if the client
     /// is TiDB
     pub resource_group_tag: Vec<u8>,
+    pub requested_lock_mode: kvproto::deadlock::RequestedLockMode,
     /// The tracker is used to track and collect the lock wait details.
     pub tracker: TrackerToken,
 }

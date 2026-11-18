@@ -421,6 +421,7 @@ impl WaitTable {
                         let mut entry = WaitForEntry::default();
                         entry.set_txn(waiter.start_ts.into_inner());
                         entry.set_wait_for_txn(blocker.into_inner());
+                        entry.set_requested_lock_mode(waiter.diag_ctx.requested_lock_mode);
                         entry.set_key_hash(waiter.wait_info.lock_digest.hash);
                         entry.set_key(waiter.wait_info.key.to_raw().unwrap());
                         entry.set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
@@ -1172,6 +1173,61 @@ pub mod tests {
             }
         }
         assert!(wait_for_enties.is_empty());
+    }
+
+    #[test]
+    fn test_shared_wait_diagnostics_include_mode_and_other_blockers() {
+        let counter = Arc::new(AtomicUsize::new(1));
+        let mut table = WaitTable::new(counter);
+        let mut waiter = dummy_waiter(10.into(), 0.into(), 42);
+        waiter.diag_ctx.requested_lock_mode = kvproto::deadlock::RequestedLockMode::Upgrade;
+        waiter
+            .wait_info
+            .lock_info
+            .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+        waiter.wait_info.lock_info.set_shared_lock_infos(
+            [10, 20, 30]
+                .into_iter()
+                .map(|ts| LockInfo {
+                    lock_version: ts,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        table.add_waiter(LockWaitToken(Some(1)), waiter);
+        let entries = table.to_wait_for_entries();
+        assert_eq!(
+            entries.iter().map(|e| e.wait_for_txn).collect::<Vec<_>>(),
+            [20, 30]
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.get_requested_lock_mode()
+                    == kvproto::deadlock::RequestedLockMode::Upgrade)
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        hash: 42,
+                        ts: 40.into()
+                    },
+                    10.into()
+                )
+                .is_none()
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        hash: 42,
+                        ts: 20.into()
+                    },
+                    10.into()
+                )
+                .is_some()
+        );
     }
 
     fn start_waiter_manager(

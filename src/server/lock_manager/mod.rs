@@ -390,6 +390,7 @@ mod tests {
         DiagnosticContext {
             key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
+            requested_lock_mode: Default::default(),
             tracker,
         }
     }

@@ -53,10 +53,10 @@ use crate::{
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
     ts: TimeStamp,
-    // (hash, key)
+    // (hash, key, requested mode)
     // The `key` is recorded as diagnostic information. There may be multiple keys with the same
     // hash, but it should be enough if we record only one of them.
-    keys: Vec<(u64, Vec<u8>)>,
+    keys: Vec<(u64, Vec<u8>, RequestedLockMode)>,
     resource_group_tag: Vec<u8>,
     last_detect_time: Instant,
 }
@@ -69,26 +69,29 @@ impl Locks {
         key: Vec<u8>,
         resource_group_tag: Vec<u8>,
         last_detect_time: Instant,
+        mode: RequestedLockMode,
     ) -> Self {
         Self {
             ts,
-            keys: vec![(hash, key)],
+            keys: vec![(hash, key, mode)],
             resource_group_tag,
             last_detect_time,
         }
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant) {
-        if !self.keys.iter().any(|(hash, _)| *hash == lock_hash) {
-            self.keys.push((lock_hash, key))
+    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant, mode: RequestedLockMode) {
+        if let Some(entry) = self.keys.iter_mut().find(|(hash, ..)| *hash == lock_hash) {
+            entry.2 = mode;
+        } else {
+            self.keys.push((lock_hash, key, mode));
         }
         self.last_detect_time = now
     }
 
     /// Removes the `lock_hash` and returns true if the `Locks` is empty.
     fn remove(&mut self, lock_hash: u64) -> bool {
-        if let Some(idx) = self.keys.iter().position(|(hash, _)| *hash == lock_hash) {
+        if let Some(idx) = self.keys.iter().position(|(hash, ..)| *hash == lock_hash) {
             self.keys.remove(idx);
         }
         self.keys.is_empty()
@@ -106,6 +109,7 @@ impl Locks {
         entry.set_wait_for_txn(self.ts.into_inner());
         entry.set_key_hash(self.keys[0].0);
         entry.set_key(self.keys[0].1.clone());
+        entry.set_requested_lock_mode(self.keys[0].2);
         entry.set_resource_group_tag(self.resource_group_tag.clone());
         entry
     }
@@ -155,6 +159,25 @@ impl DetectTable {
         lock_key: &[u8],
         resource_group_tag: &[u8],
     ) -> Option<(u64, Vec<WaitForEntry>)> {
+        self.detect_with_mode(
+            txn_ts,
+            lock_ts,
+            lock_hash,
+            lock_key,
+            resource_group_tag,
+            RequestedLockMode::Unknown,
+        )
+    }
+
+    fn detect_with_mode(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        lock_key: &[u8],
+        resource_group_tag: &[u8],
+        mode: RequestedLockMode,
+    ) -> Option<(u64, Vec<WaitForEntry>)> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_METRICS.detect.inc();
 
@@ -163,7 +186,14 @@ impl DetectTable {
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
         // The `resource_group_tag` will be consumed if it's successfully registered.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag) {
+        if self.register_if_existed(
+            txn_ts,
+            lock_ts,
+            lock_hash,
+            lock_key,
+            resource_group_tag,
+            mode,
+        ) {
             return None;
         }
 
@@ -171,7 +201,14 @@ impl DetectTable {
             ERROR_COUNTER_METRICS.deadlock.inc();
             return Some((deadlock_key_hash, wait_chain));
         }
-        self.register(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
+        self.register(
+            txn_ts,
+            lock_ts,
+            lock_hash,
+            lock_key,
+            resource_group_tag,
+            mode,
+        );
         None
     }
 
@@ -275,10 +312,11 @@ impl DetectTable {
         lock_hash: u64,
         key: &[u8],
         resource_group_tag: &[u8],
+        mode: RequestedLockMode,
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, key.to_vec(), self.now);
+                locks.push(lock_hash, key.to_vec(), self.now, mode);
                 locks.resource_group_tag = resource_group_tag.to_vec();
                 return true;
             }
@@ -295,6 +333,7 @@ impl DetectTable {
         lock_hash: u64,
         key: &[u8],
         resource_group_tag: &[u8],
+        mode: RequestedLockMode,
     ) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
@@ -304,6 +343,7 @@ impl DetectTable {
             key.to_vec(),
             resource_group_tag.to_vec(),
             self.now,
+            mode,
         );
         wait_for.insert(locks.ts, locks);
     }
@@ -835,6 +875,7 @@ where
                     let mut entry = WaitForEntry::default();
                     entry.set_txn(txn_ts.into_inner());
                     entry.set_key(diag_ctx.key.clone());
+                    entry.set_requested_lock_mode(diag_ctx.requested_lock_mode);
                     entry.set_resource_group_tag(diag_ctx.resource_group_tag.clone());
                     entry.set_wait_for_txn(blocker.into_inner());
                     entry.set_key_hash(wait_info.lock_digest.hash);
@@ -874,18 +915,22 @@ where
             DetectType::Detect => {
                 let wait_info = wait_info.unwrap();
                 for blocker in wait_info.blocking_txns(txn_ts) {
-                    if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
-                        txn_ts,
-                        blocker,
-                        wait_info.lock_digest.hash,
-                        &diag_ctx.key,
-                        &diag_ctx.resource_group_tag,
-                    ) {
+                    if let Some((deadlock_key_hash, mut wait_chain)) = detect_table
+                        .detect_with_mode(
+                            txn_ts,
+                            blocker,
+                            wait_info.lock_digest.hash,
+                            &diag_ctx.key,
+                            &diag_ctx.resource_group_tag,
+                            diag_ctx.requested_lock_mode,
+                        )
+                    {
                         let mut last_entry = WaitForEntry::default();
                         last_entry.set_txn(txn_ts.into_inner());
                         last_entry.set_wait_for_txn(blocker.into_inner());
                         last_entry.set_key_hash(wait_info.lock_digest.hash);
                         last_entry.set_key(diag_ctx.key.clone());
+                        last_entry.set_requested_lock_mode(diag_ctx.requested_lock_mode);
                         last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
                         wait_chain.push(last_entry);
                         let lock = LockDigest {
@@ -989,12 +1034,13 @@ where
             let detect_table = &mut inner.detect_table;
             let res = match req.get_tp() {
                 DeadlockRequestType::Detect => {
-                    if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect(
+                    if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect_with_mode(
                         txn.into(),
                         wait_for_txn.into(),
                         *key_hash,
                         key,
                         resource_group_tag,
+                        req.get_entry().get_requested_lock_mode(),
                     ) {
                         let mut resp = DeadlockResponse::default();
                         resp.set_entry(req.take_entry());
@@ -1368,6 +1414,39 @@ pub mod tests {
                 .is_none()
         );
         assert_eq!(detect_table.wait_for_map.len(), 1);
+    }
+
+    #[test]
+    fn test_deadlock_chain_retains_requested_upgrade_mode() {
+        let mut table = DetectTable::new(Duration::from_secs(10));
+        assert!(
+            table
+                .detect_with_mode(
+                    10.into(),
+                    20.into(),
+                    4,
+                    b"a",
+                    &[],
+                    RequestedLockMode::Upgrade
+                )
+                .is_none()
+        );
+        let (_, chain) = table
+            .detect_with_mode(
+                20.into(),
+                10.into(),
+                5,
+                b"b",
+                &[],
+                RequestedLockMode::Shared,
+            )
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(
+            chain[0].get_requested_lock_mode(),
+            RequestedLockMode::Upgrade
+        );
+        assert_eq!(chain[0].get_key(), b"a");
     }
 
     #[test]
