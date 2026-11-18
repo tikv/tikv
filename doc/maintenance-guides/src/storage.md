@@ -163,6 +163,9 @@ High-risk contracts:
 - Shared-lock prewrite requires the transaction's own shared holder. An
   explicit upgrade requires that holder or an exact replay of the resulting
   exclusive lock. Missing holders cannot be recreated from MVCC history.
+- Shared pessimistic locks, upgrades, and transitions of a shared wrapper
+  to shrink-only take effect on Raft apply. Requests that change this state
+  bypass in-memory pessimistic locking and pipelined responses.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

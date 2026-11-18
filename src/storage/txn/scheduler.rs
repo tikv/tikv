@@ -2034,13 +2034,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         let tracker_token = task.tracker_token();
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
-        let pipelined = task.cmd().can_be_pipelined()
-            && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
         let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
-            cmd.keys.iter().any(|k| k.2)
+            cmd.is_shared_lock_upgrade || cmd.keys.iter().any(|k| k.2)
         } else {
             false
         };
+        let pipelined = task.cmd().can_be_pipelined()
+            && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined
+            && !is_shared_lock_cmd;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
         let write_bytes = task.cmd().write_bytes() as u64;
@@ -3021,7 +3022,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-            ResponsePolicy::OnProposed,
+            ResponsePolicy::OnApplied,
             vec![],
         );
         let mut sched_details = SchedulerDetails::new(TrackerToken::default());
@@ -3047,6 +3048,10 @@ mod tests {
         )
         .expect("shared lock update should be persisted");
 
+        assert!(matches!(
+            result.0.response_policy,
+            ResponsePolicy::OnApplied
+        ));
         assert!(txn_ext.pessimistic_locks.read().is_empty());
         engine
             .write(&Context::default(), result.0.to_be_write)
