@@ -216,6 +216,50 @@ pub fn check_txn_status_lock_exists(
     Ok((TxnStatus::uncommitted(lock, min_commit_ts_pushed), None))
 }
 
+/// Status/TTL operations on one shared primary never replace the wrapper or
+/// modify the other transactions stored at the same physical key.
+pub fn check_txn_status_shared_lock(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    primary_key: Key,
+    mut shared_locks: SharedLocks,
+    current_ts: TimeStamp,
+    caller_start_ts: TimeStamp,
+) -> Result<(TxnStatus, Option<ReleasedLock>)> {
+    let mut lock = shared_locks.get_lock(&reader.start_ts)?.unwrap().clone();
+    if !primary_key.is_encoded_from(&lock.primary) {
+        return Err(
+            ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
+        );
+    }
+    if let Some(status) = check_determined_txn_status(reader, &primary_key)? {
+        // A protected outcome wins over a delayed/recreated pessimistic member.
+        shared_locks.remove_lock(&reader.start_ts)?;
+        let released = if shared_locks.is_empty() {
+            txn.unlock_key(primary_key, true, TimeStamp::zero())
+        } else {
+            txn.put_shared_locks(primary_key, &shared_locks, false);
+            None
+        };
+        return Ok((status, released));
+    }
+    if lock.ts.physical() + lock.ttl < current_ts.physical() {
+        let released = rollback_shared_lock(txn, reader, primary_key, shared_locks, lock.ts, true)?;
+        return Ok((TxnStatus::TtlExpire, released));
+    }
+    if !lock.min_commit_ts.is_zero()
+        && !caller_start_ts.is_max()
+        && caller_start_ts >= lock.min_commit_ts
+    {
+        lock.min_commit_ts = std::cmp::max(caller_start_ts.next(), current_ts);
+        shared_locks.update_lock(lock.clone())?;
+        txn.put_shared_locks(primary_key, &shared_locks, false);
+    }
+    let pushed = (!caller_start_ts.is_zero() && lock.min_commit_ts > caller_start_ts)
+        || caller_start_ts.is_max();
+    Ok((TxnStatus::uncommitted(lock, pushed), None))
+}
+
 // Check transaction status from storage for the primary key, this function
 // would have no impact on the transaction status, it is read only and would not
 // write anything. The returned `TxnStatus` is Some(..) if it's already
@@ -401,10 +445,11 @@ pub fn rollback_shared_lock(
         }
     };
 
-    // `protected` is always false for a shared lock
-    assert!(!key.is_encoded_from(&lock.primary));
+    // A shared primary owns the transaction outcome just like an exclusive
+    // primary. Its rollback must survive collapse while unrelated members remain.
+    let protected = key.is_encoded_from(&lock.primary);
     assert!(lock.generation == 0);
-    if let Some(write) = make_rollback(reader.start_ts, false, overlapped_write) {
+    if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
 

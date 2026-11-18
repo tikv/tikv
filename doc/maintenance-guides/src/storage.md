@@ -145,9 +145,10 @@ High-risk contracts:
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
-- `CheckTxnStatus` must check whether a shared lock belongs to the queried
-  transaction before rejecting it as an invalid primary. Unrelated shared
-  holders must not hide that transaction's commit or rollback record.
+- A shared primary belongs to one transaction identified by its start
+  timestamp. Heartbeat, status checks, and TTL rollback update only that
+  member. Rollback of a primary writes a protected record. Unrelated holders
+  must not hide a transaction's commit or rollback record.
 - Shared pessimistic lock acquisition honors lock-only-if-exists before inserting
   a holder. Replaying a locking read on its own member returns the requested
   value or existence at the request's for-update timestamp.

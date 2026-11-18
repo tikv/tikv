@@ -98,14 +98,28 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
                 lock
             }
-            Some(Either::Right(shared_locks)) if shared_locks.contains_start_ts(self.start_ts) => {
-                // Reject the request because a shared locked key cannot be the primary key of a
-                // transaction according to the design and transaction heartbeats are only sent
-                // for the primary key.
-                return Err(MvccError::from(MvccErrorInner::PrimaryMismatch(
-                    shared_locks.into_lock_info(self.primary_key.into_raw()?),
-                ))
-                .into());
+            Some(Either::Right(mut shared_locks))
+                if shared_locks.contains_start_ts(self.start_ts) =>
+            {
+                let mut lock = shared_locks
+                    .get_lock(&self.start_ts)
+                    .map_err(crate::storage::mvcc::Error::from)?
+                    .unwrap()
+                    .clone();
+                if !self.primary_key.is_encoded_from(&lock.primary) {
+                    return Err(MvccError::from(MvccErrorInner::PrimaryMismatch(
+                        lock.into_lock_info(self.primary_key.into_raw()?),
+                    ))
+                    .into());
+                }
+                if lock.ttl < self.advise_ttl {
+                    lock.ttl = self.advise_ttl;
+                    shared_locks
+                        .update_lock(lock.clone())
+                        .map_err(crate::storage::mvcc::Error::from)?;
+                    txn.put_shared_locks(self.primary_key.clone(), &shared_locks, false);
+                }
+                lock
             }
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
@@ -259,7 +273,7 @@ pub mod tests {
                 box mvcc::ErrorInner::PrimaryMismatch(lock_info),
             ))) => {
                 assert_eq!(lock_info.key, key);
-                assert_eq!(lock_info.lock_type, Op::SharedLock);
+                assert_eq!(lock_info.lock_type, Op::PessimisticLock);
             }
             e => panic!("unexpected error: {:?}", e),
         }
@@ -376,7 +390,20 @@ pub mod tests {
     }
 
     #[test]
-    fn test_txn_heartbeat_rejects_shared_lock_key() {
+    fn test_shared_primary_heartbeat_preserves_other_primary() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-primary";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 10, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 20, 20, 100);
+        must_success(&mut engine, key, 10, 250, 250);
+        assert_eq!(load_shared_sub_lock(&mut engine, key, 10).ttl, 250);
+        assert_eq!(load_shared_sub_lock(&mut engine, key, 20).ttl, 100);
+        must_success(&mut engine, key, 20, 300, 300);
+        assert_eq!(load_shared_sub_lock(&mut engine, key, 10).ttl, 250);
+    }
+
+    #[test]
+    fn test_txn_heartbeat_rejects_shared_secondary() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"k1";
         let primary = b"pk";

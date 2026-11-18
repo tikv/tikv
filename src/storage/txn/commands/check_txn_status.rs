@@ -9,9 +9,9 @@ use crate::storage::{
     ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{ErrorInner, MvccTxn, SnapshotReader},
+    mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Error, Result,
+        Result,
         actions::check_txn_status::*,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
@@ -132,14 +132,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.rollback_if_not_exist,
             )?,
             Some(Either::Right(shared_locks)) if shared_locks.contains_start_ts(self.lock_ts) => {
-                // A shared lock cannot be this transaction's primary lock.
-                warn!("reject check_txn_status on shared lock";
-                    "lock_ts" => self.lock_ts,
-                    "key" => ?&self.primary_key,
-                );
-                return Err(Error::from_mvcc(ErrorInner::PrimaryMismatch(
-                    shared_locks.into_lock_info(self.primary_key.into_raw()?),
-                )));
+                check_txn_status_shared_lock(
+                    &mut txn,
+                    &mut reader,
+                    self.primary_key,
+                    shared_locks,
+                    self.current_ts,
+                    self.caller_start_ts,
+                )?
             }
             l => {
                 let lock = l.and_then(|lock_or_shared| match lock_or_shared {
@@ -1270,6 +1270,54 @@ pub mod tests {
     }
 
     #[test]
+    fn test_shared_primary_expiration_is_protected() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-primary";
+        let ts1 = TimeStamp::compose(10, 0);
+        let ts2 = TimeStamp::compose(20, 0);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts1, ts1, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts2, ts2, 200);
+        must_success(
+            &mut engine,
+            key,
+            ts1,
+            TimeStamp::zero(),
+            TimeStamp::compose(50, 0),
+            true,
+            false,
+            true,
+            |s| matches!(s, TxnStatus::Uncommitted { .. }),
+        );
+        must_success(
+            &mut engine,
+            key,
+            ts1,
+            TimeStamp::zero(),
+            TimeStamp::compose(111, 0),
+            true,
+            false,
+            true,
+            |s| matches!(s, TxnStatus::TtlExpire),
+        );
+        must_get_rollback_protected(&mut engine, key, ts1, true);
+        let mut shared = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared.len(), 1);
+        assert!(shared.get_lock(&ts2).unwrap().is_some());
+        must_success(
+            &mut engine,
+            key,
+            ts1,
+            TimeStamp::zero(),
+            TimeStamp::compose(112, 0),
+            true,
+            false,
+            true,
+            |s| matches!(s, TxnStatus::RolledBack),
+        );
+        assert_eq!(must_load_shared_lock(&mut engine, key).len(), 1);
+    }
+
+    #[test]
     fn test_check_txn_status_with_unrelated_shared_lock_after_commit() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let primary = b"primary";
@@ -1406,7 +1454,7 @@ pub mod tests {
 
         must_acquire_shared_pessimistic_lock(&mut engine, b"k2", b"k3", 2, 2, 100);
         let e = must_err(&mut engine, b"k2", 2, 3, 3, true, false, true);
-        check_error(e, b"k2", b"", kvrpcpb::Op::SharedLock);
+        check_error(e, b"k2", b"k3", kvrpcpb::Op::PessimisticLock);
     }
 
     #[test]
