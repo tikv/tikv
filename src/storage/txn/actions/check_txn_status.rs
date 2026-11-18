@@ -282,7 +282,7 @@ pub fn check_txn_status_shared_lock(
     };
     if let Some(status) = status {
         shared_locks.remove_lock(&reader.start_ts)?;
-        let released = persist_remaining_shared_locks(txn, primary_key, &shared_locks);
+        let released = persist_remaining_shared_locks(txn, primary_key, shared_locks);
         return Ok((status, released));
     }
     if !lock.min_commit_ts.is_zero()
@@ -466,13 +466,13 @@ pub fn rollback_shared_lock(
     };
 
     rollback_shared_member_record(txn, reader, &key, &lock, collapse_rollback)?;
-    Ok(persist_remaining_shared_locks(txn, key, &shared_locks))
+    Ok(persist_remaining_shared_locks(txn, key, shared_locks))
 }
 
 fn persist_remaining_shared_locks(
     txn: &mut MvccTxn,
     key: Key,
-    shared_locks: &SharedLocks,
+    shared_locks: SharedLocks,
 ) -> Option<ReleasedLock> {
     if shared_locks.is_empty() {
         txn.unlock_key(key, true, TimeStamp::zero())

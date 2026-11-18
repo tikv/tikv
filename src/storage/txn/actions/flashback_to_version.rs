@@ -118,7 +118,7 @@ pub fn rollback_locks(
                         txn.modifies.truncate(previous_modifies);
                         txn.write_size = previous_size;
                         if removed {
-                            txn.put_remaining_shared_locks(key.clone(), &holders);
+                            txn.put_remaining_shared_locks(key.clone(), holders);
                         }
                         return Ok(Some(key));
                     }
@@ -133,7 +133,7 @@ pub fn rollback_locks(
                 if holders.is_empty() {
                     txn.unlock_key(key, true, TimeStamp::zero());
                 } else {
-                    txn.put_remaining_shared_locks(key.clone(), &holders);
+                    txn.put_remaining_shared_locks(key.clone(), holders);
                     return Ok(Some(key));
                 }
             }

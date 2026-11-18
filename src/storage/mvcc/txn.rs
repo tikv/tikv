@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
+use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::LockInfo;
@@ -86,6 +87,8 @@ pub struct MvccTxn {
     // pessimistic lock requests waiting on the keys.
     pub(crate) new_locks: Vec<LockInfo>,
     shared_lock_upgrade_hints: Vec<SharedLockUpgradeHint>,
+    // Only the final set of blockers per key may be reported after the write.
+    changed_shared_holders: HashMap<Key, SharedLocks>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -109,6 +112,7 @@ impl MvccTxn {
             locks_for_1pc: vec![],
             new_locks: vec![],
             shared_lock_upgrade_hints: vec![],
+            changed_shared_holders: HashMap::default(),
             concurrency_manager,
             guards: vec![],
         }
@@ -124,14 +128,20 @@ impl MvccTxn {
     }
 
     pub fn take_new_locks(&mut self) -> Vec<LockInfo> {
-        std::mem::take(&mut self.new_locks)
+        let mut locks = std::mem::take(&mut self.new_locks);
+        locks.extend(
+            self.changed_shared_holders
+                .drain()
+                .map(|(key, shared)| shared.into_lock_info(key.to_raw().unwrap())),
+        );
+        locks
     }
 
     pub fn take_shared_lock_upgrade_hints(&mut self) -> Vec<SharedLockUpgradeHint> {
         std::mem::take(&mut self.shared_lock_upgrade_hints)
     }
 
-    pub(crate) fn put_remaining_shared_locks(&mut self, key: Key, shared: &SharedLocks) {
+    pub(crate) fn put_remaining_shared_locks(&mut self, key: Key, shared: SharedLocks) {
         if shared.len() == 1 {
             let sole_holder_start_ts = *shared.iter_ts().next().unwrap();
             self.shared_lock_upgrade_hints.push(SharedLockUpgradeHint {
@@ -139,12 +149,10 @@ impl MvccTxn {
                 sole_holder_start_ts,
             });
         }
-        // A waiter on this draining wrapper must no longer report departed holders.
+        self.put_shared_locks(key.clone(), &shared, false);
         if shared.is_shrink_only() {
-            self.new_locks
-                .push(shared.clone().into_lock_info(key.to_raw().unwrap()));
+            self.changed_shared_holders.insert(key, shared);
         }
-        self.put_shared_locks(key, shared, false);
     }
 
     pub fn write_size(&self) -> usize {
@@ -161,6 +169,7 @@ impl MvccTxn {
             self.new_locks
                 .push(lock.clone().into_lock_info(key.to_raw().unwrap()));
         }
+        self.changed_shared_holders.remove(&key);
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
@@ -202,6 +211,7 @@ impl MvccTxn {
         commit_ts: TimeStamp,
     ) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(self.start_ts, commit_ts, key.clone(), pessimistic);
+        self.changed_shared_holders.remove(&key);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);
@@ -276,6 +286,7 @@ impl MvccTxn {
         self.modifies.clear();
         self.new_locks.clear();
         self.shared_lock_upgrade_hints.clear();
+        self.changed_shared_holders.clear();
         self.locks_for_1pc.clear();
         self.guards.clear();
     }
@@ -1824,10 +1835,10 @@ pub(crate) mod tests {
             holders.insert_lock(make_lock(10, 1000)).unwrap();
             holders.insert_lock(make_lock(20, 1000)).unwrap();
             holders.set_shrink_only();
-            txn.put_remaining_shared_locks(key.clone(), &holders);
+            txn.put_remaining_shared_locks(key.clone(), holders.clone());
             assert!(txn.take_shared_lock_upgrade_hints().is_empty());
             holders.remove_lock(&20.into()).unwrap();
-            txn.put_remaining_shared_locks(key.clone(), &holders);
+            txn.put_remaining_shared_locks(key.clone(), holders.clone());
             assert_eq!(
                 txn.take_shared_lock_upgrade_hints(),
                 vec![SharedLockUpgradeHint {
@@ -1835,6 +1846,12 @@ pub(crate) mod tests {
                     sole_holder_start_ts: 10.into()
                 }]
             );
+            let states = txn.take_new_locks();
+            assert_eq!(states.len(), 1);
+            assert_eq!(states[0].get_shared_lock_infos().len(), 1);
+            txn.put_remaining_shared_locks(key.clone(), holders);
+            txn.unlock_key(key.clone(), true, TimeStamp::zero());
+            assert!(txn.take_new_locks().is_empty());
         }
 
         let make_pessimistic_lock = |ts: u64, ttl: u64| PessimisticLock {

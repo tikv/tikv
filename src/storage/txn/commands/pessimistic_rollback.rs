@@ -109,7 +109,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                             if shared_locks.is_empty() {
                                 Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                             } else {
-                                txn.put_remaining_shared_locks(key, &shared_locks);
+                                txn.put_remaining_shared_locks(key, shared_locks);
                                 Ok(None)
                             }
                         } else {
