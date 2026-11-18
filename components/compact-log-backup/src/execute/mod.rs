@@ -280,6 +280,14 @@ where
 }
 
 impl ExecutionConfig {
+    /// The inclusive ts range a metadata must intersect to hold a file this
+    /// compaction takes. Default CF files are kept from `shift_ts` (see
+    /// `CollectSubcompactionConfig`), and a metadata name carries the ts range
+    /// of every file in it.
+    pub(crate) fn meta_ts_window(&self) -> (u64, u64) {
+        (self.shift_ts.min(self.from_ts), self.until_ts)
+    }
+
     /// Create a suitable (but not forced) prefix for the artifices of the
     /// compaction.
     ///
@@ -555,6 +563,7 @@ impl Execution {
         // which can violate invariants of `tracing-active-tree`.
         ext.loading_content_span = Some(trace_span!("load_meta_file_names"));
         ext.shard = self.cfg.shard;
+        ext.ts_window = Some(self.cfg.meta_ts_window());
 
         let storage = Arc::clone(storage);
         let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
