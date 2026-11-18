@@ -215,8 +215,10 @@ Read admission and accounting:
   There is no Phase bit, historical read-pool CPU floor, pressure-driven
   target, or recovery-to-core release signal. RC unified pools keep their
   configured `max-thread-count`: `auto-adjust-pool-size` and `cpu-threshold`
-  do not control that pool, and `read-cpu-ratio` owns its CPU budget. Non-RC
-  pools retain their existing CPU-threshold and autoscaling behavior.
+  do not control that pool. `read-cpu-ratio` sets its CPU budget, and
+  `cpu-refill-interval` sets the minimum time between refills (10 ms by default).
+  Both are fixed at pool startup. Non-RC pools retain their existing
+  CPU-threshold and autoscaling behavior.
 - YATP prestarts surplus physical workers for online growth, and its Custom
   queue can be popped before those workers park. The fair queue therefore
   bounds active dispatches under its existing scheduler lock. The bound is
@@ -468,6 +470,9 @@ Signals:
   `tikv_util/src/yatp_pool/metrics.rs` report actual poll CPU/wall time, poll
   duration, CPU-gate Pending attempts, global/group capacity rejections, and
   eviction. They have no RG labels and do not report precharge as consumed CPU.
+  Workers buffer poll CPU, wall time, and duration observations locally,
+  flushing on the runner's one-second activity tick, before parking, and at thread exit.
+  Budget debits, VT settlement, and gate Pending counts remain immediate.
 - `READ_POOL_CPU_VEC` continues publishing current CPU and the configured
   target for RC pools even though their worker count is fixed. Updating these
   measurements does not reintroduce a CPU feedback controller.

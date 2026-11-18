@@ -122,7 +122,7 @@
 ## and priorities, including queued, running, and async-waiting admitted tasks.
 # max-tasks-per-worker = 2000
 
-## The following four settings apply to RC unified read pools and require
+## The following settings apply to RC unified read pools and require
 ## a restart to take effect.
 
 ## Base live-task capacity per resource group, scaled by its positive quota weight
@@ -134,6 +134,10 @@
 ## The gate charges actual thread CPU time. This leaves configured headroom for
 ## other work; it does not adapt to whole-node CPU pressure.
 # read-cpu-ratio = 0.6
+
+## Minimum wall time between CPU budget refills. An exhausted gate retries
+## at the next refill. Must be positive and at most the 100ms burst window.
+# cpu-refill-interval = "10ms"
 
 ## Temporary scheduling precharge for a dispatched poll, settled against its
 ## actual wall time. It is separate from the CPU gate and does not count as

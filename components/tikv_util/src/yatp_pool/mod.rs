@@ -258,11 +258,14 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         if self.ticker.try_tick() {
             self.schedule_wait_durations.flush();
             self.schedule_exec_durations.flush();
+            metrics::flush_poll_metrics();
         }
         finished
     }
 
     fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
+        // An idle worker may never reach its next activity tick.
+        metrics::flush_poll_metrics();
         if let Some(f) = self.before_pause.as_ref() {
             f();
         }
@@ -610,6 +613,35 @@ mod tests {
 
     use super::*;
     use crate::{timer::GLOBAL_TIMER_HANDLE, worker};
+
+    #[test]
+    fn worker_flushes_poll_metrics_before_parking() {
+        use prometheus::{Histogram, HistogramOpts, IntCounter};
+
+        let metrics = metrics::FairQueueMetrics {
+            wall_nanos: IntCounter::new("wall", "wall").unwrap(),
+            cpu_nanos: IntCounter::new("cpu", "cpu").unwrap(),
+            poll_duration: Histogram::with_opts(HistogramOpts::new("poll", "poll")).unwrap(),
+            ..Default::default()
+        };
+        let worker_metrics = metrics.clone();
+        let (paused, rx) = mpsc::sync_channel(1);
+        let _pool = YatpPoolBuilder::new(DefaultTicker::default())
+            // Seed the worker's batch before its first park. With no queued
+            // task, neither a task-completion tick nor worker exit can flush it.
+            .after_start(move || {
+                worker_metrics
+                    .record_worker_poll(Duration::from_millis(2), Duration::from_millis(1));
+            })
+            .before_pause(move || {
+                let _ = paused.try_send(());
+            })
+            .build_single_level_pool();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(metrics.wall_nanos.get(), 2_000_000);
+        assert_eq!(metrics.cpu_nanos.get(), 1_000_000);
+        assert_eq!(metrics.poll_duration.get_sample_count(), 1);
+    }
 
     #[test]
     fn test_record_schedule_wait_duration() {

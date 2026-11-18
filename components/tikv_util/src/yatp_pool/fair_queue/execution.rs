@@ -112,7 +112,9 @@ impl Dispatch {
         }
         self.charge_cpu();
         let wall = self.wall_start.elapsed();
-        self.shared.metrics.record_poll(wall, self.cpu_charged);
+        self.shared
+            .metrics
+            .record_worker_poll(wall, self.cpu_charged);
         self.shared.scheduler.settle(
             self.queue_key,
             self.reserved_vt,

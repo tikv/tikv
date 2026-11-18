@@ -5,11 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Lazy refill advances only after this much wall time since the last refill.
-const REFILL_INTERVAL: Duration = Duration::from_millis(10);
-// Caps saved credit at rate * BURST_WINDOW CPU-ns. Retry timing is controlled
-// separately by REFILL_INTERVAL; this window is not a sleep duration.
-const BURST_WINDOW: Duration = Duration::from_millis(100);
+/// Default minimum wall time between CPU budget refills.
+pub const DEFAULT_CPU_REFILL_INTERVAL: Duration = Duration::from_millis(10);
+/// Caps saved credit at rate × CPU_BURST_WINDOW and bounds the refill interval.
+pub const CPU_BURST_WINDOW: Duration = Duration::from_millis(100);
 
 /// Shared CPU accounting, independent of the scheduler's state lock.
 /// Refill, capping and consumption form one transaction on the shared balance.
@@ -18,9 +17,9 @@ pub(super) struct CpuBudget {
 }
 
 impl CpuBudget {
-    pub(super) fn new(rate: f64) -> Self {
+    pub(super) fn new(rate: f64, refill_interval: Duration) -> Self {
         Self {
-            bucket: Mutex::new(CpuTokenBucket::new(rate)),
+            bucket: Mutex::new(CpuTokenBucket::new(rate, refill_interval)),
         }
     }
 
@@ -75,23 +74,26 @@ struct CpuTokenBucket {
     // CPU-ns earned per wall-ns: the budgeted number of CPU cores, possibly
     // fractional. Each worker charges its actual thread CPU time.
     rate: f64,
+    refill_interval: Duration,
     last_refill: Instant,
 }
 
 impl CpuTokenBucket {
-    fn new(rate: f64) -> Self {
+    fn new(rate: f64, refill_interval: Duration) -> Self {
+        assert!(!refill_interval.is_zero() && refill_interval <= CPU_BURST_WINDOW);
         Self {
-            balance_ns: rate * BURST_WINDOW.as_nanos() as f64,
+            balance_ns: rate * CPU_BURST_WINDOW.as_nanos() as f64,
             rate,
+            refill_interval,
             last_refill: Instant::now(),
         }
     }
 
     fn refill(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.last_refill);
-        if elapsed >= REFILL_INTERVAL {
+        if elapsed >= self.refill_interval {
             self.balance_ns = (self.balance_ns + elapsed.as_nanos() as f64 * self.rate)
-                .min(self.rate * BURST_WINDOW.as_nanos() as f64);
+                .min(self.rate * CPU_BURST_WINDOW.as_nanos() as f64);
             self.last_refill = now;
         }
     }
@@ -100,7 +102,7 @@ impl CpuTokenBucket {
         self.refill(now);
         // Retry at the next refill opportunity. A large debt may need several
         // retries, and a zero balance still cannot admit another poll.
-        (self.balance_ns <= 0.0).then_some(self.last_refill + REFILL_INTERVAL)
+        (self.balance_ns <= 0.0).then_some(self.last_refill + self.refill_interval)
     }
 
     fn consume(&mut self, elapsed: Duration, now: Instant) {
@@ -120,13 +122,13 @@ mod tests {
 
     #[test]
     fn refill_debt_and_burst_bound() {
-        let mut bucket = CpuTokenBucket::new(2.0);
+        let mut bucket = CpuTokenBucket::new(2.0, DEFAULT_CPU_REFILL_INTERVAL);
         let start = bucket.last_refill;
         assert_eq!(bucket.balance_ns, 200_000_000.0);
         assert_eq!(bucket.retry_at(start), None);
 
         bucket.balance_ns = -30_000_000.0;
-        let first_refill = start + REFILL_INTERVAL;
+        let first_refill = start + DEFAULT_CPU_REFILL_INTERVAL;
         assert_eq!(
             bucket.retry_at(first_refill - Duration::from_nanos(1)),
             Some(first_refill)
@@ -135,10 +137,13 @@ mod tests {
         assert_eq!(bucket.last_refill, start);
         assert_eq!(
             bucket.retry_at(first_refill),
-            Some(first_refill + REFILL_INTERVAL)
+            Some(first_refill + DEFAULT_CPU_REFILL_INTERVAL)
         );
         assert_eq!(bucket.balance_ns, -10_000_000.0);
-        assert_eq!(bucket.retry_at(first_refill + REFILL_INTERVAL), None);
+        assert_eq!(
+            bucket.retry_at(first_refill + DEFAULT_CPU_REFILL_INTERVAL),
+            None
+        );
         assert_eq!(bucket.balance_ns, 10_000_000.0);
 
         bucket.refill(start + Duration::from_secs(100));
@@ -147,23 +152,26 @@ mod tests {
 
     #[test]
     fn zero_balance_waits_and_same_timestamp_does_not_refill_twice() {
-        let mut bucket = CpuTokenBucket::new(0.5);
-        let start = bucket.last_refill;
-        bucket.consume(Duration::from_millis(50), start);
-        assert_eq!(bucket.balance_ns, 0.0);
-        assert_eq!(bucket.retry_at(start), Some(start + REFILL_INTERVAL));
+        for interval in [Duration::from_millis(1), DEFAULT_CPU_REFILL_INTERVAL] {
+            let mut bucket = CpuTokenBucket::new(0.5, interval);
+            let start = bucket.last_refill;
+            bucket.consume(Duration::from_millis(50), start);
+            let next = start + interval;
+            assert_eq!(bucket.retry_at(next - Duration::from_nanos(1)), Some(next));
+            assert_eq!(bucket.balance_ns, 0.0);
 
-        let next = start + REFILL_INTERVAL;
-        assert_eq!(bucket.retry_at(next), None);
-        assert_eq!(bucket.balance_ns, 5_000_000.0);
-        bucket.consume(Duration::from_millis(5), next);
-        assert_eq!(bucket.retry_at(next), Some(next + REFILL_INTERVAL));
-        assert_eq!(bucket.balance_ns, 0.0);
+            assert_eq!(bucket.retry_at(next), None);
+            let credit = interval / 2;
+            assert_eq!(bucket.balance_ns, credit.as_nanos() as f64);
+            bucket.consume(credit, next);
+            assert_eq!(bucket.retry_at(next), Some(next + interval));
+            assert_eq!(bucket.balance_ns, 0.0);
+        }
     }
 
     #[test]
     fn consume_refills_before_charging_after_idle() {
-        let budget = CpuBudget::new(2.0);
+        let budget = CpuBudget::new(2.0, DEFAULT_CPU_REFILL_INTERVAL);
         let start = budget.bucket.lock().unwrap().last_refill;
         budget.consume_with_clock(Duration::from_millis(50), || {
             assert!(matches!(
@@ -179,9 +187,9 @@ mod tests {
 
     #[test]
     fn consume_then_retry_keeps_both_refill_observations() {
-        let budget = CpuBudget::new(1.0);
+        let budget = CpuBudget::new(1.0, DEFAULT_CPU_REFILL_INTERVAL);
         let start = budget.bucket.lock().unwrap().last_refill;
-        let next = start + REFILL_INTERVAL;
+        let next = start + DEFAULT_CPU_REFILL_INTERVAL;
         let mut clock_calls = 0;
         let retry_at = budget.consume_and_retry_at_with_clock(Duration::from_millis(5), || {
             assert!(matches!(
@@ -209,7 +217,7 @@ mod tests {
         const WORKERS: usize = 8;
         const CHARGES: usize = 1_000;
         let elapsed = Duration::from_micros(50);
-        let budget = Arc::new(CpuBudget::new(2.0));
+        let budget = Arc::new(CpuBudget::new(2.0, DEFAULT_CPU_REFILL_INTERVAL));
         let start = budget.bucket.lock().unwrap().last_refill;
         let barrier = Arc::new(Barrier::new(WORKERS));
         let handles: Vec<_> = (0..WORKERS)
@@ -235,7 +243,10 @@ mod tests {
         let mut bucket = budget.bucket.lock().unwrap();
         let expected = 200_000_000.0 - (WORKERS * CHARGES) as f64 * elapsed.as_nanos() as f64;
         assert_eq!(bucket.balance_ns, expected);
-        assert_eq!(bucket.retry_at(start), Some(start + REFILL_INTERVAL));
+        assert_eq!(
+            bucket.retry_at(start),
+            Some(start + DEFAULT_CPU_REFILL_INTERVAL)
+        );
         assert_eq!(bucket.last_refill, start);
     }
 }

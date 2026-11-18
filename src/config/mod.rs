@@ -80,7 +80,10 @@ use tikv_util::{
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
     time::duration_to_sec,
-    yatp_pool,
+    yatp_pool::{
+        self,
+        fair_queue::{CPU_BURST_WINDOW, DEFAULT_CPU_REFILL_INTERVAL},
+    },
 };
 
 use crate::{
@@ -2514,6 +2517,10 @@ pub struct UnifiedReadPoolConfig {
     /// Unified RC read-pool CPU budget as a fraction of the process CPU quota.
     #[online_config(skip)]
     pub read_cpu_ratio: f64,
+    /// Minimum wall time between refills of the unified RC read-pool CPU
+    /// budget.
+    #[online_config(skip)]
+    pub cpu_refill_interval: ReadableDuration,
     /// Temporary scheduling charge for an in-flight poll, refunded at
     /// settlement.
     #[online_config(skip)]
@@ -2577,6 +2584,13 @@ impl UnifiedReadPoolConfig {
                 "readpool.unified.read-cpu-ratio should be finite and in (0.0, 1.0]".into(),
             );
         }
+        if self.cpu_refill_interval.0.is_zero() || self.cpu_refill_interval.0 > CPU_BURST_WINDOW {
+            return Err(format!(
+                "readpool.unified.cpu-refill-interval must be positive and at most {}ms",
+                CPU_BURST_WINDOW.as_millis()
+            )
+            .into());
+        }
         if self.slice_precharge.0 > Duration::from_millis(10) {
             return Err("readpool.unified.slice-precharge should be <= 10ms".into());
         }
@@ -2605,6 +2619,7 @@ impl Default for UnifiedReadPoolConfig {
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_resource_group: 65_536,
             read_cpu_ratio: 0.6,
+            cpu_refill_interval: ReadableDuration(DEFAULT_CPU_REFILL_INTERVAL),
             slice_precharge: ReadableDuration::micros(500),
             max_time_slice: ReadableDuration::millis(1),
             auto_adjust_pool_size: false,
@@ -2616,6 +2631,19 @@ impl Default for UnifiedReadPoolConfig {
 #[cfg(test)]
 mod unified_read_pool_tests {
     use super::*;
+
+    #[test]
+    fn test_cpu_refill_interval() {
+        let omitted: UnifiedReadPoolConfig = toml::from_str("").unwrap();
+        assert_eq!(omitted.cpu_refill_interval, ReadableDuration::millis(10));
+
+        for (value, valid) in [(0, false), (1, true), (100, true), (101, false)] {
+            let cfg: UnifiedReadPoolConfig =
+                toml::from_str(&format!("cpu-refill-interval = '{value}ms'")).unwrap();
+            assert_eq!(cfg.cpu_refill_interval, ReadableDuration::millis(value));
+            assert_eq!(cfg.validate().is_ok(), valid);
+        }
+    }
 
     #[test]
     fn test_validate() {
@@ -6125,6 +6153,10 @@ mod tests {
                 "100".to_owned(),
             ),
             ("raftstore.prevote".to_owned(), "false".to_owned()),
+            (
+                "readpool.unified.cpu-refill-interval".to_owned(),
+                "1ms".to_owned(),
+            ),
         ];
         for (name, value) in cases {
             let mut change = HashMap::new();

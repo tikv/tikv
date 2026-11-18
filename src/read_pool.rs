@@ -799,6 +799,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
                 max_tasks_per_group: config.max_tasks_per_resource_group,
                 cpu_cores: SysQuota::cpu_cores_quota(),
                 cpu_ratio: config.read_cpu_ratio,
+                cpu_refill_interval: config.cpu_refill_interval.0,
                 slice_precharge: config.slice_precharge.0,
                 max_time_slice: config.max_time_slice.0,
             },

@@ -30,6 +30,7 @@ use std::{
 };
 
 use cpu_budget::CpuBudget;
+pub use cpu_budget::{CPU_BURST_WINDOW, DEFAULT_CPU_REFILL_INTERVAL};
 pub(super) use execution::DispatchGuard;
 pub use execution::{is_fair_cpu_dispatch_active, yield_if_fair_cpu_exhausted};
 use scheduler::{FairTaskCell, Scheduler, Selection};
@@ -115,6 +116,8 @@ pub struct FairQueueConfig {
     pub cpu_cores: f64,
     /// Fraction of that capacity available to this pool, in (0, 1].
     pub cpu_ratio: f64,
+    /// Minimum wall time between refills of the shared CPU budget.
+    pub cpu_refill_interval: Duration,
     /// Wall time reserved in VT at selection, reconciled at poll completion.
     /// This reservation does not consume CPU tokens.
     pub slice_precharge: Duration,
@@ -164,7 +167,10 @@ impl FairQueue {
                 default_policy,
                 config,
                 scheduler,
-                cpu_budget: CpuBudget::new(config.cpu_cores * config.cpu_ratio),
+                cpu_budget: CpuBudget::new(
+                    config.cpu_cores * config.cpu_ratio,
+                    config.cpu_refill_interval,
+                ),
                 metrics: super::metrics::FairQueueMetrics::default(),
             }),
         })
