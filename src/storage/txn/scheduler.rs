@@ -490,6 +490,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             in_memory_instance_size_limit: dynamic_configs.in_memory_instance_size_limit,
         });
 
+        SCHED_LATCH_MEMORY_USAGE_GAUGE.set(inner.latches.memory_usage() as i64);
         SCHED_TXN_MEMORY_QUOTA
             .capacity
             .set(config.memory_quota.0 as i64);
