@@ -148,6 +148,9 @@ High-risk contracts:
 - `CheckTxnStatus` must check whether a shared lock belongs to the queried
   transaction before rejecting it as an invalid primary. Unrelated shared
   holders must not hide that transaction's commit or rollback record.
+- Shared pessimistic lock acquisition honors lock-only-if-exists before inserting
+  a holder. Replaying a locking read on its own member returns the requested
+  value or existence at the request's for-update timestamp.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

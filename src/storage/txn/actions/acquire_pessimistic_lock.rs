@@ -132,6 +132,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             reader,
                             key,
                             primary,
+                            should_not_exist,
                             lock_ttl,
                             min_commit_ts,
                             for_update_ts,
@@ -301,17 +302,19 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
-    if is_shared_lock_req {
-        let (mut shared_locks, is_new) = match current_shared_locks {
-            Some(l) => (l, false),
-            None => (SharedLocks::new(), true),
-        };
-        shared_locks
-            .insert_lock(lock.into_lock())
-            .map_err(MvccError::from)?;
-        txn.put_shared_locks(key, &shared_locks, is_new);
-    } else if !lock_only_if_exists || val.is_some() {
-        txn.put_pessimistic_lock(key, lock, true);
+    if !lock_only_if_exists || val.is_some() {
+        if is_shared_lock_req {
+            let (mut shared_locks, is_new) = match current_shared_locks {
+                Some(l) => (l, false),
+                None => (SharedLocks::new(), true),
+            };
+            shared_locks
+                .insert_lock(lock.into_lock())
+                .map_err(MvccError::from)?;
+            txn.put_shared_locks(key, &shared_locks, is_new);
+        } else {
+            txn.put_pessimistic_lock(key, lock, true);
+        }
     } else if let Some(conflict_info) = conflict_info {
         return Err(conflict_info.into_write_conflict_error(
             reader.start_ts,
@@ -468,6 +471,7 @@ fn handle_existing_shared_lock<S: Snapshot>(
     reader: &mut SnapshotReader<S>,
     key: Key,
     primary: &[u8],
+    should_not_exist: bool,
     lock_ttl: u64,
     min_commit_ts: TimeStamp,
     for_update_ts: TimeStamp,
@@ -479,20 +483,45 @@ fn handle_existing_shared_lock<S: Snapshot>(
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     debug_assert!(!allow_lock_with_conflict);
 
-    let need_load_value = need_value || (need_check_existence && need_old_value);
-    // don't support load value for shared lock now.
-    let val = None;
-
     let (existing_for_update_ts, last_change, is_locked_with_conflict) = {
         let sub_lock = shared_locks
             .get_lock(&reader.start_ts)?
             .expect("shared lock entry must exist for the current transaction");
+        if sub_lock.primary != primary {
+            return Err(ErrorInner::PrimaryMismatch(
+                sub_lock.clone().into_lock_info(key.to_raw()?),
+            )
+            .into());
+        }
+        if !sub_lock.is_pessimistic_lock() {
+            return Err(ErrorInner::LockTypeNotMatch {
+                start_ts: reader.start_ts,
+                key: key.into_raw()?,
+                pessimistic: false,
+            }
+            .into());
+        }
         (
             sub_lock.for_update_ts,
             sub_lock.last_change.clone(),
             sub_lock.is_locked_with_conflict,
         )
     };
+
+    let need_load_value = need_value || (need_check_existence && need_old_value);
+    let mut val = None;
+    if need_load_value || need_check_existence || should_not_exist {
+        if let Some((write, commit_ts)) = reader.get_write_with_commit_ts(&key, for_update_ts)? {
+            check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+            val = if need_load_value {
+                Some(reader.load_data(&key, write)?)
+            } else if need_check_existence {
+                Some(vec![])
+            } else {
+                None
+            };
+        }
+    }
 
     let old_value = load_old_value(
         need_old_value,
@@ -2773,6 +2802,58 @@ pub mod tests {
         .unwrap()
         .assert_locked_with_conflict(Some(b"v2"), 50);
         must_pessimistic_locked(&mut engine, b"k2", 40, 50);
+    }
+
+    #[test]
+    fn test_shared_lock_only_if_exists_returns_value_on_retry() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-rc";
+        let pk = b"primary";
+        let ctx = Context::default();
+        let read = |engine: &mut tikv_kv::RocksEngine, start_ts, return_value| {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let (result, _) = acquire_pessimistic_lock(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(key),
+                pk,
+                false,
+                1000,
+                start_ts,
+                return_value,
+                !return_value,
+                TimeStamp::zero(),
+                false,
+                return_value,
+                false,
+                true,
+            )
+            .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            result
+        };
+
+        assert_eq!(read(&mut engine, 5.into(), true).unwrap_value(), None);
+        must_unlocked(&mut engine, key);
+
+        must_prewrite_put(&mut engine, key, b"value", key, 6);
+        must_commit(&mut engine, key, 6, 7);
+        for _ in 0..2 {
+            assert_eq!(
+                read(&mut engine, 10.into(), true).unwrap_value(),
+                Some(b"value".to_vec())
+            );
+        }
+        assert!(read(&mut engine, 10.into(), false).unwrap_existence());
+        assert_eq!(load_shared_locks(&mut engine, key).len(), 1);
     }
 
     #[test]
