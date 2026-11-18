@@ -84,7 +84,8 @@ impl ExprDefBuilder {
         expr.mut_val().write_i64(v.to_nanos()).unwrap();
         expr.mut_field_type()
             .as_mut_accessor()
-            .set_tp(FieldTypeTp::Duration);
+            .set_tp(FieldTypeTp::Duration)
+            .set_decimal(v.fsp() as isize);
         Self(expr)
     }
 
