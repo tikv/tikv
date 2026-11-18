@@ -477,7 +477,7 @@ fn persist_remaining_shared_locks(
     if shared_locks.is_empty() {
         txn.unlock_key(key, true, TimeStamp::zero())
     } else {
-        txn.put_shared_locks(key, shared_locks, false);
+        txn.put_remaining_shared_locks(key, shared_locks);
         None
     }
 }

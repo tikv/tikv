@@ -380,14 +380,8 @@ impl WaitTable {
 
         assert_eq!(waiter.wait_info.key, update_event.wait_info.key);
 
-        // NOTE: `maybe_shared_lock_shrink` should be false currently. Because
-        // update_waiter is only triggered by UpdateWaitForEvent from
-        // LockWaitQueues::update_lock_wait, which is fed by `new_acquired_locks`.
-        // Shared-lock shrink (e.g. rollback/commit removing a sub-lock) writes
-        // SharedLocks with `is_new = false`, so it doesn't enter `new_locks`
-        // and thus won't emit update_wait_for events. However, if the production
-        // pipeline starts reporting shared-lock updates in the future, we should update
-        // the waiter even when the ts is unchanged.
+        // Removing a shared member changes the real blocker set even though
+        // the wrapper's digest still has the same timestamp.
         let maybe_shared_lock_shrink = waiter.wait_info.lock_info.is_shared_lock()
             && update_event.wait_info.lock_info.is_shared_lock();
         if !maybe_shared_lock_shrink
@@ -408,20 +402,31 @@ impl WaitTable {
         waiter_ts: TimeStamp,
     ) -> Option<Waiter> {
         let token = *self.wait_table.get(&(lock.hash, waiter_ts))?;
+        let info = &self.waiter_pool.get(&token)?.wait_info;
+        if info.lock_info.is_shared_lock() && !info.blocking_txns(waiter_ts).any(|ts| ts == lock.ts)
+        {
+            // The holder exited before the detector's response arrived.
+            return None;
+        }
         self.take_waiter(token)
     }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.waiter_pool
             .values()
-            .map(|waiter| {
-                let mut wait_for_entry = WaitForEntry::default();
-                wait_for_entry.set_txn(waiter.start_ts.into_inner());
-                wait_for_entry.set_wait_for_txn(waiter.wait_info.lock_digest.ts.into_inner());
-                wait_for_entry.set_key_hash(waiter.wait_info.lock_digest.hash);
-                wait_for_entry.set_key(waiter.wait_info.key.to_raw().unwrap());
-                wait_for_entry.set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
-                wait_for_entry
+            .flat_map(|waiter| {
+                waiter
+                    .wait_info
+                    .blocking_txns(waiter.start_ts)
+                    .map(move |blocker| {
+                        let mut entry = WaitForEntry::default();
+                        entry.set_txn(waiter.start_ts.into_inner());
+                        entry.set_wait_for_txn(blocker.into_inner());
+                        entry.set_key_hash(waiter.wait_info.lock_digest.hash);
+                        entry.set_key(waiter.wait_info.key.to_raw().unwrap());
+                        entry.set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
+                        entry
+                    })
             })
             .collect()
     }
@@ -596,8 +601,19 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, _diag_ctx)) = previous_wait_info {
-                if previous_wait_info.allow_lock_with_conflict {
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+                if previous_wait_info.lock_info.is_shared_lock()
+                    || event.wait_info.lock_info.is_shared_lock()
+                {
+                    if let Some(edge) = wait_table.take_registered_edge(event.token) {
+                        self.detector_scheduler
+                            .clean_up_wait_for(event.start_ts, edge);
+                    }
+                    let waiter = wait_table.waiter_pool.get_mut(&event.token).unwrap();
+                    waiter.registered_edge = Some(event.wait_info.clone());
+                    self.detector_scheduler
+                        .detect(event.start_ts, event.wait_info, diag_ctx);
+                } else if previous_wait_info.allow_lock_with_conflict {
                     // First owner change: clean up the registered edge and do
                     // not Detect the new owner. Later changes are no-ops.
                     // A cycle that needs the new edge is invisible until this

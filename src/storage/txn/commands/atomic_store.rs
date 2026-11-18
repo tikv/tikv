@@ -62,6 +62,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: vec![],
+            shared_lock_upgrade_hints: vec![],
             lock_guards: raw_ext.into_iter().map(|r| r.key_guard).collect(),
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: vec![],

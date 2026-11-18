@@ -36,7 +36,7 @@ use tikv_util::{
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
-use txn_types::{LockInfoExt, TimeStamp};
+use txn_types::TimeStamp;
 
 use super::{
     Error, Result,
@@ -831,12 +831,12 @@ where
                 DetectType::CleanUp => DeadlockRequestType::CleanUp,
             };
             let entries = if let Some(wait_info) = wait_info.as_ref() {
-                Either::Left(wait_info.lock_info.iter_locks().map(|l| {
+                Either::Left(wait_info.blocking_txns(txn_ts).map(|blocker| {
                     let mut entry = WaitForEntry::default();
                     entry.set_txn(txn_ts.into_inner());
                     entry.set_key(diag_ctx.key.clone());
                     entry.set_resource_group_tag(diag_ctx.resource_group_tag.clone());
-                    entry.set_wait_for_txn(l.lock_version);
+                    entry.set_wait_for_txn(blocker.into_inner());
                     entry.set_key_hash(wait_info.lock_digest.hash);
                     entry
                 }))
@@ -873,23 +873,23 @@ where
         match tp {
             DetectType::Detect => {
                 let wait_info = wait_info.unwrap();
-                for lock_info in wait_info.lock_info.iter_locks() {
+                for blocker in wait_info.blocking_txns(txn_ts) {
                     if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                         txn_ts,
-                        lock_info.lock_version.into(),
+                        blocker,
                         wait_info.lock_digest.hash,
                         &diag_ctx.key,
                         &diag_ctx.resource_group_tag,
                     ) {
                         let mut last_entry = WaitForEntry::default();
                         last_entry.set_txn(txn_ts.into_inner());
-                        last_entry.set_wait_for_txn(lock_info.lock_version);
+                        last_entry.set_wait_for_txn(blocker.into_inner());
                         last_entry.set_key_hash(wait_info.lock_digest.hash);
                         last_entry.set_key(diag_ctx.key.clone());
                         last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
                         wait_chain.push(last_entry);
                         let lock = LockDigest {
-                            ts: lock_info.lock_version.into(),
+                            ts: blocker,
                             hash: wait_info.lock_digest.hash,
                         };
                         self.waiter_mgr_scheduler.deadlock(
@@ -905,11 +905,11 @@ where
             }
             DetectType::CleanUpWaitFor => {
                 let wait_info = wait_info.unwrap();
-                for lock_info in wait_info.lock_info.iter_locks() {
+                for blocker in wait_info.blocking_txns(txn_ts) {
                     detect_table.clean_up_wait_for(
                         txn_ts,
                         LockDigest {
-                            ts: lock_info.lock_version.into(),
+                            ts: blocker,
                             hash: wait_info.lock_digest.hash,
                         },
                     );

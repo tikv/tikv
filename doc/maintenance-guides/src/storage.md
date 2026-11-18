@@ -255,6 +255,12 @@ Start triage with:
 - dynamic config updated in memory but not applied to runtime objects
 - lock wait wake-up logic causing starvation or missed wake-ups
 
+Shared lock upgrades keep the requesting transaction's member while waiting.
+There is one pending upgrader per key. Removing another member can make that
+upgrader the sole holder without unlocking the key. After the write succeeds,
+the scheduler notifies the matching wait token while it still owns the key
+latch. The client retries acquire and rechecks the holder state.
+
 ## Reading Map And Companion Docs
 
 Suggested reading order:

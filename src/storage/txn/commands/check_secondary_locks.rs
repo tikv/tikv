@@ -247,6 +247,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             lock_info: vec![],
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: write_result_known_txn_status,

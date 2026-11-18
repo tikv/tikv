@@ -34,6 +34,8 @@ define_error_codes!(
     LOCK_TYPE_NOT_MATCH => ("LockTypeNotMatch", "", ""),
     WRITE_CONFLICT => ("WriteConflict", "", ""),
     DEADLOCK => ("Deadlock", "", ""),
+    LOCK_UPGRADE_CONFLICT => ("LockUpgradeConflict", "", ""),
+    SHARED_LOCK_LOST => ("SharedLockLost", "", ""),
     ALREADY_EXIST => ("AlreadyExist", "",""),
     DEFAULT_NOT_FOUND => ("DefaultNotFound", "", ""),
     COMMIT_TS_EXPIRED => ("CommitTsExpired", "", ""),

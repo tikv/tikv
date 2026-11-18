@@ -144,6 +144,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: vec![],

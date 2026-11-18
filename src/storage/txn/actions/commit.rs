@@ -207,7 +207,7 @@ pub fn commit<S: Snapshot>(
                 if shared_locks.is_empty() {
                     Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                 } else {
-                    txn.put_shared_locks(key, &shared_locks, false);
+                    txn.put_remaining_shared_locks(key, &shared_locks);
                     Ok(None)
                 }
             }
@@ -236,7 +236,7 @@ pub fn commit<S: Snapshot>(
             if shared_locks.is_empty() {
                 Ok(txn.unlock_key(key, true, commit_ts))
             } else {
-                txn.put_shared_locks(key, &shared_locks, false);
+                txn.put_remaining_shared_locks(key, &shared_locks);
                 Ok(None)
             }
         }

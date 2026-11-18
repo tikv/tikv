@@ -420,6 +420,13 @@ where
 }
 
 make_static_metric! {
+    pub struct LockUpgradeConflictCounter: IntCounter {
+        "reason" => {
+            duplicate_in_flight,
+            second_upgrader,
+        },
+    }
+
     pub struct LockWaitQueueEntriesGauge: IntGauge {
         "type" => {
             waiters,
@@ -664,6 +671,14 @@ lazy_static! {
         "tikv_lock_wait_queue_entries_gauge_vec",
         "Statistics of the lock wait queue's state",
         &["type"]
+    )
+    .unwrap();
+
+    pub static ref LOCK_UPGRADE_CONFLICT_COUNTER_VEC: LockUpgradeConflictCounter = register_static_int_counter_vec!(
+        LockUpgradeConflictCounter,
+        "tikv_lock_upgrade_conflict_total",
+        "Total number of shared-lock upgrade conflicts by reason",
+        &["reason"]
     )
     .unwrap();
 

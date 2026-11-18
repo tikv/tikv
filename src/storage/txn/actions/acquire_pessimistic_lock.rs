@@ -109,6 +109,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                         need_old_value,
                         allow_lock_with_conflict,
                         lock,
+                        false,
                     );
                 } else {
                     // Shared lock request blocked by exclusive lock
@@ -117,8 +118,27 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     );
                 }
             }
-            Either::Right(shared_locks) => {
+            Either::Right(mut shared_locks) => {
                 if !is_shared_lock_req {
+                    if shared_locks.len() == 1 && shared_locks.contains_start_ts(reader.start_ts) {
+                        let member = shared_locks.get_lock(&reader.start_ts)?.unwrap().clone();
+                        return handle_existing_exclusive_lock(
+                            txn,
+                            reader,
+                            key,
+                            primary,
+                            should_not_exist,
+                            lock_ttl,
+                            for_update_ts,
+                            need_value,
+                            need_check_existence,
+                            min_commit_ts,
+                            need_old_value,
+                            allow_lock_with_conflict,
+                            member,
+                            true,
+                        );
+                    }
                     if !shared_locks.is_shrink_only() {
                         return Err(ErrorInner::NotInShrinkMode(shared_locks).into());
                     }
@@ -372,6 +392,7 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
     need_old_value: bool,
     allow_lock_with_conflict: bool,
     lock: Lock,
+    upgrading: bool,
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     if lock.ts != reader.start_ts {
         return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
@@ -447,7 +468,11 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
         is_locked_with_conflict: lock.is_pessimistic_lock_with_conflict(),
     };
 
-    if for_update_ts > lock.for_update_ts {
+    if upgrading {
+        // Replacing the wrapper must go through Raft, even if the request
+        // timestamp is unchanged. In-memory X would leave the old S on disk.
+        txn.put_lock(key, &lock_to_write.into_lock(), true);
+    } else if for_update_ts > lock.for_update_ts {
         txn.put_pessimistic_lock(key, lock_to_write, false);
     } else {
         MVCC_DUPLICATE_CMD_COUNTER_VEC
@@ -3006,7 +3031,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_lock_upgrade_and_downgrade_blocked() {
+    fn test_only_shared_holder_can_upgrade() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let shared_key = b"shared-lock";
         let exclusive_key = b"exclusive-lock";
@@ -3015,7 +3040,7 @@ pub mod tests {
         let for_update_ts = TimeStamp::from(35);
         let new_for_update_ts = TimeStamp::from(45);
 
-        // shared lock cannot propagate to exclusive lock
+        // The last remaining holder can atomically replace its wrapper with X.
         must_acquire_shared_pessimistic_lock(
             &mut engine,
             shared_key,
@@ -3024,7 +3049,8 @@ pub mod tests {
             for_update_ts,
             3000,
         );
-        must_err(&mut engine, shared_key, pk, start_ts, new_for_update_ts);
+        must_succeed(&mut engine, shared_key, pk, start_ts, for_update_ts);
+        must_pessimistic_locked(&mut engine, shared_key, start_ts, for_update_ts);
 
         // exclusive lock cannot downgrade to shared lock
         must_acquire_pessimistic_lock(&mut engine, exclusive_key, pk, start_ts, for_update_ts);

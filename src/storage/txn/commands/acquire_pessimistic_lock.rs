@@ -97,7 +97,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
         let mut encountered_locks = vec![];
-        let mut updated_shared_lock_info = None;
+        let mut shrink_error = None;
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         for (k, should_not_exist, is_shared_lock) in keys {
@@ -155,13 +155,30 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     // Clear previous mutations, mark `shared_locks` as shrink-only and write it
                     // back.
                     let locked_raw_key = k.to_raw()?;
-                    shared_locks.set_shrink_only();
+                    let upgrading = shared_locks.contains_start_ts(start_ts);
                     txn.clear();
-                    txn.put_shared_locks(k, &shared_locks, false);
                     old_values.clear();
                     res.0.clear();
-
-                    updated_shared_lock_info = Some(shared_locks.into_lock_info(locked_raw_key));
+                    let error = if self.wait_timeout.is_none() {
+                        // A failed NOWAIT must not close an otherwise open wrapper.
+                        MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
+                    } else {
+                        shared_locks.set_shrink_only();
+                        txn.put_shared_locks(k, &shared_locks, false);
+                        if upgrading {
+                            MvccErrorInner::WriteConflict {
+                                start_ts,
+                                conflict_start_ts: TimeStamp::zero(),
+                                conflict_commit_ts: TimeStamp::zero(),
+                                key: locked_raw_key,
+                                primary: self.primary.clone(),
+                                reason: kvproto::kvrpcpb::WriteConflictReason::PessimisticRetry,
+                            }
+                        } else {
+                            MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
+                        }
+                    };
+                    shrink_error = Some(error);
                     break;
                 }
                 Err(e) => return Err(Error::from(e)),
@@ -192,10 +209,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         }
         // Return KeyIsLocked when xlock encounters slock and tries to convert it to
         // shrink-only.
-        if let Some(lock_info) = updated_shared_lock_info {
-            res = Err(StorageError::from(Error::from(MvccError::from(
-                MvccErrorInner::KeyIsLocked(lock_info),
-            ))));
+        if let Some(err) = shrink_error {
+            res = Err(StorageError::from(Error::from(MvccError::from(err))));
         }
 
         let rows = if res.is_ok() { total_keys } else { 0 };
@@ -203,6 +218,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         record_network_out_bytes(res.as_ref().map_or(0, |v| v.estimate_resp_size()));
         let pr = ProcessResult::PessimisticLockRes { res };
 
+        let writes_wrapper = modifies
+            .iter()
+            .any(|modify| matches!(modify, tikv_kv::Modify::Put(engine_traits::CF_LOCK, ..)));
         let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
@@ -213,8 +231,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
-            response_policy: ResponsePolicy::OnProposed,
+            response_policy: if writes_wrapper {
+                ResponsePolicy::OnApplied
+            } else {
+                ResponsePolicy::OnProposed
+            },
             known_txn_status: vec![],
         })
     }

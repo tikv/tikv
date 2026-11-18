@@ -62,6 +62,15 @@ impl ReleasedLock {
     }
 }
 
+/// A shared-lock removal left this transaction as the only holder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedLockUpgradeHint {
+    /// Key whose shared-lock wrapper has been reduced to one holder.
+    pub key: Key,
+    /// Start timestamp of the remaining holder used to validate the hint.
+    pub sole_holder_start_ts: TimeStamp,
+}
+
 /// An abstraction of a locally-transactional MVCC key-value store
 pub struct MvccTxn {
     pub(crate) start_ts: TimeStamp,
@@ -76,6 +85,7 @@ pub struct MvccTxn {
     // used to update the lock waiting information and redo deadlock detection, if there are some
     // pessimistic lock requests waiting on the keys.
     pub(crate) new_locks: Vec<LockInfo>,
+    shared_lock_upgrade_hints: Vec<SharedLockUpgradeHint>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -98,6 +108,7 @@ impl MvccTxn {
             modifies: vec![],
             locks_for_1pc: vec![],
             new_locks: vec![],
+            shared_lock_upgrade_hints: vec![],
             concurrency_manager,
             guards: vec![],
         }
@@ -114,6 +125,26 @@ impl MvccTxn {
 
     pub fn take_new_locks(&mut self) -> Vec<LockInfo> {
         std::mem::take(&mut self.new_locks)
+    }
+
+    pub fn take_shared_lock_upgrade_hints(&mut self) -> Vec<SharedLockUpgradeHint> {
+        std::mem::take(&mut self.shared_lock_upgrade_hints)
+    }
+
+    pub(crate) fn put_remaining_shared_locks(&mut self, key: Key, shared: &SharedLocks) {
+        if shared.len() == 1 {
+            let sole_holder_start_ts = *shared.iter_ts().next().unwrap();
+            self.shared_lock_upgrade_hints.push(SharedLockUpgradeHint {
+                key: key.clone(),
+                sole_holder_start_ts,
+            });
+        }
+        // A waiter on this draining wrapper must no longer report departed holders.
+        if shared.is_shrink_only() {
+            self.new_locks
+                .push(shared.clone().into_lock_info(key.to_raw().unwrap()));
+        }
+        self.put_shared_locks(key, shared, false);
     }
 
     pub fn write_size(&self) -> usize {
@@ -244,6 +275,7 @@ impl MvccTxn {
         self.write_size = 0;
         self.modifies.clear();
         self.new_locks.clear();
+        self.shared_lock_upgrade_hints.clear();
         self.locks_for_1pc.clear();
         self.guards.clear();
     }
@@ -1783,6 +1815,27 @@ pub(crate) mod tests {
                 false,
             )
         };
+
+        // A partial release only wakes the upgrader at the one-holder boundary.
+        {
+            let cm = ConcurrencyManager::new_for_test(100.into());
+            let mut txn = MvccTxn::new(10.into(), cm);
+            let mut holders = SharedLocks::new();
+            holders.insert_lock(make_lock(10, 1000)).unwrap();
+            holders.insert_lock(make_lock(20, 1000)).unwrap();
+            holders.set_shrink_only();
+            txn.put_remaining_shared_locks(key.clone(), &holders);
+            assert!(txn.take_shared_lock_upgrade_hints().is_empty());
+            holders.remove_lock(&20.into()).unwrap();
+            txn.put_remaining_shared_locks(key.clone(), &holders);
+            assert_eq!(
+                txn.take_shared_lock_upgrade_hints(),
+                vec![SharedLockUpgradeHint {
+                    key: key.clone(),
+                    sole_holder_start_ts: 10.into()
+                }]
+            );
+        }
 
         let make_pessimistic_lock = |ts: u64, ttl: u64| PessimisticLock {
             primary: b"key".to_vec().into_boxed_slice(),

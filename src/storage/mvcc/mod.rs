@@ -28,7 +28,7 @@ pub use self::{
     },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
-    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock},
+    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock, SharedLockUpgradeHint},
 };
 pub use crate::storage::types::MvccInfo;
 
@@ -114,6 +114,23 @@ pub enum ErrorInner {
         deadlock_key_hash: u64,
         wait_chain: Vec<kvproto::deadlock::WaitForEntry>,
     },
+
+    #[error(
+        "lock upgrade conflict, start_ts:{}, owner_start_ts:{}, key:{}, reason:{:?}",
+        .start_ts, .owner_start_ts, log_wrappers::Value::key(.key), .reason
+    )]
+    LockUpgradeConflict {
+        start_ts: TimeStamp,
+        owner_start_ts: TimeStamp,
+        key: Vec<u8>,
+        reason: kvrpcpb::LockUpgradeConflictReason,
+    },
+
+    #[error(
+        "shared lock lost during upgrade, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
+    )]
+    SharedLockLost { start_ts: TimeStamp, key: Vec<u8> },
 
     #[error(
         "key {} already exists with existing_start_ts={}", log_wrappers::Value::key(.key),
@@ -256,6 +273,21 @@ impl ErrorInner {
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
                 wait_chain: wait_chain.clone(),
+            }),
+            ErrorInner::LockUpgradeConflict {
+                start_ts,
+                owner_start_ts,
+                key,
+                reason,
+            } => Some(ErrorInner::LockUpgradeConflict {
+                start_ts: *start_ts,
+                owner_start_ts: *owner_start_ts,
+                key: key.to_owned(),
+                reason: reason.to_owned(),
+            }),
+            ErrorInner::SharedLockLost { start_ts, key } => Some(ErrorInner::SharedLockLost {
+                start_ts: *start_ts,
+                key: key.to_owned(),
             }),
             ErrorInner::AlreadyExist {
                 key,
@@ -438,6 +470,8 @@ impl ErrorCodeExt for Error {
             ErrorInner::LockTypeNotMatch { .. } => error_code::storage::LOCK_TYPE_NOT_MATCH,
             ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
             ErrorInner::Deadlock { .. } => error_code::storage::DEADLOCK,
+            ErrorInner::LockUpgradeConflict { .. } => error_code::storage::LOCK_UPGRADE_CONFLICT,
+            ErrorInner::SharedLockLost { .. } => error_code::storage::SHARED_LOCK_LOST,
             ErrorInner::AlreadyExist { .. } => error_code::storage::ALREADY_EXIST,
             ErrorInner::DefaultNotFound { .. } => error_code::storage::DEFAULT_NOT_FOUND,
             ErrorInner::CommitTsExpired { .. } => error_code::storage::COMMIT_TS_EXPIRED,

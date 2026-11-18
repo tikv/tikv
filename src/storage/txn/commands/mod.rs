@@ -460,6 +460,7 @@ pub struct WriteResult {
     pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
     pub new_acquired_locks: Vec<LockInfo>,
+    pub shared_lock_upgrade_hints: Vec<crate::storage::mvcc::SharedLockUpgradeHint>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
     /// The txn status that can be inferred by the successful writing. This will
@@ -479,6 +480,7 @@ impl WriteResult {
         lock_info: Vec<WriteResultLockInfo>,
         released_locks: ReleasedLocks,
         new_acquired_locks: Vec<LockInfo>,
+        shared_lock_upgrade_hints: Vec<crate::storage::mvcc::SharedLockUpgradeHint>,
         lock_guards: Vec<KeyHandleGuard>,
         response_policy: ResponsePolicy,
         known_txn_status: Vec<(TimeStamp, TimeStamp)>,
@@ -491,6 +493,7 @@ impl WriteResult {
             lock_info,
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints,
             lock_guards,
             response_policy,
             known_txn_status,
@@ -508,6 +511,8 @@ pub struct WriteResultLockInfo {
     pub hash_for_latch: u64,
     /// Whether the pending request is trying to acquire a shared lock.
     pub is_shared_lock_request: bool,
+    /// The exclusive waiter actually holds a shared member while waiting.
+    pub is_lock_upgrade: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
@@ -529,6 +534,11 @@ impl WriteResultLockInfo {
             ts: lock_info_pb.get_lock_version().into(),
             hash: key.gen_hash(),
         };
+        let is_lock_upgrade = !is_shared_lock_request
+            && lock_info_pb
+                .get_shared_lock_infos()
+                .iter()
+                .any(|holder| holder.lock_version == parameters.start_ts.into_inner());
         let hash_for_latch = latch::Lock::hash(&key);
         Self {
             lock_digest: lock,
@@ -538,6 +548,7 @@ impl WriteResultLockInfo {
             parameters,
             hash_for_latch,
             is_shared_lock_request,
+            is_lock_upgrade,
             lock_wait_token: LockWaitToken(None),
             req_states: None,
         }

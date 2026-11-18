@@ -486,6 +486,29 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_deadlock(deadlock);
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::LockUpgradeConflict {
+                start_ts,
+                owner_start_ts,
+                key,
+                reason,
+            },
+        ))))) => {
+            let mut conflict = kvrpcpb::LockUpgradeConflict::default();
+            conflict.set_key(key.to_owned());
+            conflict.set_start_ts(start_ts.into_inner());
+            conflict.set_owner_start_ts(owner_start_ts.into_inner());
+            conflict.set_reason(reason.to_owned());
+            key_error.set_lock_upgrade_conflict(conflict);
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::SharedLockLost { start_ts, key },
+        ))))) => {
+            let mut shared_lock_lost = kvrpcpb::SharedLockLost::default();
+            shared_lock_lost.set_key(key.to_owned());
+            shared_lock_lost.set_start_ts(start_ts.into_inner());
+            key_error.set_shared_lock_lost(shared_lock_lost);
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::CommitTsExpired {
                 start_ts,
                 commit_ts,
@@ -784,5 +807,52 @@ mod test {
             mvcc.clone().unwrap(),
         ));
         assert_eq!(mock_commit_ts_expired_err(true), expect);
+    }
+
+    #[test]
+    fn test_extract_key_error_lock_upgrade_conflict() {
+        let start_ts = 110.into();
+        let owner_start_ts = 120.into();
+        let key = b"key".to_vec();
+        let case = Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::LockUpgradeConflict {
+                start_ts,
+                owner_start_ts,
+                key: key.clone(),
+                reason: kvrpcpb::LockUpgradeConflictReason::SecondUpgrader,
+            },
+        )));
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut conflict = kvrpcpb::LockUpgradeConflict::default();
+        conflict.set_key(key);
+        conflict.set_start_ts(start_ts.into_inner());
+        conflict.set_owner_start_ts(owner_start_ts.into_inner());
+        conflict.set_reason(kvrpcpb::LockUpgradeConflictReason::SecondUpgrader);
+        expect.set_lock_upgrade_conflict(conflict);
+
+        assert_eq!(case.error_code().code, "KV:Storage:LockUpgradeConflict");
+        let got = extract_key_error(&case);
+        assert_eq!(got, expect);
+    }
+
+    #[test]
+    fn test_extract_key_error_shared_lock_lost() {
+        let start_ts = 110.into();
+        let key = b"key".to_vec();
+        let case = Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::SharedLockLost {
+                start_ts,
+                key: key.clone(),
+            },
+        )));
+
+        let mut expect = kvrpcpb::KeyError::default();
+        let mut shared_lock_lost = kvrpcpb::SharedLockLost::default();
+        shared_lock_lost.set_key(key);
+        shared_lock_lost.set_start_ts(start_ts.into_inner());
+        expect.set_shared_lock_lost(shared_lock_lost);
+
+        assert_eq!(case.error_code(), error_code::storage::SHARED_LOCK_LOST);
+        assert_eq!(extract_key_error(&case), expect);
     }
 }

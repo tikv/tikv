@@ -766,6 +766,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: vec![],
                 released_locks,
                 new_acquired_locks,
+                shared_lock_upgrade_hints: vec![],
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
                 known_txn_status: if !one_pc_commit_ts.is_zero() {
@@ -791,6 +792,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: vec![],
                 released_locks: ReleasedLocks::new(),
                 new_acquired_locks: vec![],
+                shared_lock_upgrade_hints: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
                 known_txn_status: vec![],

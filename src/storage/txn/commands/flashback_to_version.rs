@@ -161,6 +161,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             )?,
         }
         let rows = txn.modifies.len();
+        let shared_lock_upgrade_hints = txn.take_shared_lock_upgrade_hints();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         // To let the flashback modification could be proposed and applied successfully.
         write_data.extra.allowed_in_flashback = true;
@@ -204,6 +205,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: vec![],
+            shared_lock_upgrade_hints,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: vec![],
