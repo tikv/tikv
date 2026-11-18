@@ -371,19 +371,23 @@ impl AzureStorage {
         Self::new_with_options(config, blob_client_options()?)
     }
 
-    fn new_with_options(
-        config: Config,
-        mut client_options: ClientOptions,
-    ) -> io::Result<AzureStorage> {
+    fn new_with_options(config: Config, client_options: ClientOptions) -> io::Result<AzureStorage> {
         Self::check_config(&config)?;
         let account_name = config.get_account_name()?;
-        let endpoint = config
-            .bucket
-            .endpoint
-            .as_ref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("https://{}.blob.core.windows.net", account_name));
-        let mut service_url = url::Url::parse(&endpoint).map_err(io::Error::other)?;
+        // The legacy client always used the public account URL, even when an
+        // endpoint was configured. Preserve that behavior on release-8.5.
+        let service_url =
+            url::Url::parse(&format!("https://{}.blob.core.windows.net", account_name))
+                .map_err(io::Error::other)?;
+        Self::new_with_service_url(config, client_options, service_url)
+    }
+
+    fn new_with_service_url(
+        config: Config,
+        mut client_options: ClientOptions,
+        mut service_url: url::Url,
+    ) -> io::Result<AzureStorage> {
+        let account_name = config.get_account_name()?;
         let credential: Option<Arc<dyn TokenCredential>>;
         // Keep the existing precedence: SAS, explicit shared key, environment
         // client secret, environment shared key, then the default identity chain.
@@ -707,6 +711,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_custom_endpoint_does_not_change_account_url() {
+        let shared_key = mock_config();
+        let mut sas = shared_key.clone();
+        sas.sas_token = Some(StringNonEmpty::static_str("sig=test-signature&sp=rw"));
+        let mut identity = shared_key.clone();
+        identity.shared_key = None;
+        identity.credential_info = Some(CredentialInfo {
+            client_id: "00000000-0000-0000-0000-000000000000".to_owned(),
+            tenant_id: "00000000-0000-0000-0000-000000000000".to_owned(),
+            client_secret: Secret::new("test-secret"),
+        });
+        for config in [shared_key, sas, identity] {
+            for endpoint in [
+                "https://storage.example",
+                "http://127.0.0.1:1",
+                "invalid URL",
+            ] {
+                let mut config = config.clone();
+                config.bucket.endpoint = Some(StringNonEmpty::static_str(endpoint));
+                let storage =
+                    AzureStorage::new_with_options(config, ClientOptions::default()).unwrap();
+                let url = storage.container_client.url();
+                assert_eq!(url.scheme(), "https");
+                assert_eq!(url.host_str(), Some("account.blob.core.windows.net"));
+                assert_eq!(url.path(), "/container");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_upload_survives_sdk_read_timeout_and_obeys_operation_deadline() {
         use tokio::{
@@ -740,9 +774,12 @@ mod tests {
                     socket.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
                 }
             });
-            let mut config = mock_config();
-            config.bucket.endpoint = StringNonEmpty::opt(format!("http://{address}"));
-            let storage = AzureStorage::new(config).unwrap();
+            let storage = AzureStorage::new_with_service_url(
+                mock_config(),
+                blob_client_options().unwrap(),
+                url::Url::parse(&format!("http://{address}")).unwrap(),
+            )
+            .unwrap();
             let uploader =
                 AzureUploader::new(storage.container_client, &storage.config, "file".to_owned());
             let upload =
@@ -794,14 +831,14 @@ mod tests {
                 .unwrap();
         });
         let mut config = mock_config();
-        config.bucket.endpoint = StringNonEmpty::opt(format!("http://{address}"));
         config.sas_token = StringNonEmpty::opt("sig=secret%2Bsignature&sp=w".to_owned());
-        let storage = AzureStorage::new_with_options(
+        let storage = AzureStorage::new_with_service_url(
             config,
             ClientOptions {
                 retry: RetryOptions::none(),
                 ..blob_client_options().unwrap()
             },
+            url::Url::parse(&format!("http://{address}")).unwrap(),
         )
         .unwrap();
         let error = timeout(
@@ -992,7 +1029,10 @@ mod tests {
         let requests = transport.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         for request in requests.iter() {
-            assert_eq!(request.url().host_str(), Some("storage.example"));
+            assert_eq!(
+                request.url().host_str(),
+                Some("account.blob.core.windows.net")
+            );
             // The supported SDK escapes separators inside the blob name.
             assert_eq!(request.url().path(), "/container/backup%2Fprefix%2Ffile");
             let headers = request.headers();
@@ -1160,7 +1200,12 @@ mod tests {
         input.set_endpoint("http://127.0.0.1:10000/devstoreaccount1".to_owned());
         input.set_prefix("backup 01/prefix/".to_owned());
 
-        let storage = AzureStorage::from_input(input).unwrap();
+        let storage = AzureStorage::new_with_service_url(
+            Config::from_input(input).unwrap(),
+            blob_client_options().unwrap(),
+            url::Url::parse("http://127.0.0.1:10000/devstoreaccount1").unwrap(),
+        )
+        .unwrap();
         assert_eq!(storage.maybe_prefix_key("t"), "backup 01/prefix/t");
         // Reuse the blob name to check replacement by smaller and empty bodies,
         // as well as SharedKey signing above both SDK transfer thresholds.
