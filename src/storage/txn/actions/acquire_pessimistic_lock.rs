@@ -89,6 +89,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // `load_old_value` doing repeated work.
     let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
+    if is_shared_lock_req && allow_lock_with_conflict && !is_shared_lock_upgrade {
+        return Err(box_err!("shared locking reads require normal wake-up mode"));
+    }
     let mut val = None;
     let mut current_lock = reader.load_lock(&key)?;
     if is_shared_lock_upgrade {
@@ -170,6 +173,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
                 if !is_shared_lock_req || lock.ts == reader.start_ts {
                     // An S request on our own X retains X.
+                    let (lock_ttl, min_commit_ts) = if is_shared_lock_req {
+                        (
+                            lock_ttl.max(lock.ttl),
+                            min_commit_ts.max(lock.min_commit_ts),
+                        )
+                    } else {
+                        (lock_ttl, min_commit_ts)
+                    };
                     return handle_existing_exclusive_lock(
                         txn,
                         reader,
@@ -210,11 +221,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             key,
                             primary,
                             should_not_exist,
-                            lock_ttl,
+                            lock_ttl.max(member.ttl),
                             for_update_ts,
                             need_value,
                             need_check_existence,
-                            min_commit_ts,
+                            min_commit_ts.max(member.min_commit_ts),
                             need_old_value,
                             allow_lock_with_conflict,
                             member,
@@ -3017,6 +3028,27 @@ pub mod tests {
     }
 
     #[test]
+    fn test_shared_primary_reentry_and_upgrade_preserve_pushed_bounds() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"primary";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        let mut holders = load_shared_locks(&mut engine, key);
+        let mut member = holders.get_lock(&10.into()).unwrap().unwrap().clone();
+        member.min_commit_ts = 200.into();
+        member.ttl = 8000;
+        holders.update_lock(member).unwrap();
+        let mut txn = MvccTxn::new(10.into(), ConcurrencyManager::new_for_test(200.into()));
+        txn.put_shared_locks(Key::from_raw(key), &holders, false);
+        write(&engine, &Context::default(), txn.into_modifies());
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 30, 2000);
+        request_exclusive_lock(&mut engine, key, key, 10, 40, true, false).unwrap();
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 40);
+        assert_eq!(lock.ttl, 8000);
+        assert_eq!(lock.min_commit_ts, 200.into());
+    }
+
+    #[test]
     fn test_upgrade_and_replay_ignore_compatible_history_when_holder_exists() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"normal-s-upgrade";
@@ -3034,6 +3066,19 @@ pub mod tests {
             request_exclusive_lock(&mut engine, key, b"other-primary", 10, 40, true, false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_replayed_upgrade_preserves_prewrite() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"prepared-upgrade";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        request_exclusive_lock(&mut engine, key, key, 10, 30, true, false).unwrap();
+        must_pessimistic_prewrite_put(&mut engine, key, b"value", key, 10, 30, DoPessimisticCheck);
+        request_exclusive_lock(&mut engine, key, key, 10, 30, true, false).unwrap();
+        let lock = must_locked(&mut engine, key, 10);
+        assert_eq!(lock.lock_type, txn_types::LockType::Put);
+        must_commit(&mut engine, key, 10, 40);
     }
 
     #[test]

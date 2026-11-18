@@ -3074,6 +3074,28 @@ pub mod tests {
     }
 
     #[test]
+    fn test_shared_prewrite_requires_own_member_in_draining_wrapper() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"draining-primary";
+        prepare_shared_pessimistic_lock(&mut engine, key, key, 20.into(), 30.into());
+        let mut holders = must_load_shared_lock(&mut engine, key);
+        holders.set_shrink_only();
+        let mut txn = MvccTxn::new(20.into(), ConcurrencyManager::new_for_test(30.into()));
+        txn.put_shared_locks(Key::from_raw(key), &holders, false);
+        write(&engine, &Context::default(), txn.into_modifies());
+
+        assert!(matches!(
+            prewrite_shared_member(&mut engine, key, key, 10),
+            Err(Error(box ErrorInner::PessimisticLockNotFound { .. }))
+        ));
+        assert_eq!(
+            must_load_shared_lock(&mut engine, key).to_bytes(),
+            holders.to_bytes()
+        );
+        prewrite_shared_member(&mut engine, key, key, 20).unwrap();
+    }
+
+    #[test]
     fn test_shared_prewrite_accepts_live_member_acquired_after_a_write() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"pre-read-write";
