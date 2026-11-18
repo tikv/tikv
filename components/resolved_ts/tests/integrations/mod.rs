@@ -15,6 +15,67 @@ pub use testsuite::*;
 use tikv_util::store::new_peer;
 
 #[test]
+fn test_shared_primary_does_not_pin_region_resolved_ts() {
+    let mut suite = TestSuite::new(1);
+    suite.run();
+    let region = suite.cluster.get_region(&[]);
+    let ctx = suite.get_context(region.id);
+    let client = suite.get_tikv_client(region.id).clone();
+    let key = b"shared-primary";
+    let t = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut acquire = PessimisticLockRequest::default();
+    acquire.set_context(ctx.clone());
+    acquire.set_mutations(
+        vec![test_raftstore::new_mutation(
+            Op::SharedPessimisticLock,
+            key,
+            b"",
+        )]
+        .into(),
+    );
+    acquire.primary_lock = key.to_vec();
+    acquire.start_version = t.into_inner();
+    acquire.for_update_ts = t.into_inner();
+    acquire.lock_ttl = 3000;
+    let resp = client.kv_pessimistic_lock(&acquire).unwrap();
+    assert!(
+        !resp.has_region_error() && resp.errors.is_empty(),
+        "{resp:?}"
+    );
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
+
+    test_raftstore::must_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![test_raftstore::new_mutation(Op::SharedLock, key, b"")],
+        vec![PrewriteRequestPessimisticAction::DoPessimisticCheck],
+        key.to_vec(),
+        t.into_inner(),
+        t.into_inner(),
+        false,
+        false,
+    );
+    let later = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_get_rts_ge(region.id, later);
+    assert!(
+        test_raftstore::must_check_txn_status(
+            &client,
+            ctx,
+            key,
+            t.into_inner(),
+            0,
+            later.into_inner()
+        )
+        .lock_ttl
+            > 0
+    );
+    suite.stop();
+}
+
+#[test]
 fn test_resolved_ts_basic() {
     let mut suite = TestSuite::new(1);
     suite.run();
