@@ -328,7 +328,7 @@ fn cot(arg: &Real) -> Result<Option<Real>> {
 #[rpn_fn]
 fn pow(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
     let pow = (lhs.into_inner()).pow(rhs.into_inner());
-    if pow.is_infinite() {
+    if !pow.is_finite() {
         Err(Error::overflow("DOUBLE", format!("pow({}, {})", lhs, rhs)).into())
     } else {
         Ok(Real::new(pow).ok())
@@ -1391,6 +1391,10 @@ mod tests {
             (
                 Some(Real::new(0.0f64).unwrap()),
                 Some(Real::new(-9999999.0f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-1.0f64).unwrap()),
+                Some(Real::new(0.5f64).unwrap()),
             ),
         ];
 
