@@ -332,7 +332,14 @@ impl ToInt for f64 {
     /// anymore.
     #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = self.round();
+        // Match TiDB's ConvertFloatToUint (and the sibling to_int method
+        // above), which rounds half to even rather than away from zero.
+        // Using a different rounding mode here than to_int -- and than
+        // TiDB's root evaluation -- could make a cast pushed down to the
+        // coprocessor select different rows than the same cast evaluated
+        // at the root for values exactly halfway between two integers
+        // (e.g. 0.5, 2.5).
+        let val = self.round_ties_even();
         if val < 0f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             if ctx.should_clip_to_zero() {
@@ -1662,17 +1669,27 @@ mod tests {
             (256.6, FieldTypeTp::Short, Some(257)),
             (65535.5, FieldTypeTp::Short, None),
             (65536.1, FieldTypeTp::Int24, Some(65536)),
-            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (65536.5, FieldTypeTp::Int24, Some(65536)), // round-to-even: 65536 is even
             (16777215.4, FieldTypeTp::Int24, Some(16777215)),
             (16777216.1, FieldTypeTp::Int24, None),
             (8388610.4, FieldTypeTp::Long, Some(8388610)),
-            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (8388610.5, FieldTypeTp::Long, Some(8388610)), // round-to-even: 8388610 is even
             (4294967296.8, FieldTypeTp::Long, None),
             (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
             (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
             (-4294967297.1, FieldTypeTp::LongLong, None),
             (f64::MAX, FieldTypeTp::LongLong, None),
             (f64::MIN, FieldTypeTp::LongLong, None),
+            // Round-half-to-even cases, matching TiDB's ConvertFloatToUint.
+            // 0 and 2 are even, so ties round down to them; 1 and 3 are
+            // odd, so ties round up away from them.
+            (0.5, FieldTypeTp::LongLong, Some(0)),
+            (1.5, FieldTypeTp::LongLong, Some(2)),
+            (2.5, FieldTypeTp::LongLong, Some(2)),
+            (3.5, FieldTypeTp::LongLong, Some(4)),
+            // Non-tie values are unaffected by the rounding mode change.
+            (0.4, FieldTypeTp::LongLong, Some(0)),
+            (1.4, FieldTypeTp::LongLong, Some(1)),
         ];
 
         let mut ctx = EvalContext::default();
@@ -1874,7 +1891,7 @@ mod tests {
             ("[]", 0u64),
             ("3", 3u64),
             ("4.1", 4u64),
-            ("4.5", 5u64),
+            ("4.5", 4u64), // round-to-even: 4 is even
             ("true", 1u64),
             ("false", 0u64),
             ("null", 0u64),
