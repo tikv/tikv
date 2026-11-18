@@ -484,10 +484,11 @@ impl AzureStorage {
             let blob_client = self.container_client.blob_client(&name);
             let mut options = BlobClientDownloadOptions {
                 range: range.map(Into::into),
-                // Preserve the old SDK's sequential 16 MiB range reads. File-level
-                // concurrency is already managed by the backup/restore callers.
+                // Read the whole range with one request owned by this future. The SDK
+                // downloads further partitions in detached tasks, which would keep a
+                // buffer and connection alive after the caller cancels the read.
                 parallel: NonZero::new(1),
-                partition_size: NonZero::new(16 * 1024 * 1024),
+                partition_size: NonZero::new(usize::MAX),
                 ..Default::default()
             };
             if let Some(key) = &self.config.encryption_customer {
@@ -634,6 +635,55 @@ mod tests {
                     Ok(body)
                 })),
             ))
+        }
+    }
+
+    /// Serves one byte of each requested range of a 32 MiB blob, then stalls.
+    #[derive(Debug, Default)]
+    struct StalledDownloadTransport {
+        requests: AtomicUsize,
+        open_bodies: Arc<AtomicUsize>,
+    }
+
+    struct OpenBody(Arc<AtomicUsize>);
+
+    impl Drop for OpenBody {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl HttpClient for StalledDownloadTransport {
+        async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
+            const BLOB_LEN: usize = 32 * 1024 * 1024;
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            let (start, end) = request
+                .headers()
+                .get_optional_str(&"range".into())
+                .unwrap()
+                .strip_prefix("bytes=")
+                .unwrap()
+                .split_once('-')
+                .unwrap();
+            let start: usize = start.parse().unwrap();
+            let end = (end.parse::<usize>().unwrap() + 1).min(BLOB_LEN);
+            let mut headers = Headers::new();
+            headers.insert("content-length", (end - start).to_string());
+            headers.insert(
+                "content-range",
+                format!("bytes {}-{}/{}", start, end - 1, BLOB_LEN),
+            );
+            headers.insert("etag", "\"test-version\"");
+            self.open_bodies.fetch_add(1, Ordering::SeqCst);
+            let open_body = OpenBody(self.open_bodies.clone());
+            let body = stream::once(async { Ok(azure_core::Bytes::from_static(b"x")) }).chain(
+                stream::once(async move {
+                    let _open_body = open_body;
+                    std::future::pending().await
+                }),
+            );
+            Ok(AsyncRawResponse::new(206.into(), headers, Box::pin(body)))
         }
     }
 
@@ -807,7 +857,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_blob_download_reads_sequential_16_mib_ranges() {
+    async fn test_blob_download_reads_each_range_with_one_request() {
         let chunk_size = 16 * 1024 * 1024;
         let data = azure_core::Bytes::from(
             (0..2 * chunk_size + 37)
@@ -832,19 +882,14 @@ mod tests {
                 None => (
                     storage.get("file"),
                     data.as_ref(),
-                    vec![
-                        format!("bytes=0-{}", chunk_size - 1),
-                        format!("bytes={}-{}", chunk_size, 2 * chunk_size - 1),
-                        format!("bytes={}-{}", 2 * chunk_size, data.len() - 1),
-                    ],
+                    // An unbounded read asks for the largest range; the service
+                    // returns the bytes up to the end of the blob.
+                    vec![format!("bytes=0-{}", usize::MAX - 1)],
                 ),
                 Some((offset, len)) => (
                     storage.get_part("file", offset as u64, len as u64),
                     &data[offset..offset + len],
-                    vec![
-                        format!("bytes={}-{}", offset, offset + chunk_size - 1),
-                        format!("bytes={}-{}", offset + chunk_size, offset + len - 1),
-                    ],
+                    vec![format!("bytes={}-{}", offset, offset + len - 1)],
                 ),
             };
             let mut downloaded = Vec::new();
@@ -858,6 +903,31 @@ mod tests {
                 .collect();
             assert_eq!(ranges, expected_ranges);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_blob_download_cancellation_releases_response() {
+        let transport = Arc::new(StalledDownloadTransport::default());
+        let storage = AzureStorage::new_with_options(
+            mock_config(),
+            ClientOptions {
+                transport: Some(Transport::new(transport.clone())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut reader = storage.get("file");
+        let mut downloaded = Vec::new();
+        // The range is buffered before it is returned, so the stalled response
+        // keeps the read pending until the caller gives up.
+        timeout(Duration::from_secs(60), reader.read_to_end(&mut downloaded))
+            .await
+            .unwrap_err();
+        drop(reader);
+        // Let any task that still owns a response run before checking.
+        tokio::task::yield_now().await;
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.open_bodies.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
