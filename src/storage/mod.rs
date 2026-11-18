@@ -4523,7 +4523,6 @@ mod tests {
                         vec![Key::from_raw(b"x")],
                         100.into(),
                         101.into(),
-                        None,
                         Context::default(),
                     ),
                     expect_ok_callback(tx, 1),
