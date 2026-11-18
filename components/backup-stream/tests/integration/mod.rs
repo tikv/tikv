@@ -264,19 +264,19 @@ mod all {
     #[test]
     fn pessimistic_lock() {
         let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 42)],
-            suite.tso(),
-            make_record_key(1, 42),
-        );
+        // Exercise disk scanning on registration, then observed Lock CF writes
+        // after registration. Neither a pure shared primary nor an ordinary
+        // pessimistic lock represents data that can delay the checkpoint.
+        use kvproto::kvrpcpb::Op;
+        for (handle, mode) in [(42, Op::PessimisticLock), (44, Op::SharedPessimisticLock)] {
+            let key = make_record_key(1, handle);
+            suite.must_kv_pessimistic_lock(1, vec![key.clone()], suite.tso(), key, mode);
+        }
         suite.must_register_task(1, "pessimistic_lock");
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 43)],
-            suite.tso(),
-            make_record_key(1, 43),
-        );
+        for (handle, mode) in [(43, Op::PessimisticLock), (45, Op::SharedPessimisticLock)] {
+            let key = make_record_key(1, handle);
+            suite.must_kv_pessimistic_lock(1, vec![key.clone()], suite.tso(), key, mode);
+        }
         let expected_tso = suite.tso().into_inner();
         suite.force_flush_files("pessimistic_lock");
         suite.wait_for_flush();
