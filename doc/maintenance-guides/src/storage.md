@@ -171,6 +171,9 @@ High-risk contracts:
 - Shared pessimistic locks, upgrades, and transitions of a shared wrapper
   to shrink-only take effect on Raft apply. Requests that change this state
   bypass in-memory pessimistic locking and pipelined responses.
+- New shared members are admitted up to 1,024 per physical key and a 1 MiB
+  encoded Lock CF value. Existing members can renew, prepare and drain even
+  at capacity.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

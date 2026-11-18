@@ -14,6 +14,11 @@ use crate::storage::kv::Modify;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
+// Limit *admission* independently of updates and removal: an existing holder
+// must always be able to renew, prepare, or release its lock.
+const MAX_SHARED_LOCK_HOLDERS: usize = 1024;
+const MAX_SHARED_LOCK_BYTES: usize = 1024 * 1024;
+
 #[derive(Default, Clone, Copy, Debug)]
 pub struct GcInfo {
     pub found_versions: usize,
@@ -194,8 +199,42 @@ impl MvccTxn {
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
+    pub(crate) fn insert_shared_lock(
+        &mut self,
+        key: Key,
+        mut shared: SharedLocks,
+        lock: Lock,
+    ) -> super::Result<()> {
+        if shared.len() >= MAX_SHARED_LOCK_HOLDERS {
+            return Err(box_err!(
+                "shared lock holder limit ({}) exceeded",
+                MAX_SHARED_LOCK_HOLDERS
+            ));
+        }
+        let is_new = shared.is_empty();
+        shared.insert_lock(lock)?;
+        let value = shared.to_bytes();
+        if value.len() > MAX_SHARED_LOCK_BYTES {
+            return Err(box_err!(
+                "encoded shared lock exceeds {} bytes",
+                MAX_SHARED_LOCK_BYTES
+            ));
+        }
+        self.put_shared_lock_value(key, &shared, is_new, value);
+        Ok(())
+    }
+
     pub(crate) fn put_shared_locks(&mut self, key: Key, shared_locks: &SharedLocks, is_new: bool) {
-        let value = shared_locks.to_bytes();
+        self.put_shared_lock_value(key, shared_locks, is_new, shared_locks.to_bytes());
+    }
+
+    fn put_shared_lock_value(
+        &mut self,
+        key: Key,
+        shared_locks: &SharedLocks,
+        is_new: bool,
+        value: Vec<u8>,
+    ) {
         if is_new {
             self.new_locks
                 .push(shared_locks.clone().into_lock_info(key.to_raw().unwrap()));
@@ -1859,6 +1898,31 @@ pub(crate) mod tests {
             txn.unlock_key(key.clone(), true, TimeStamp::zero());
             assert!(txn.take_new_locks().is_empty());
             assert!(txn.take_shared_lock_upgrade_hints().is_empty());
+        }
+
+        {
+            let mut txn = MvccTxn::new(1.into(), ConcurrencyManager::new_for_test(1.into()));
+            let mut holders = SharedLocks::new();
+            for ts in 1..=MAX_SHARED_LOCK_HOLDERS {
+                holders.insert_lock(make_lock(ts as u64, 1000)).unwrap();
+            }
+            let extra = make_lock((MAX_SHARED_LOCK_HOLDERS + 1) as u64, 1000);
+            let err = txn
+                .insert_shared_lock(key.clone(), holders.clone(), extra.clone())
+                .unwrap_err();
+            assert!(err.to_string().contains("holder limit"));
+            assert!(txn.is_empty());
+            holders.remove_lock(&1.into()).unwrap();
+            txn.insert_shared_lock(key.clone(), holders, extra).unwrap();
+
+            let mut large = make_lock(1, 1000);
+            large.primary = vec![0; MAX_SHARED_LOCK_BYTES];
+            txn.clear();
+            let err = txn
+                .insert_shared_lock(key.clone(), SharedLocks::new(), large)
+                .unwrap_err();
+            assert!(err.to_string().contains("exceeds"));
+            assert!(txn.is_empty());
         }
 
         let make_pessimistic_lock = |ts: u64, ttl: u64| PessimisticLock {

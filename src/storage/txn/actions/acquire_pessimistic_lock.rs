@@ -422,14 +422,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         if is_shared_lock_req {
-            let (mut shared_locks, is_new) = match current_shared_locks {
-                Some(l) => (l, false),
-                None => (SharedLocks::new(), true),
-            };
-            shared_locks
-                .insert_lock(lock.into_lock())
-                .map_err(MvccError::from)?;
-            txn.put_shared_locks(key, &shared_locks, is_new);
+            txn.insert_shared_lock(
+                key,
+                current_shared_locks.unwrap_or_default(),
+                lock.into_lock(),
+            )?;
         } else {
             txn.put_pessimistic_lock(key, lock, true);
         }
