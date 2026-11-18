@@ -31,7 +31,7 @@ mod statistics;
 pub mod test_util;
 mod write_batch;
 
-pub use background::{BackgroundRunner, BackgroundTask, GcTask};
+pub use background::{BackgroundRunner, BackgroundTask, GcTask, PdRangeHintService};
 pub use config::InMemoryEngineConfig;
 pub use engine::{RegionCacheMemoryEngine, SkiplistHandle};
 pub use keys::{
