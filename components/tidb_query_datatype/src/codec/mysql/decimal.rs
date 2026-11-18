@@ -788,6 +788,23 @@ fn do_div_mod_impl(
         let dest = &mut res.word_buf[idx_to..idx_to + src.len()];
         dest.copy_from_slice(src);
     }
+    // Remove the leading zeros of the integer part, as TiDB's doDivMod does.
+    // Otherwise the integer digit count stays word-aligned, and operations that
+    // size their result from it, such as multiplication, can overflow or drop
+    // the fraction although the result fits.
+    let (word_idx, int_cnt) = res.remove_leading_zeroes(res.int_cnt);
+    if word_idx > 0 {
+        res.word_buf.copy_within(word_idx.., 0);
+        res.word_buf[WORD_BUF_LEN as usize - word_idx..].fill(0);
+    }
+    if int_cnt == 0 && res.frac_cnt == 0 {
+        // The result is zero with no digits left. Keep one integer digit, like
+        // `Decimal::zero()`, because other methods expect at least one word.
+        res.int_cnt = 1;
+        res.word_buf[0] = 0;
+    } else {
+        res.int_cnt = int_cnt;
+    }
     if res.is_zero() {
         res.negative = false
     }
@@ -3637,6 +3654,73 @@ mod tests {
             let rhs: Decimal = rhs_str.parse().unwrap();
             let res = (lhs % rhs).unwrap().map(|d| d.to_string_value());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
+        }
+
+        // TiDB's doDivMod removes the leading zeros of the integer part of the
+        // quotient and the remainder. Without that, the integer digit count
+        // stays word-aligned, and a following multiplication overestimates the
+        // integer words: it overflows, or drops the fraction of a product that
+        // fits.
+        let c: Decimal = format!("1{}", "0".repeat(64)).parse().unwrap();
+        let cases = vec![
+            (
+                "10000000000000000001.0000000000",
+                '%',
+                "10000000000000000000.0000000000",
+                "1.0000000000",
+                1,
+                Res::Truncated(format!("1{}.{}", "0".repeat(64), "0".repeat(9))),
+            ),
+            (
+                "5",
+                '/',
+                "2",
+                "2.500000000",
+                1,
+                Res::Ok(format!("25{}.{}", "0".repeat(63), "0".repeat(9))),
+            ),
+            (
+                "13",
+                '/',
+                "11",
+                "1.181818181",
+                1,
+                Res::Ok(format!("1181818181{}.{}", "0".repeat(55), "0".repeat(9))),
+            ),
+        ];
+        for (lhs_str, op, rhs_str, exp, exp_int_cnt, mul_exp) in cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let res = if op == '%' {
+                (lhs % rhs).unwrap().unwrap()
+            } else {
+                lhs.div(&rhs, DEFAULT_DIV_FRAC_INCR).unwrap().unwrap()
+            };
+            assert_eq!(res.to_string_value(), exp);
+            assert_eq!(res.int_cnt, exp_int_cnt, "{lhs_str} {op} {rhs_str}");
+            let res = (&res * &c).map(|d| d.to_string_value());
+            assert_eq!(res, mul_exp, "({lhs_str} {op} {rhs_str}) * 1e64");
+        }
+
+        // A zero result without a fraction keeps one integer digit, like
+        // Decimal::zero(), so that hashing and multiplying it work.
+        let mut zero_hasher = DefaultHasher::new();
+        Decimal::zero().hash(&mut zero_hasher);
+        let zero_hash = zero_hasher.finish();
+        let lhs: Decimal = "1000000000000000000".parse().unwrap();
+        let rhs: Decimal = "1000000000000000000".parse().unwrap();
+        let rem = (lhs % rhs).unwrap().unwrap();
+        let one: Decimal = "1".parse().unwrap();
+        let three: Decimal = "3".parse().unwrap();
+        let quo = one.div(&three, 0).unwrap().unwrap();
+        for res in [rem, quo] {
+            assert_eq!((res.int_cnt, res.frac_cnt), (1, 0));
+            assert_eq!(res, Decimal::zero());
+            let mut hasher = DefaultHasher::new();
+            res.hash(&mut hasher);
+            assert_eq!(hasher.finish(), zero_hash);
+            let res = (&res * &res).map(|d| d.to_string_value());
+            assert_eq!(res, Res::Ok("0".to_owned()));
         }
     }
 
