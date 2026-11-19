@@ -12,7 +12,7 @@ deny = [
     { name = "sha-1" },
     # time 0.2 pulls sha1 through stdweb's proc-macro on wasm-only targets.
     { name = "sha1", wrappers = ["aws-smithy-checksums", "stdweb-internal-macros"]},
-    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3", "google-cloud-storage"] },
+    { name = "sha2", wrappers = ["aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3", "google-cloud-storage"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },
@@ -47,10 +47,8 @@ deny = [
     { crate = "h2:<0.3", reason = "not part of the temporary h2 0.3 exception" },
     { crate = "h2:>=0.3,<0.4", wrappers = ["aws-smithy-http-client", "hyper", "reqwest"], reason = "only the existing h2 0.3 dependency chains are temporarily accepted" },
     { crate = "h2:>=0.4,<0.4.16", reason = "upgrade h2 0.4 to at least 0.4.16" },
-    # Only the currently reviewed azure_core 0.18.0 release is covered by the
-    # temporary RUSTSEC-2026-0275 exception below.
-    { crate = "azure_core:<0.18.0", reason = "not part of the temporary azure_core 0.18.0 exception" },
-    { crate = "azure_core:>0.18.0,<0.22.0", reason = "upgrade to a patched azure_core release" },
+    { crate = "azure_core:<0.22.0", reason = "RUSTSEC-2026-0275" },
+    { crate = "quick-xml:<0.41.0", reason = "RUSTSEC-2026-0194 and RUSTSEC-2026-0195" },
 ]
 multiple-versions = "allow"
 
@@ -89,28 +87,10 @@ ignore = [
     #
     # TODO: Upgrade memmap2 to >= 0.9.11 when dependency constraints allow it.
     "RUSTSEC-2026-0186",
-    # azure_core transitively depends on http-types/rand, which triggers
-    # RUSTSEC-2026-0097 (unsound with custom logger). Upstream dependency
-    # constraints prevent upgrading at the moment.
+    # Retain the existing rand advisory exception separately from the Azure
+    # migration. The advisory requires a custom logger calling rand::rng() or
+    # thread_rng() during logging, which TiKV does not do.
     "RUSTSEC-2026-0097",
-    # Ignore RUSTSEC-2026-0174, as it does not introduce safety issues, only
-    # violating ASCII invariants. Meanwhile, it only affects the `azure` crate,
-    # which can be upgraded after it fixes the issue.
-    #
-    # See: https://github.com/http-rs/http-types/issues/534
-    "RUSTSEC-2026-0174",
-    # Ignore RUSTSEC-2026-0194 and RUSTSEC-2026-0195 temporarily. Both come
-    # from quick-xml through two transitive chains:
-    #   1. pprof -> inferno -> quick-xml, which TiKV uses only to generate
-    #      local flamegraph SVG output rather than parse untrusted XML input.
-    #   2. azure_core 0.18 -> quick-xml, which requires an Azure SDK upgrade
-    #      instead of a lockfile-only update to reach quick-xml >= 0.41.
-    # The remaining practical exposure is limited to XML returned by the
-    # configured Azure endpoint over TLS, so we accept the temporary DoS risk
-    # until we schedule the SDK upgrade and pprof/inferno dependency refresh.
-    # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     "RUSTSEC-2026-0221",
     "RUSTSEC-2026-0253",
     # Ignore RUSTSEC-2026-0258 for the legacy h2 0.3 dependency chains only.
@@ -121,14 +101,13 @@ ignore = [
     #
     # TODO: Remove after the legacy clients move off h2 0.3.
     "RUSTSEC-2026-0258",
-    # Ignore RUSTSEC-2026-0275 temporarily while TiKV still uses the legacy Azure
-    # SDK. azure_core 0.18 can log live Authorization headers at Debug/Trace
-    # level. TiKV's logger blocks those records before they reach its log drains,
-    # including after an online log level change.
-    #
-    # TODO: Remove after the SDK is upgraded or patched, or another fix supersedes
-    # the temporary credential-log filter in TiKV.
-    "RUSTSEC-2026-0275",
+    # Temporarily accept chrono and chrono-tz's unmaintained advisories. They
+    # report maintenance status, not a specific vulnerability. Replacing TiKV's
+    # date/time and timezone handling needs a separate compatibility review.
+    # TODO: Migrate these dependencies and remove both exceptions.
+    # See: https://github.com/chronotope/chrono/issues/1768
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
