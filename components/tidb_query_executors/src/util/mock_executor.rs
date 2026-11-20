@@ -48,6 +48,10 @@ pub struct MockExecutor {
     /// Cumulative scanned bytes peeked via `peek_scanned_bytes_sum`; never
     /// drained, mirroring `Storage::scanned_bytes`.
     scanned_bytes: usize,
+    /// Value returned by `can_be_cached`. Defaults to false.
+    pub cacheable: bool,
+    /// `scan_rows` of every `next_batch` call.
+    pub requested_scan_rows: Arc<Mutex<Vec<usize>>>,
 }
 
 impl MockExecutor {
@@ -63,6 +67,8 @@ impl MockExecutor {
             pending_scanned_rows: 0,
             scanned_bytes_per_batch: std::vec::IntoIter::default(),
             scanned_bytes: 0,
+            cacheable: false,
+            requested_scan_rows: Arc::default(),
         }
     }
 
@@ -77,6 +83,8 @@ impl MockExecutor {
             pending_scanned_rows: 0,
             scanned_bytes_per_batch: std::vec::IntoIter::default(),
             scanned_bytes: 0,
+            cacheable: false,
+            requested_scan_rows: Arc::default(),
         }
     }
 
@@ -138,9 +146,10 @@ impl BatchExecutor for MockExecutor {
         Ok(())
     }
 
-    async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.requested_scan_rows.lock().unwrap().push(scan_rows);
         match &mut self.child {
-            Some(child) => child.next_batch(_scan_rows).await,
+            Some(child) => child.next_batch(scan_rows).await,
             None => {
                 let result = self.results.next().unwrap();
                 self.pending_scanned_rows += result.logical_rows.len();
@@ -187,7 +196,7 @@ impl BatchExecutor for MockExecutor {
     }
 
     fn can_be_cached(&self) -> bool {
-        false
+        self.cacheable
     }
 }
 

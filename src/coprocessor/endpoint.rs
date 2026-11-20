@@ -337,9 +337,8 @@ impl<E: Engine> Endpoint<E> {
                         i => Some(i),
                     };
                     // max_keys_read = 0 means unlimited (disabled); any positive value
-                    // is a per-task row budget for early termination.  This is independent
-                    // of paging_size — both can be set simultaneously and whichever
-                    // threshold is reached first stops the scan.
+                    // is a per-task row budget, independent of paging_size. Exceeding
+                    // it fails the task with error 8274.
                     let max_keys_read = match req.get_max_keys_read() {
                         0 => None,
                         i => Some(i),
