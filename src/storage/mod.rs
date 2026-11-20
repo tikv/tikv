@@ -9906,7 +9906,7 @@ mod tests {
         // exists without acquiring the lock. The second waiter must still be woken up.
         storage
             .sched_txn_command(
-                commands::Commit::new(vec![k], 10.into(), 20.into(), None, Context::default()),
+                commands::Commit::new(vec![k], 10.into(), 20.into(), Context::default()),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -9997,7 +9997,7 @@ mod tests {
         // woken up, with no conflicting write to report.
         storage
             .sched_txn_command(
-                commands::Commit::new(vec![k], 10.into(), 20.into(), None, Context::default()),
+                commands::Commit::new(vec![k], 10.into(), 20.into(), Context::default()),
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
