@@ -245,7 +245,7 @@ macro_rules! handle_request {
             let resource_control_ctx = req.get_context().get_resource_control_context();
             let mut resource_group_priority = ResourcePriority::unknown;
             if let Some(resource_manager) = &self.resource_manager {
-                resource_manager.consume_penalty(resource_control_ctx);
+                resource_manager.consume_penalty(resource_control_ctx, req.get_context().get_request_source());
                 resource_group_priority= ResourcePriority::from(resource_control_ctx.override_priority);
             }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
@@ -551,7 +551,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager
+                .consume_penalty(resource_control_ctx, req.get_context().get_request_source());
             resource_group_priority =
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
@@ -598,7 +599,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager
+                .consume_penalty(resource_control_ctx, req.get_context().get_request_source());
             resource_group_priority =
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
@@ -696,7 +698,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager
+                .consume_penalty(resource_control_ctx, req.get_context().get_request_source());
             resource_group_priority =
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
@@ -1331,7 +1334,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(resource_control_ctx, req.get_context().get_request_source());
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
 
@@ -1356,7 +1359,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(resource_control_ctx, req.get_context().get_request_source());
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
@@ -1380,7 +1383,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(resource_control_ctx, req.get_context().get_request_source());
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority );
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
@@ -1427,7 +1430,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(resource_control_ctx, req.get_context().get_request_source());
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC

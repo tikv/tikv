@@ -7,8 +7,8 @@ use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    AdmissionDecision, DelaySlotGuard, MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType,
-    ResourceController, ResourceGroupManager,
+    AdmissionDecision, CONTROL_TICK, DelaySlotGuard, LEEWAY_FACTOR, LEEWAY_FRACTION,
+    MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType, ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
@@ -27,12 +27,19 @@ pub use channel::ResourceMetered;
 pub mod config;
 
 mod resource_limiter;
-pub use resource_limiter::ResourceLimiter;
+pub use resource_limiter::{ResourceLimiter, update_background_egress};
 use tikv_util::worker::Worker;
-use worker::{GroupQuotaAdjustWorker, QUOTA_ADJUST_DURATION};
+use worker::GroupQuotaAdjustWorker;
 
 mod metrics;
+pub use metrics::READ_POOL_CPU_VEC;
+mod score;
 pub mod worker;
+
+pub use score::{
+    ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
+    compute_resource_scores,
+};
 
 pub fn start_periodic_tasks(
     mgr: &Arc<ResourceGroupManager>,
@@ -40,6 +47,7 @@ pub fn start_periodic_tasks(
     bg_worker: &Worker,
     io_bandwidth: u64,
     compaction_pending_bytes_ratio: Arc<AtomicU32>,
+    grpc_concurrency: usize,
 ) {
     let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client);
     // spawn a task to periodically update the minimal virtual time of all resource
@@ -55,12 +63,16 @@ pub fn start_periodic_tasks(
     });
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
-    let mut worker =
-        GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth, compaction_pending_bytes_ratio);
+    let mut worker = GroupQuotaAdjustWorker::new(
+        mgr.clone(),
+        io_bandwidth,
+        compaction_pending_bytes_ratio,
+        grpc_concurrency,
+    );
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
-    bg_worker.spawn_interval_task(QUOTA_ADJUST_DURATION, move || {
+    bg_worker.spawn_interval_task(CONTROL_TICK, move || {
         worker.adjust_quota();
         // priority_worker.adjust();
     });
