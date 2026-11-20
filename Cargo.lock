@@ -8438,7 +8438,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.5.8"
+version = "8.5.9"
 dependencies = [
  "anyhow",
  "api_version",
