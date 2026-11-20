@@ -10,7 +10,7 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    future::{FutureTrack, track},
+    future::{FutureTrack, PollTimeTracker, track},
     slab::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, TrackerToken, TrackerTokenArray},
     tls::*,
 };
@@ -33,6 +33,12 @@ impl Tracker {
 
     pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
         detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
+        detail_v2.set_process_wall_time_ns(
+            detail_v2.process_wall_time_ns + self.metrics.future_process_nanos,
+        );
+        detail_v2.set_process_suspend_wall_time_ns(
+            detail_v2.process_suspend_wall_time_ns + self.metrics.future_suspend_nanos,
+        );
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
@@ -159,6 +165,10 @@ pub struct RequestMetrics {
     pub latch_wait_nanos: u64,
     pub scheduler_process_nanos: u64,
     pub scheduler_throttle_nanos: u64,
+
+    pub future_process_nanos: u64,
+    pub future_suspend_nanos: u64,
+
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,
@@ -185,4 +195,69 @@ pub struct RequestMetrics {
 
     // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
     pub grpc_req_size: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_req_info() -> RequestInfo {
+        RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id: 0,
+            resource_group_tag: vec![],
+            request_type: RequestType::default(),
+            cid: 0,
+            is_external_req: false,
+        }
+    }
+
+    #[test]
+    fn test_poll_time_tracker_attributes_process_and_suspend_time() {
+        use std::{
+            future::{Future, poll_fn},
+            pin::pin,
+            task::{Context, Poll, Waker},
+            time::Duration,
+        };
+
+        // Spinning self-measures, so assertions hold under arbitrary
+        // scheduling load, unlike sleeps.
+        fn spin(d: Duration) {
+            let begin = Instant::now();
+            while begin.elapsed() < d {}
+        }
+
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(new_req_info()));
+        let mut polled = false;
+        let fut = track(
+            poll_fn(move |_cx| {
+                spin(Duration::from_millis(2));
+                if polled {
+                    Poll::Ready(())
+                } else {
+                    polled = true;
+                    Poll::Pending
+                }
+            }),
+            PollTimeTracker::new(token),
+        );
+        let mut fut = pin!(fut);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_ready());
+
+        let mut detail = pb::TimeDetailV2::default();
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| tracker.write_time_detail(&mut detail));
+        GLOBAL_TRACKERS.remove(token);
+
+        // Two polls spun >= 2ms each; a >= 2ms gap preceded each poll.
+        let expected = Duration::from_millis(4).as_nanos() as u64;
+        assert!(detail.get_process_wall_time_ns() >= expected);
+        assert!(detail.get_process_suspend_wall_time_ns() >= expected);
+    }
 }
