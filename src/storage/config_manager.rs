@@ -11,7 +11,7 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResul
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
 use tikv_util::{
-    config::{ReadableDuration, ReadableSize},
+    config::{ReadableDuration, ReadableSize, ReadableSizeOrPercent},
     worker::Scheduler,
 };
 
@@ -57,7 +57,7 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if let Some(size) = block_cache.remove("capacity") {
                 if size != ConfigValue::None {
-                    let s: ReadableSize = size.into();
+                    let s: ReadableSizeOrPercent = size.into();
                     self.configurable_db
                         .set_shared_block_cache_capacity(s.0 as usize)?;
                     // Write config to metric
