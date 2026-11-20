@@ -4598,7 +4598,7 @@ impl TikvConfig {
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
-        if last_cfg.storage.data_dir != self.storage.data_dir {
+        if !is_same_dir(&last_cfg.storage.data_dir, &self.storage.data_dir) {
             // In tikv 3.0 the default value of storage.data-dir changed
             // from "" to "./"
             let using_default_after_upgrade =
@@ -4612,7 +4612,7 @@ impl TikvConfig {
                 ));
             }
         }
-        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
+        if !is_same_dir(&last_cfg.rocksdb.wal_dir, &self.rocksdb.wal_dir) {
             return Err(format!(
                 "db wal dir have been changed, former is '{}', \
                  current db wal_dir is '{}', please guarantee all data wal logs \
@@ -4641,7 +4641,7 @@ impl TikvConfig {
                 last_raftdb_dir, self.raft_store.raftdb_path
             ));
         }
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
+        if !is_same_dir(&last_cfg.raftdb.wal_dir, &self.raftdb.wal_dir) {
             return Err(format!(
                 "raft db wal dir have been changed, former is '{}', \
                 current is '{}', please check if it is expected.",
@@ -4776,6 +4776,28 @@ impl TikvConfig {
             );
         }
         Ok(env)
+    }
+}
+
+/// Checks whether two configured directories point to the same place.
+///
+/// Both paths are canonicalized before comparing, so different spellings of
+/// the same directory, like `//data`, `/data/` and `/data`, are not reported
+/// as a change. An empty path means "use the default" for some options, so
+/// it only matches another empty path.
+fn is_same_dir(former: &str, current: &str) -> bool {
+    if former == current {
+        return true;
+    }
+    if former.is_empty() || current.is_empty() {
+        return false;
+    }
+    match (
+        config::canonicalize_path(former),
+        config::canonicalize_path(current),
+    ) {
+        (Ok(former), Ok(current)) => former == current,
+        _ => false,
     }
 }
 
@@ -5425,6 +5447,23 @@ mod tests {
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.storage.data_dir = "/data1".to_owned();
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+
+        // Different spellings of the same directory are not a change.
+        for former in ["//data1", "/data1/", "/data1/./", "//data1//"] {
+            last_cfg.storage.data_dir = former.to_owned();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+        }
+        last_cfg.storage.data_dir = "/data1/../data2".to_owned();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
+
+        let mut tikv_cfg = TikvConfig::default();
+        let mut last_cfg = TikvConfig::default();
+        tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        tikv_cfg.raftdb.wal_dir = "/data/raft_wal_dir".to_owned();
+        last_cfg.rocksdb.wal_dir = "//data/wal_dir/".to_owned();
+        last_cfg.raftdb.wal_dir = "/data//raft_wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
