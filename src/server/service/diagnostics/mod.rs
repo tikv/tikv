@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -33,7 +34,10 @@ mod log;
 pub mod sys;
 
 lazy_static! {
-    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    // Process CPU usage is computed across successive scans of the same System.
+    static ref PROCESS_SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref LOAD_SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref HW_SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
 }
 
 /// Service handles the RPC messages for the `Diagnostics` service.
@@ -52,6 +56,30 @@ impl Service {
             slow_log_file,
         }
     }
+}
+
+/// Captures the initial CPU, network, and block I/O samples for a load request.
+fn load_info_snapshot() -> (
+    sys::CpuTimeSnapshot,
+    HashMap<String, sys::NicSnapshot>,
+    HashMap<String, ioload::IoLoad>,
+) {
+    let prev_nic = {
+        let mut system = LOAD_SYS_INFO.lock().unwrap();
+        fail::fail_point!("diagnostics_load_info_snapshot_holds_lock");
+        system.refresh_networks_list();
+        system.refresh_networks();
+        system
+            .networks()
+            .into_iter()
+            .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
+            .collect()
+    };
+    (
+        sys::cpu_time_snapshot(),
+        prev_nic,
+        ioload::IoLoad::snapshot(),
+    )
 }
 
 impl Diagnostics for Service {
@@ -114,18 +142,7 @@ impl Diagnostics for Service {
         let collect = async move {
             let (load, when) = match tp {
                 ServerInfoType::LoadInfo | ServerInfoType::All => {
-                    let mut system = SYS_INFO.lock().unwrap();
-                    system.refresh_networks_list();
-                    system.refresh_all();
-                    let load = (
-                        sys::cpu_time_snapshot(),
-                        system
-                            .networks()
-                            .into_iter()
-                            .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
-                            .collect(),
-                        ioload::IoLoad::snapshot(),
-                    );
+                    let load = load_info_snapshot();
                     let when = Instant::now() + Duration::from_millis(1000);
                     (Some(load), when)
                 }
@@ -162,5 +179,116 @@ impl Diagnostics for Service {
         });
 
         ctx.spawn(f);
+    }
+}
+
+#[cfg(all(test, feature = "failpoints"))]
+mod lock_split_regression_tests {
+    use std::{
+        sync::{Arc, OnceLock, mpsc},
+        thread::{self, ThreadId},
+    };
+
+    use super::{
+        sys::{hardware_info, process_info},
+        *,
+    };
+
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Checks that `hardware_info` finishes while the lock is held.
+    fn assert_probe_finishes_while_holder_holds_lock(
+        fail_point: &'static str,
+        holder_body: impl FnOnce() + Send + 'static,
+    ) {
+        let _scenario = fail::FailScenario::setup();
+
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // Other tests may call the same collector. Pause only the designated holder.
+        let holder_id = Arc::new(OnceLock::<ThreadId>::new());
+
+        let callback_holder_id = Arc::clone(&holder_id);
+        let release_rx = Mutex::new(release_rx);
+        let guard = fail::FailGuard::with_callback(fail_point, move || {
+            if callback_holder_id.get().copied() == Some(thread::current().id()) {
+                let _ = entered_tx.send(());
+                let _ = release_rx.lock().unwrap().recv();
+            }
+        })
+        .unwrap();
+
+        let spawn_holder_id = Arc::clone(&holder_id);
+        let holder = thread::spawn(move || {
+            let _ = spawn_holder_id.set(thread::current().id());
+            holder_body();
+        });
+
+        let entered = entered_rx.recv_timeout(HANDSHAKE_TIMEOUT);
+
+        let mut probe_thread: Option<thread::JoinHandle<()>> = None;
+        let done = if entered.is_ok() {
+            probe_thread = Some(thread::spawn(move || {
+                let mut items = Vec::new();
+                hardware_info(&mut items);
+                let _ = done_tx.send(());
+            }));
+            Some(done_rx.recv_timeout(HANDSHAKE_TIMEOUT))
+        } else {
+            None
+        };
+
+        drop(release_tx);
+        drop(guard);
+        let holder_result = holder.join();
+        let probe_result = probe_thread.take().map(|probe| {
+            // Join the probe even if the holder panicked.
+            probe.join()
+        });
+
+        if let Err(panic) = holder_result {
+            std::panic::resume_unwind(panic);
+        }
+        if let Some(Err(panic)) = probe_result {
+            std::panic::resume_unwind(panic);
+        }
+
+        assert!(
+            entered.is_ok(),
+            "the holder never reached the fail point {:?} within {:?}; it may not have been \
+             scheduled, or the fail-point registry was cleared concurrently",
+            fail_point,
+            HANDSHAKE_TIMEOUT
+        );
+        assert!(
+            done.expect("entered was received, so the probe must have been started")
+                .is_ok(),
+            "hardware_info never finished while the holder held the lock behind {:?}: the two \
+             paths share one lock (tikv#20372 regression)",
+            fail_point
+        );
+    }
+
+    #[test]
+    fn test_process_scan_does_not_block_hardware_info() {
+        assert_probe_finishes_while_holder_holds_lock(
+            "diagnostics_process_info_holds_lock",
+            || {
+                let mut items = Vec::new();
+                process_info(&mut items);
+            },
+        );
+    }
+
+    #[test]
+    fn test_load_snapshot_does_not_block_hardware_info() {
+        assert_probe_finishes_while_holder_holds_lock(
+            "diagnostics_load_info_snapshot_holds_lock",
+            || {
+                let _snapshot = load_info_snapshot();
+            },
+        );
     }
 }
