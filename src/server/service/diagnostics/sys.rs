@@ -1,12 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, string::ToString};
+use std::{collections::HashMap, string::ToString, sync::Mutex};
 
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
+use lazy_static::lazy_static;
 use tikv_util::sys::{SysQuota, cpu_time::LinuxStyleCpuTime, ioload, *};
 use walkdir::WalkDir;
 
-use crate::server::service::diagnostics::SYS_INFO;
+lazy_static! {
+    static ref CPU_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref MEM_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref DISK_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref NET_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    static ref PROCESS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+}
 
 type CpuTimeSnapshot = Option<LinuxStyleCpuTime>;
 
@@ -57,7 +64,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
     // CPU load
     {
         let infos = {
-            let mut system = SYS_INFO.lock().unwrap();
+            let mut system = CPU_INFO.lock().unwrap();
             system.refresh_system();
             let load = system.load_average();
             vec![
@@ -124,7 +131,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 }
 
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = MEM_INFO.lock().unwrap();
     system.refresh_memory();
     let total_memory = system.total_memory();
     let used_memory = system.used_memory();
@@ -175,8 +182,20 @@ fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     }
 }
 
+/// Collects a snapshot of network interface statistics for delta calculations.
+pub fn nic_snapshot() -> HashMap<String, NicSnapshot> {
+    let mut system = NET_INFO.lock().unwrap();
+    system.refresh_networks_list();
+    system.refresh_networks();
+    system
+        .networks()
+        .into_iter()
+        .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
+        .collect()
+}
+
 fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = NET_INFO.lock().unwrap();
     system.refresh_networks_list();
     system.refresh_networks();
     let current = system.networks();
@@ -289,7 +308,7 @@ pub fn load_info(
 }
 
 fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = CPU_INFO.lock().unwrap();
     system.refresh_cpu();
     let processor = match system.cpus().iter().next() {
         Some(p) => p,
@@ -343,7 +362,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 }
 
 fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = MEM_INFO.lock().unwrap();
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
@@ -356,7 +375,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 }
 
 fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = DISK_INFO.lock().unwrap();
     system.refresh_disks_list();
     system.refresh_disks();
     let disks = system.disks();
@@ -507,7 +526,7 @@ fn get_transparent_hugepage() -> Option<ServerInfoItem> {
 /// TODO: use different `ServerInfoType` to collect process list
 #[allow(dead_code)]
 pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = SYS_INFO.lock().unwrap();
+    let mut system = PROCESS_INFO.lock().unwrap();
     system.refresh_processes();
     let processes = system.processes();
     for (pid, p) in processes.iter() {
@@ -544,16 +563,7 @@ mod tests {
     #[test]
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
-        let prev_nic = {
-            let mut system = SYS_INFO.lock().unwrap();
-            system.refresh_networks_list();
-            system.refresh_all();
-            system
-                .networks()
-                .into_iter()
-                .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
-                .collect()
-        };
+        let prev_nic = nic_snapshot();
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
@@ -798,5 +808,18 @@ mod tests {
                 "is-point-to-point",
             ]
         );
+    }
+
+    #[test]
+    fn test_process_info_lock_does_not_block_hardware_info() {
+        let _guard = PROCESS_INFO.lock().unwrap();
+        let handle = std::thread::spawn(|| {
+            let mut collector = vec![];
+            hardware_info(&mut collector);
+            collector
+        });
+        let collector = handle.join().unwrap();
+        assert!(collector.iter().any(|x| x.get_tp() == "cpu"));
+        assert!(collector.iter().any(|x| x.get_tp() == "memory"));
     }
 }
