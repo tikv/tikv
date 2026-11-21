@@ -4779,12 +4779,14 @@ impl TikvConfig {
     }
 }
 
-/// Checks whether two configured directories point to the same place.
+/// Checks whether two configured directories are the same path.
 ///
-/// Both paths are canonicalized before comparing, so different spellings of
-/// the same directory, like `//data`, `/data/` and `/data`, are not reported
-/// as a change. An empty path means "use the default" for some options, so
-/// it only matches another empty path.
+/// The paths are compared component by component, so different spellings of
+/// the same directory, like `//data`, `/data/` and `/data/./`, are not
+/// reported as a change. This is purely lexical: symlinks and `..` are not
+/// resolved, so a directory that really moved is still caught. An empty path
+/// means "use the default" for some options, so it only matches another empty
+/// path.
 fn is_same_dir(former: &str, current: &str) -> bool {
     if former == current {
         return true;
@@ -4792,13 +4794,14 @@ fn is_same_dir(former: &str, current: &str) -> bool {
     if former.is_empty() || current.is_empty() {
         return false;
     }
-    match (
-        config::canonicalize_path(former),
-        config::canonicalize_path(current),
-    ) {
-        (Ok(former), Ok(current)) => former == current,
-        _ => false,
-    }
+    let normalize = |p: &str| -> Vec<String> {
+        Path::new(p)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect()
+    };
+    normalize(former) == normalize(current)
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Result<(), String> {
