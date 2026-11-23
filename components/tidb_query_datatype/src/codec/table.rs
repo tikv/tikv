@@ -786,6 +786,48 @@ mod tests {
         assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
     }
 
+    #[test]
+    fn test_index_key_codec_desc() {
+        let mut ctx = EvalContext::default();
+        let tests = vec![
+            Datum::I64(-1),
+            Datum::Bytes(b"123".to_vec()),
+            Datum::Null,
+            Datum::Dur(Duration::parse(&mut ctx, "12:34:56.666", 2).unwrap()),
+            Datum::Time(Time::parse_datetime(&mut ctx, "2026-01-02 03:04:05", 0, false).unwrap()),
+            Datum::U64(1),
+        ];
+        // A descending column is the bitwise complement of its ascending
+        // encoding; ascending columns in the same key are left as they are.
+        let desc = [true, true, true, true, true, false];
+
+        let mut duration_col = ColumnInfo::default();
+        duration_col
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Duration)
+            .set_decimal(2);
+        let types = vec![
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::VarChar.into(),
+            FieldTypeTp::LongLong.into(),
+            duration_col,
+            FieldTypeTp::DateTime.into(),
+            FieldTypeTp::LongLong.into(),
+        ];
+
+        let mut buf = vec![];
+        for (d, &is_desc) in tests.iter().zip(&desc) {
+            let col = datum::encode_key(&mut ctx, std::slice::from_ref(d)).unwrap();
+            if is_desc {
+                buf.extend(col.iter().map(|b| !b));
+            } else {
+                buf.extend_from_slice(&col);
+            }
+        }
+        let encoded = encode_index_seek_key(1, 2, &buf);
+        assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
+    }
+
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
         let mut data = HashMap::with_capacity_and_hasher(row.cols.len(), Default::default());
         if row.is_empty() {
