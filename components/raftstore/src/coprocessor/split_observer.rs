@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{Arc, RwLock};
+
 use itertools::Itertools;
 use kvproto::{
     metapb::Region,
@@ -11,6 +13,38 @@ use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{Error, store::util};
 
 pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
+
+/// Receives a best-effort hint when a split request has no valid split key.
+///
+/// Implementations must not block the raftstore request path. In particular, a
+/// notification should wake a bounded compaction scheduler rather than enqueue
+/// a compaction task for every failed split request.
+pub trait NoValidSplitKeyNotifier: Send + Sync {
+    fn notify(&self, region_id: u64);
+}
+
+/// An indirection shared by cloned coprocessor hosts. It lets the server attach
+/// the auto-compaction notifier after constructing the default observers.
+#[derive(Clone, Default)]
+pub struct NoValidSplitKeyNotifierRegistry {
+    notifier: Arc<RwLock<Option<Arc<dyn NoValidSplitKeyNotifier>>>>,
+}
+
+impl NoValidSplitKeyNotifierRegistry {
+    pub fn set(&self, notifier: Arc<dyn NoValidSplitKeyNotifier>) {
+        *self.notifier.write().unwrap() = Some(notifier);
+    }
+
+    fn notify(&self, region_id: u64) {
+        // This hook runs on the raftstore request path. If registration happens
+        // concurrently, dropping a best-effort hint is safer than blocking.
+        if let Ok(notifier) = self.notifier.try_read() {
+            if let Some(notifier) = notifier.as_ref() {
+                notifier.notify(region_id);
+            }
+        }
+    }
+}
 
 pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
@@ -57,10 +91,16 @@ pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
 
 /// `SplitObserver` adjusts the split key so that it won't separate
 /// multiple MVCC versions of a key into two regions.
-#[derive(Clone)]
-pub struct SplitObserver;
+#[derive(Clone, Default)]
+pub struct SplitObserver {
+    notifier: NoValidSplitKeyNotifierRegistry,
+}
 
 impl SplitObserver {
+    pub fn new(notifier: NoValidSplitKeyNotifierRegistry) -> Self {
+        Self { notifier }
+    }
+
     fn on_split(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -96,6 +136,7 @@ impl SplitObserver {
             .collect::<Vec<_>>();
 
         if ajusted_splits.is_empty() {
+            self.notifier.notify(ctx.region().get_id());
             Err(NO_VALID_SPLIT_KEY.to_owned())
         } else {
             // Rewrite the splits.
@@ -162,6 +203,8 @@ impl AdminObserver for SplitObserver {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::{
         metapb::Region,
@@ -175,6 +218,15 @@ mod tests {
 
     use super::*;
     use crate::coprocessor::{AdminObserver, ObserverContext};
+
+    #[derive(Default)]
+    struct TestNotifier(AtomicU64);
+
+    impl NoValidSplitKeyNotifier for TestNotifier {
+        fn notify(&self, region_id: u64) {
+            self.0.store(region_id, Ordering::SeqCst);
+        }
+    }
 
     fn new_split_request(key: Vec<u8>) -> AdminRequest {
         let mut req = AdminRequest::default();
@@ -223,7 +275,7 @@ mod tests {
         r.set_start_key(region_start_key);
 
         let mut ctx = ObserverContext::new(&r);
-        let observer = SplitObserver;
+        let observer = SplitObserver::default();
 
         let mut req = new_batch_split_request(vec![key]);
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
@@ -237,6 +289,32 @@ mod tests {
     }
 
     #[test]
+    fn test_no_valid_split_key_notifies() {
+        let notifier = Arc::new(TestNotifier::default());
+        let registry = NoValidSplitKeyNotifierRegistry::default();
+        registry.set(notifier.clone());
+        let observer = SplitObserver::new(registry);
+
+        let mut region = Region::default();
+        region.set_id(42);
+        region.set_start_key(b"k1".to_vec());
+        let mut ctx = ObserverContext::new(&region);
+
+        let mut invalid_req = new_split_request(b"k1".to_vec());
+        observer
+            .pre_propose_admin(&mut ctx, &mut invalid_req)
+            .unwrap_err();
+        assert_eq!(notifier.0.load(Ordering::SeqCst), 42);
+
+        notifier.0.store(0, Ordering::SeqCst);
+        let mut valid_req = new_split_request(b"k2".to_vec());
+        observer
+            .pre_propose_admin(&mut ctx, &mut valid_req)
+            .unwrap();
+        assert_eq!(notifier.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn test_split() {
         let mut region = Region::default();
         let start_key = new_row_key(1, 1, 1);
@@ -244,7 +322,7 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         let mut req = AdminRequest::default();
 
-        let observer = SplitObserver;
+        let observer = SplitObserver::default();
 
         // since no split is defined, actual coprocessor won't be invoke.
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();

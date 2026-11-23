@@ -701,7 +701,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
 
-    // Make sure it finish mem check before destorying.
+    // Make sure it finish mem check before destroying.
     let (mem_check_tx, mem_check_rx) = crossbeam::channel::bounded(0);
     let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
     fail::cfg_callback(on_handle_apply_split_2_fp, move || {
@@ -746,6 +746,131 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     cluster.clear_send_filters();
     fail::remove(peer_check_stale_state_fp);
 
+    must_get_none(&cluster.get_engine(2), b"k1");
+}
+
+#[test]
+fn test_async_destroy_completion_after_same_id_split() {
+    check_async_destroy_completion_during_same_id_split(false);
+}
+
+#[test]
+fn test_async_destroy_finalization_after_same_id_split() {
+    check_async_destroy_completion_during_same_id_split(true);
+}
+
+fn check_async_destroy_completion_during_same_id_split(completion_received: bool) {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let region_id = cluster.run_conf_change();
+    assert_eq!(region_id, 1);
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Store 2 first creates an uninitialized split child from Raft messages.
+    // Hold both snapshots until the parent can replay its split log.
+    let parent_snapshot = "before_check_snapshot_1_2";
+    let child_snapshot = "before_check_snapshot_1000_2";
+    fail::cfg(parent_snapshot, "pause").unwrap();
+    fail::cfg(child_snapshot, "pause").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k22", b"v22");
+    must_get_none(&cluster.get_engine(2), b"k1");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let child_peer = find_peer(&left, 2).cloned().unwrap();
+    pd_client.must_remove_peer(left.get_id(), child_peer.clone());
+
+    // Mark the child for split replacement, but let its removal start before
+    // the parent persists and registers that replacement.
+    let (split_tx, split_rx) = crossbeam::channel::bounded(0);
+    let split_check = "on_handle_apply_split_2_after_mem_check";
+    fail::cfg_callback(split_check, move || {
+        let _ = split_tx.send(());
+        let _ = split_tx.send(());
+    })
+    .unwrap();
+    fail::remove(parent_snapshot);
+    split_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Exercise both routing to a replacement and finalizing the old FSM after
+    // it has already received completion. Neither may touch the replacement.
+    let completion_gate = if completion_received {
+        "raft_store_after_destroy_peer"
+    } else {
+        "before_clear_peer_meta"
+    };
+    let (started_tx, started_rx) = crossbeam::channel::bounded(0);
+    let (resume_tx, resume_rx) = crossbeam::channel::bounded::<()>(0);
+    fail::cfg_callback(completion_gate, move || {
+        let _ = started_tx.send(());
+        let _ = resume_rx.recv();
+    })
+    .unwrap();
+    let (stale_tx, stale_rx) = mpsc::channel();
+    fail::cfg_callback("on_stale_destroy_peer_completion", move || {
+        stale_tx.send(()).unwrap();
+    })
+    .unwrap();
+    fail::remove(child_snapshot);
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Keep the split-created child alive even though PD has already removed it.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    fail::cfg("peer_check_stale_state", "return()").unwrap();
+    fail::remove(split_check);
+    split_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    for _ in 0..500 {
+        let ready = cluster.store_metas[&2]
+            .lock()
+            .unwrap()
+            .regions
+            .get(&left.get_id())
+            .is_some_and(|r| !r.get_peers().is_empty());
+        if ready {
+            break;
+        }
+        sleep_ms(10);
+    }
+    let replacement = cluster.store_metas[&2].lock().unwrap().regions[&left.get_id()].clone();
+    assert_eq!(find_peer(&replacement, 2), Some(&child_peer));
+
+    drop(resume_tx);
+    stale_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove(completion_gate);
+    fail::remove("on_stale_destroy_peer_completion");
+
+    // Check routing as well as data: a stale completion must not close the new
+    // mailbox or erase its shared Region/read metadata.
+    let response = cluster
+        .call_command_on_node(
+            2,
+            new_status_request(left.get_id(), child_peer, new_region_leader_cmd()),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(!response.get_header().has_error(), "{:?}", response);
+    {
+        let meta = cluster.store_metas[&2].lock().unwrap();
+        assert_eq!(meta.regions[&left.get_id()], replacement);
+        assert!(meta.readers.contains_key(&left.get_id()));
+        assert!(meta.region_read_progress.get(&left.get_id()).is_some());
+    }
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    cluster.clear_send_filters();
+    fail::remove("peer_check_stale_state");
     must_get_none(&cluster.get_engine(2), b"k1");
 }
 

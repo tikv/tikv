@@ -277,6 +277,8 @@ impl<L: LockManager> LockWaitContext<L> {
                     .is_canceled
                     .store(true, Ordering::Release);
 
+                fail_point!("lock_wait_context_after_cancel_marked");
+
                 let entry = self
                     .lock_wait_queues
                     .remove_by_token(&self.shared_states.key, self.shared_states.lock_wait_token);

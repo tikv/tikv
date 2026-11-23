@@ -3,11 +3,14 @@
 use std::{str, sync::Arc, time::Duration};
 
 use azure_core::{
-    HttpClient, Method, Request,
-    auth::{AccessToken, TokenCredential},
-    base64, content_type,
+    base64,
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
     error::{Error, ErrorKind},
-    headers, new_http_client,
+    http::{
+        HttpClient, Method, Request,
+        headers::{self, content_type},
+        new_http_client,
+    },
 };
 use openssl::{
     error::ErrorStack,
@@ -20,6 +23,8 @@ use openssl::{
 use serde::Deserialize;
 use time::OffsetDateTime;
 use url::{Url, form_urlencoded};
+
+use super::authentication_error_summary;
 
 /// Refresh time to use in seconds
 const DEFAULT_REFRESH_TIME: i64 = 300;
@@ -47,7 +52,7 @@ impl CertificateCredentialOptions {
     }
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Default)]
 #[serde(default)]
 struct AadTokenResponse {
     token_type: String,
@@ -58,14 +63,13 @@ struct AadTokenResponse {
 
 /// Enables authentication to Azure Active Directory using a client certificate
 /// that was generated for an App Registration. It will automatically cache the
-/// latest token from Azure Active Directory.
+/// latest token through the SDK's authentication policy.
 ///
 /// In order to use subject name validation send_cert_chain option must be set
 /// to true The certificate is expected to be in base64 encoded PKCS12 format.
 ///
-/// TODO: make `ClientCertificateCredentialExt` directly extended from
-/// `ClientCertificateCredential` if `ClientCertificateCredential` is nightly
-/// released.
+/// This adapter preserves the configured PKCS12 password and always sends the
+/// certificate chain, independently of process-wide identity settings.
 #[derive(Debug)]
 pub struct ClientCertificateCredentialExt {
     http_client: Arc<dyn HttpClient>,
@@ -73,9 +77,9 @@ pub struct ClientCertificateCredentialExt {
     tenant_id: String,
     client_id: String,
     /// Certificate in PKCS12 format, encoded in base64
-    certificate: String,
+    certificate: Secret,
     /// Certificate Pass, default with ""
-    certificate_pass: String,
+    certificate_pass: Secret,
     options: CertificateCredentialOptions,
 }
 
@@ -88,11 +92,11 @@ impl ClientCertificateCredentialExt {
         certificate_pass: String,
     ) -> Self {
         Self {
-            http_client: new_http_client(),
+            http_client: new_http_client(None),
             tenant_id,
             client_id,
-            certificate,
-            certificate_pass,
+            certificate: Secret::new(certificate),
+            certificate_pass: Secret::new(certificate_pass),
             options: CertificateCredentialOptions::default(),
         }
     }
@@ -143,7 +147,7 @@ fn get_encoded_cert(cert: &X509) -> azure_core::Result<String> {
 }
 
 fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
-    Error::new(ErrorKind::Credential, err)
+    Error::with_error(ErrorKind::Credential, err, "certificate operation failed")
 }
 
 // Not care about "wasm32" platform, this is the requirement from
@@ -151,14 +155,12 @@ fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl TokenCredential for ClientCertificateCredentialExt {
-    async fn clear_cache(&self) -> azure_core::Result<()> {
-        Ok(())
-    }
-    // As previous [TODO] shows, following operations in `get_token` is just
-    // extended from `ClientCertificateCredential::get_token()` as a special
-    // version with caching feature and stable feature.
     // Reference of the REST API: https://learn.microsoft.com/en-us/azure/key-vault/general/common-parameters-and-headers.
-    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
         let options = self.options();
         let url = &format!(
             "{}/{}/oauth2/v2.0/token",
@@ -166,15 +168,15 @@ impl TokenCredential for ClientCertificateCredentialExt {
             self.tenant_id
         );
 
-        let certificate = base64::decode(&self.certificate)
-            .map_err(|_| Error::message(ErrorKind::Credential, "Base64 decode failed"))?;
+        let certificate = base64::decode(self.certificate.secret())
+            .map_err(|_| Error::with_message(ErrorKind::Credential, "Base64 decode failed"))?;
         let certificate = Pkcs12::from_der(&certificate)
             .map_err(openssl_error)?
-            .parse2(&self.certificate_pass)
+            .parse2(self.certificate_pass.secret())
             .map_err(openssl_error)?;
 
         if certificate.cert.as_ref().is_none() {
-            return Err(Error::message(
+            return Err(Error::with_message(
                 ErrorKind::Credential,
                 "Certificate not found",
             ));
@@ -182,7 +184,7 @@ impl TokenCredential for ClientCertificateCredentialExt {
         let cert = certificate.cert.as_ref().unwrap();
 
         if certificate.pkey.as_ref().is_none() {
-            return Err(Error::message(
+            return Err(Error::with_message(
                 ErrorKind::Credential,
                 "Private key not found",
             ));
@@ -258,7 +260,13 @@ impl TokenCredential for ClientCertificateCredentialExt {
         let rsp_body = rsp.into_body().collect().await?;
 
         if !rsp_status.is_success() {
-            return Err(ErrorKind::http_response_from_body(rsp_status, &rsp_body).into_error());
+            return Err(Error::with_message(
+                ErrorKind::Credential,
+                format!(
+                    "certificate authentication failed: {}",
+                    authentication_error_summary(rsp_status, &rsp_body)
+                ),
+            ));
         }
 
         let response: AadTokenResponse = serde_json::from_slice(&rsp_body)?;
@@ -267,5 +275,23 @@ impl TokenCredential for ClientCertificateCredentialExt {
             OffsetDateTime::now_utc() + Duration::from_secs(response.expires_in),
         );
         Ok(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_certificate_credential_debug_redacts_private_material() {
+        let credential = ClientCertificateCredentialExt::new(
+            "tenant".into(),
+            "client".into(),
+            "secret-pkcs12-material".into(),
+            "secret-password".into(),
+        );
+        let debug = format!("{:?}", credential);
+        assert!(!debug.contains("secret-pkcs12-material"));
+        assert!(!debug.contains("secret-password"));
     }
 }

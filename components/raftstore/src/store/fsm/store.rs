@@ -258,6 +258,32 @@ impl StoreMeta {
         }
     }
 
+    /// Release a completed source's dependency on a target snapshot.
+    pub(super) fn remove_destroyed_region_from_snapshot(
+        &mut self,
+        region_id: u64,
+        merged_by_target: bool,
+    ) -> Option<u64> {
+        let need_atomic = *self.destroyed_region_for_snap.get(&region_id)?;
+        let target_region_id = *self.targets_map.get(&region_id).unwrap();
+        let sources = self.atomic_snap_regions.get_mut(&target_region_id).unwrap();
+        let is_ready = *sources.get(&region_id).unwrap();
+        if need_atomic {
+            // Step1 can be queued behind the independent cleanup completion.
+            // A false readiness flag guarantees the target has not included
+            // this source in its snapshot's destroy_regions. Once ready, the
+            // source must finish through the atomic snapshot protocol instead.
+            assert!(
+                !merged_by_target && !is_ready,
+                "[region {}] should destroy with target region atomically",
+                region_id,
+            );
+        }
+        sources.remove(&region_id);
+        self.destroyed_region_for_snap.remove(&region_id);
+        Some(target_region_id)
+    }
+
     #[inline]
     pub fn set_region<EK: KvEngine, ER: RaftEngine>(
         &mut self,
@@ -545,6 +571,65 @@ impl Clone for PeerTickBatch {
     }
 }
 
+const EXTRA_MESSAGE_FULL_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct ExtraMessageFullLogKey {
+    target_store_id: u64,
+    msg_type: ExtraMessageType,
+}
+
+struct ExtraMessageFullLogState {
+    last_log_time: Instant,
+    suppressed_count: u64,
+}
+
+#[derive(Default)]
+pub struct ExtraMessageFullLogLimiter {
+    states: HashMap<ExtraMessageFullLogKey, ExtraMessageFullLogState>,
+}
+
+impl ExtraMessageFullLogLimiter {
+    pub fn record(&mut self, target_store_id: u64, msg_type: ExtraMessageType) -> Option<u64> {
+        self.record_at(target_store_id, msg_type, Instant::now())
+    }
+
+    fn record_at(
+        &mut self,
+        target_store_id: u64,
+        msg_type: ExtraMessageType,
+        now: Instant,
+    ) -> Option<u64> {
+        let key = ExtraMessageFullLogKey {
+            target_store_id,
+            msg_type,
+        };
+        match self.states.entry(key) {
+            HashMapEntry::Vacant(entry) => {
+                entry.insert(ExtraMessageFullLogState {
+                    last_log_time: now,
+                    suppressed_count: 0,
+                });
+                Some(0)
+            }
+            HashMapEntry::Occupied(mut entry) => {
+                let state = entry.get_mut();
+                if now.saturating_duration_since(state.last_log_time)
+                    < EXTRA_MESSAGE_FULL_LOG_INTERVAL
+                {
+                    state.suppressed_count = state.suppressed_count.saturating_add(1);
+                    return None;
+                }
+
+                let suppressed_count = state.suppressed_count;
+                state.last_log_time = now;
+                state.suppressed_count = 0;
+                Some(suppressed_count)
+            }
+        }
+    }
+}
+
 pub struct PollContext<EK, ER, T>
 where
     EK: KvEngine,
@@ -615,6 +700,7 @@ where
     pub gc_safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
+    pub extra_message_full_log_limiter: ExtraMessageFullLogLimiter,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1081,6 +1167,19 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             "on_peer_collect_message_2",
             peer.peer_id() == 2,
             |_| unreachable!()
+        );
+
+        // Test hook: park *only* on the round whose pending Raft tick is about to start
+        // an election, so a test can let a follower campaign on its own timer and still
+        // control which messages that single round handles together.
+        fail_point!(
+            "pause_before_collect_peer_msg_on_election",
+            (self.poll_ctx.store_id() == 2 || self.poll_ctx.store_id() == 3)
+                && peer.region_id() == 1
+                && peer.peer.raft_group.raft.state == StateRole::Follower
+                && peer.peer.raft_group.raft.election_elapsed + 1
+                    >= peer.peer.raft_group.raft.randomized_election_timeout(),
+            |_| panic!("should not use return")
         );
 
         while self.peer_msg_buf.len() < self.messages_per_tick {
@@ -1559,6 +1658,7 @@ where
             pending_latency_inspect: vec![],
             gc_safe_point: self.gc_safe_point.clone(),
             process_stat: None,
+            extra_message_full_log_limiter: ExtraMessageFullLogLimiter::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1778,7 +1878,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let region_runner = RegionRunner::new(
-            engines.kv.clone(),
+            engines.clone(),
+            store_meta.clone(),
             mgr.clone(),
             cfg.clone(),
             workers.coprocessor_host.clone(),
@@ -3459,10 +3560,118 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, time::Duration};
 
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
+    use kvproto::raft_serverpb::ExtraMessageType;
+
+    use super::ExtraMessageFullLogLimiter;
+
+    #[test]
+    fn test_extra_message_full_log_limiter() {
+        let mut limiter = ExtraMessageFullLogLimiter::default();
+        let now = std::time::Instant::now();
+
+        assert_eq!(
+            limiter.record_at(2, ExtraMessageType::MsgHibernateRequest, now),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_secs(1)
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                3,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateResponse,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+    }
+
+    use super::StoreMeta;
+
+    fn snapshot_source_meta(is_ready: bool) -> StoreMeta {
+        let mut meta = StoreMeta::new(0);
+        meta.targets_map.insert(1, 2);
+        meta.destroyed_region_for_snap.insert(1, true);
+        meta.atomic_snap_regions
+            .entry(2)
+            .or_default()
+            .insert(1, is_ready);
+        meta
+    }
+
+    #[test]
+    fn test_remove_destroyed_region_from_snapshot() {
+        let mut meta = snapshot_source_meta(false);
+        // Another source can already be ready for atomic destruction. Removing
+        // the independently destroyed source must preserve that dependency.
+        meta.atomic_snap_regions
+            .get_mut(&2)
+            .unwrap()
+            .insert(3, true);
+        assert_eq!(
+            meta.remove_destroyed_region_from_snapshot(1, false),
+            Some(2)
+        );
+        assert!(!meta.destroyed_region_for_snap.contains_key(&1));
+        assert_eq!(meta.atomic_snap_regions[&2].len(), 1);
+        assert_eq!(meta.atomic_snap_regions[&2].get(&3), Some(&true));
+        assert_eq!(meta.remove_destroyed_region_from_snapshot(1, false), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_ready_source() {
+        let mut meta = snapshot_source_meta(true);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "should destroy with target region atomically")]
+    fn test_remove_destroyed_region_from_snapshot_rejects_atomic_cleanup() {
+        let mut meta = snapshot_source_meta(false);
+        meta.remove_destroyed_region_from_snapshot(1, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_destroyed_region_from_snapshot_requires_source_dependency() {
+        let mut meta = snapshot_source_meta(false);
+        meta.atomic_snap_regions.get_mut(&2).unwrap().remove(&1);
+        meta.remove_destroyed_region_from_snapshot(1, false);
+    }
 
     #[test]
     fn test_calc_region_declined_bytes() {

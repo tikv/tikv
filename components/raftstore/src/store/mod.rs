@@ -67,8 +67,8 @@ pub use self::{
     },
     peer_storage::{
         INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, PeerStorage, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-        SnapState, clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
-        write_peer_state,
+        SnapState, clear_meta, do_snapshot, init_raft_state, write_initial_apply_state,
+        write_initial_raft_state, write_peer_state,
     },
     read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
     region_snapshot::{RegionIterator, RegionSnapshot},

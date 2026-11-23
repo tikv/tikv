@@ -306,6 +306,14 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    // max_keys_read = 0 means unlimited (disabled); any positive value
+                    // is a per-task row budget for early termination.  This is independent
+                    // of paging_size — both can be set simultaneously and whichever
+                    // threshold is reached first stops the scan.
+                    let max_keys_read = match req.get_max_keys_read() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -319,6 +327,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        max_keys_read,
                         quota_limiter,
                     )
                     .data_version(data_version)
@@ -1273,6 +1282,8 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
                 // supported currently.
                 check_term: None,
             }),
+
+            deadline: Some(self.req_ctx.deadline),
         };
 
         let snap = unsafe {
@@ -1757,6 +1768,167 @@ mod tests {
             assert_eq!(resp.get_data(), [1, 2, i]);
             assert!(!resp.has_region_error());
         }
+    }
+
+    #[test]
+    fn test_empty_index_ranges_yield_to_short_request() {
+        use futures::task::noop_waker;
+        use tidb_query_datatype::{FieldTypeTp, codec::table};
+
+        struct RecordCompletion {
+            inner: Box<dyn RequestHandler>,
+            name: &'static str,
+            completed: mpsc::Sender<&'static str>,
+        }
+
+        #[async_trait]
+        impl RequestHandler for RecordCompletion {
+            async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+                let response = self.inner.handle_request().await;
+                // Record on the worker, not on the threads waiting for responses.
+                self.completed.send(self.name).unwrap();
+                response
+            }
+
+            fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+                self.inner.collect_scan_statistics(dest);
+            }
+
+            fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
+                self.inner.collect_scan_summary(dest);
+            }
+        }
+
+        fn index_request(range_count: usize, start_ts: u64) -> coppb::Request {
+            let mut column = tipb::ColumnInfo::default();
+            column.set_column_id(1);
+            column.set_tp(FieldTypeTp::LongLong as i32);
+            let mut executor = Executor::default();
+            executor.set_tp(ExecType::TypeIndexScan);
+            executor.mut_idx_scan().set_table_id(1);
+            executor.mut_idx_scan().set_index_id(1);
+            executor.mut_idx_scan().mut_columns().push(column);
+            let mut dag = DagRequest::default();
+            dag.mut_executors().push(executor);
+            dag.mut_output_offsets().push(0);
+
+            let mut request = coppb::Request::default();
+            request.set_tp(REQ_TYPE_DAG);
+            request.set_start_ts(start_ts);
+            request.set_data(dag.write_to_bytes().unwrap());
+            for i in 0..range_count {
+                let start = table::encode_index_seek_key(1, 1, &(i as u64).to_be_bytes());
+                let mut end = start.clone();
+                end.push(0);
+                let mut range = coppb::KeyRange::default();
+                range.set_start(start);
+                range.set_end(end);
+                request.mut_ranges().push(range);
+            }
+            request
+        }
+
+        // Both requests use the real DAG/index executor and an empty RocksDB.
+        // One active worker makes a missed cooperative yield observable.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                min_thread_count: 1,
+                max_thread_count: 1,
+                ..Default::default()
+            },
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+
+        let mut large_request = copr
+            .parse_request_and_check_memory_locks(index_request(25_000, 10), None, false)
+            .unwrap();
+        let large_builder = large_request.handler_builder;
+        let completed = completed_tx.clone();
+        large_request.handler_builder = Box::new(move |snap, ctx| {
+            let inner = large_builder(snap, ctx)?;
+            // The actual scanner has been constructed on the worker. Keep it
+            // here until the short request has been queued behind this request.
+            started_tx.send(()).unwrap();
+            resume_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(RecordCompletion {
+                inner,
+                name: "large",
+                completed,
+            }
+            .into_boxed())
+        });
+        let large = copr.handle_unary_request(large_request);
+        futures::pin_mut!(large);
+        let waker = noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        // Submission is lazy: first poll enqueues the request on the worker.
+        assert!(large.as_mut().poll(&mut cx).is_pending());
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let mut small_request = copr
+            .parse_request_and_check_memory_locks(index_request(1, 20), None, false)
+            .unwrap();
+        let small_builder = small_request.handler_builder;
+        small_request.handler_builder = Box::new(move |snap, ctx| {
+            Ok(RecordCompletion {
+                inner: small_builder(snap, ctx)?,
+                name: "small",
+                completed: completed_tx,
+            }
+            .into_boxed())
+        });
+        let small = copr.handle_unary_request(small_request);
+        futures::pin_mut!(small);
+        assert!(small.as_mut().poll(&mut cx).is_pending());
+        // Expire the constructed scanner's 1 ms scheduling budget. Completion
+        // order, rather than a wall-clock latency threshold, is the assertion.
+        thread::sleep(Duration::from_millis(10));
+        resume_tx.send(()).unwrap();
+
+        let (large_response, small_response) = block_on(futures::future::join(large, small));
+        for (range_count, response) in [
+            (25_000, large_response.unwrap()),
+            (1, small_response.unwrap()),
+        ] {
+            assert!(!response.has_region_error(), "{:?}", response);
+            assert!(response.get_other_error().is_empty(), "{:?}", response);
+            let mut result = tipb::SelectResponse::default();
+            result.merge_from_bytes(response.get_data()).unwrap();
+            assert!(!result.has_error(), "{:?}", result);
+            assert!(
+                result
+                    .get_chunks()
+                    .iter()
+                    .all(|c| c.get_rows_data().is_empty())
+            );
+            let scan = response.get_exec_details_v2().get_scan_detail_v2();
+            assert_eq!(scan.get_processed_versions(), 0);
+            assert_eq!(scan.get_total_versions(), range_count);
+        }
+        let first = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let second = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            [first, second],
+            ["small", "large"],
+            "the empty multi-range scan blocked the short Coprocessor request"
+        );
     }
 
     #[test]

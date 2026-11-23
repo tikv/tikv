@@ -3553,7 +3553,7 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub raft_engine: RaftEngineConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub security: SecurityConfig,
 
     #[online_config(submodule)]
@@ -5653,6 +5653,7 @@ mod tests {
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
         incoming.storage.max_ts.action_on_invalid_update = "log".to_owned();
+        incoming.security.redact_info_log = log_wrappers::RedactOption::Marker;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -5672,6 +5673,7 @@ mod tests {
             "storage.max-ts.action-on-invalid-update".to_owned(),
             "log".to_owned(),
         );
+        change.insert("security.redact-info-log".to_owned(), "marker".to_owned());
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);
 

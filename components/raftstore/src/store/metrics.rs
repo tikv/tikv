@@ -96,6 +96,13 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SnapGenPrecheckResponseStatus {
+        passed,
+        rejected,
+        ignored_passed,
+        ignored_rejected,
+    }
+
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -134,6 +141,9 @@ make_auto_flush_static_metric! {
     pub struct CompactionGuardActionVec: LocalIntCounter {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
+    }
+    pub struct SnapGenPrecheckResponseCounter: LocalIntCounter {
+        "status" => SnapGenPrecheckResponseStatus,
     }
 }
 
@@ -183,6 +193,7 @@ make_static_metric! {
         non_witness,
         recovery,
         unsafe_vote,
+        step_local_msg,
     }
 
     pub label_enum ProposalType {
@@ -507,13 +518,6 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
-    pub static ref PEER_CREATE_RAFT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_peer_create_raft_write_duration_seconds",
-            "Bucketed histogram of peer create raft engine write duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
-        ).unwrap();
-
     pub static ref STORE_IO_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_io_duration_seconds",
@@ -595,6 +599,13 @@ lazy_static! {
             "tikv_raftstore_raft_dropped_message_total",
             "Total number of raft dropped messages.",
             &["type"]
+        ).unwrap();
+
+    pub static ref STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_extra_message_send_failure_total",
+            "Total number of failed raftstore extra message sends.",
+            &["type", "reason"]
         ).unwrap();
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
@@ -1005,6 +1016,19 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
+
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_snap_gen_precheck_response_total",
+            "Total number of snapshot generation precheck responses.",
+            &["status"]
+        )
+        .unwrap();
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER: SnapGenPrecheckResponseCounter =
+        auto_flush_from!(
+            SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC,
+            SnapGenPrecheckResponseCounter
+        );
 
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",

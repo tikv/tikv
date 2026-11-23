@@ -808,7 +808,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-        redact_info_log: log_wrappers::RedactOption::Flag(true),
+        redact_info_log: log_wrappers::RedactOption::On,
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
@@ -849,6 +849,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
         memory_use_ratio: 0.3,
+        use_direct_io_for_ingest: true,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
@@ -864,6 +865,7 @@ fn test_serde_custom_tikv_config() {
             tombstones_percent_threshold: 30,
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
+            redundant_bytes_threshold: ReadableSize::mb(129),
             bottommost_level_force: false,
             mvcc_read_aware_enabled: true,
             mvcc_scan_threshold: 10000,
@@ -940,6 +942,7 @@ fn test_serde_custom_tikv_config() {
 fn test_serde_default_config() {
     let cfg: TikvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TikvConfig::default());
+    assert_eq!(cfg.security.redact_info_log, log_wrappers::RedactOption::On);
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
     let cfg: TikvConfig = toml::from_str(&content).unwrap();

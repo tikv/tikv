@@ -138,10 +138,16 @@ High-risk contracts:
 
 - Command callbacks must complete exactly once with the correct error/result
   semantics.
+- Lock-wait requeueing must check cancellation while holding the queue shard
+  lock, but release that lock before waiting for a cancellation error or
+  invoking a callback. The cancellation sender needs the same shard lock.
 - Latch ownership must serialize conflicting commands without deadlocking the
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
+- `CheckTxnStatus` must check whether a shared lock belongs to the queried
+  transaction before rejecting it as an invalid primary. Unrelated shared
+  holders must not hide that transaction's commit or rollback record.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as
@@ -227,6 +233,11 @@ Start triage with:
 - Integration tests often belong in `components/test_storage`.
 - Hot-path metrics exist throughout scheduler, MVCC, read pools, and flow
   control.
+- Normal unsafe-destroy-range flow-control bookkeeping is logged at DEBUG.
+  Abnormal pending-byte jumps remain visible at INFO, while
+  `tikv_scheduler_throttle_action_total` distinguishes `pending_bytes_jump`
+  from `pending_bytes_no_jump`. Log suppression must preserve the pending-byte
+  jump guards and flow-control recovery conditions.
 
 ## Common Failure Modes
 

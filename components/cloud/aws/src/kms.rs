@@ -219,6 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aws_kms() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let magic_contents = b"5678" as &[u8];
         let key_contents = vec![1u8; 32];
         let config = Config {
@@ -299,6 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kms_wrong_key_id() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let config = Config {
             key_id: KeyId::new("test_key_id".to_string()).unwrap(),
             vendor: String::new(),
@@ -356,6 +358,7 @@ mod tests {
     #[tokio::test]
     // FIXME: enable this (or move this to an integration test)
     async fn test_aws_kms_localstack() {
+        let _guard = crate::AWS_TEST_LOCK.lock().await;
         let config = Config {
             key_id: KeyId::new("cbf4ef24-982d-4fd3-a75b-b95aaec84860".to_string()).unwrap(),
             vendor: String::new(),
