@@ -2101,12 +2101,17 @@ mod tests {
             Datum::I64(42),
             Datum::U64(0),
             Datum::U64(99),
-            // Pick a value that isn't close to a math constant — clippy's
-            // approx_constant lint flags 3.14 / 2.71828 as PI / E approximates.
             Datum::F64(7.5),
             Datum::Null,
             Datum::Bytes(b"alpha".to_vec()),
             Datum::Bytes(b"this string is longer than nine bytes".to_vec()),
+            // Memcomparable edge cases: empty, embedded NUL (the padding
+            // byte), and lengths on the 8-byte group boundary.
+            Datum::Bytes(vec![]),
+            Datum::Bytes(b"a\x00b\x00".to_vec()),
+            Datum::Bytes(vec![0; 8]),
+            Datum::Bytes(b"12345678".to_vec()),
+            Datum::Bytes(b"1234567812345678".to_vec()),
             // Decimal goes through the DECIMAL_DESC_FLAG branch in
             // split_datum, which only complements the first 2 bytes
             // (precision + frac) instead of the whole tail. Lock in
@@ -2117,16 +2122,19 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for case in cases {
-            let bs = encode_one_desc(&mut ctx, &case);
+            let mut bs = encode_one_desc(&mut ctx, &case);
+            let len = bs.len();
+            // Bytes of the next column must not change the split point.
+            bs.extend_from_slice(&[INT_FLAG, 0x80, 0, 0, 0, 0, 0, 0, 1]);
             let (head, rem) = split_datum(&bs, false)
                 .unwrap_or_else(|e| panic!("split_datum failed for {:?}: {}", case, e));
             assert_eq!(
                 head,
-                bs.as_slice(),
-                "head must cover the whole datum for {:?}",
+                &bs[..len],
+                "head must cover exactly the datum for {:?}",
                 case
             );
-            assert!(rem.is_empty(), "no trailing bytes expected for {:?}", case);
+            assert_eq!(rem, &bs[len..], "wrong remainder for {:?}", case);
         }
     }
 
@@ -2140,6 +2148,11 @@ mod tests {
             Datum::F64(7.5),
             Datum::Null,
             Datum::Bytes(b"hello, world".to_vec()),
+            Datum::Bytes(vec![]),
+            Datum::Bytes(b"a\x00b\x00".to_vec()),
+            Datum::Bytes(vec![0; 8]),
+            Datum::Bytes(b"12345678".to_vec()),
+            Datum::Bytes(b"1234567812345678".to_vec()),
             // Duration goes through DURATION_DESC_FLAG (8-byte payload).
             Datum::Dur(Duration::from_millis(2_345_678, MAX_FSP).unwrap()),
             Datum::Dur(Duration::from_millis(-2_345_678, MAX_FSP).unwrap()),
@@ -2229,20 +2242,15 @@ mod tests {
         );
     }
 
-    /// A malformed `COMPACT_BYTES_DESC_FLAG` payload whose varint length
-    /// decodes negative must not panic in debug builds. The hardened length
-    /// arithmetic rejects `value < 0` and falls back to clamping to
-    /// `tail.len()`. Before the fix, `(value as usize + decoded_n)` would
-    /// panic on unsigned overflow in debug builds.
+    /// A `COMPACT_BYTES_DESC_FLAG` payload whose varint length decodes
+    /// negative is sized like a truncated one: clamped to the buffer.
     #[test]
-    fn test_split_datum_malformed_compact_bytes_desc_does_not_panic() {
-        // varint zig-zag of -1 is the single byte 0x01; bitwise complement
-        // is 0xFE. `split_datum` re-inverts the prefix back to 0x01 and
-        // decodes it as i64 = -1.
-        let buf = [COMPACT_BYTES_DESC_FLAG, !0x01u8];
-        // Must not panic. Either Ok or Err is acceptable here — the
-        // property under test is panic-freedom on malformed input.
-        let _ = split_datum(&buf, false);
+    fn test_split_datum_malformed_compact_bytes_desc() {
+        // The varint zig-zag encoding of -1 is 0x01.
+        let buf = [COMPACT_BYTES_DESC_FLAG, !0x01u8, 0xAB];
+        let (head, rem) = split_datum(&buf, false).unwrap();
+        assert_eq!(head, &buf[..]);
+        assert!(rem.is_empty());
     }
 
     /// A 9-byte buffer starting with `MAX_FLAG` satisfies the length predicate
