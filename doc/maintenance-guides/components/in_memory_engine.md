@@ -130,6 +130,11 @@ eviction.
   Snapshots are dropped concurrently on reader threads, so breaking this order
   can deadlock the whole in-memory engine.
 - Memory accounting must stay aligned with actual cached data structures.
+- The cross-checker requires a default-CF value for each long Put that can still
+  serve an MVCC read. A newer Put or Delete, or a nonzero GC fence, can make a
+  missing value acceptable once the expiry is at or below the common IME and
+  TiKV read floor. On a failure, compare default-CF presence in the same RocksDB
+  snapshot to diagnose which view is missing the value.
 
 ## Observability And Operational Signals
 

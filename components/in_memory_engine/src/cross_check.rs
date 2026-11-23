@@ -155,30 +155,6 @@ impl CrossChecker {
                 );
             }
 
-            let check_default = |iter: &RegionCacheIterator| {
-                let write = WriteRef::parse(iter.value()).unwrap();
-                if write.write_type == WriteType::Put && write.short_value.is_none() {
-                    let start_ts = write.start_ts;
-                    let (user_key, _) = split_ts(iter.key()).unwrap();
-                    let default_key = Key::from_encoded(user_key.to_vec()).append_ts(start_ts);
-                    if let Ok(Some(_)) = region_snap.get_value(default_key.as_encoded()) {
-                    } else {
-                        // check again
-                        if let Ok(Some(_)) = region_snap.get_value_cf(CF_WRITE, iter.key()) {
-                            panic!(
-                                "ime cross check fail(key should exist): default not found;
-                                cache_region={:?}; default_key={:?}, write_key={:?}, start_ts={}; sequence_numer={};",
-                                region_snap.snapshot_meta().region,
-                                log_wrappers::Value(default_key.as_encoded()),
-                                log_wrappers::Value(iter.key()),
-                                start_ts,
-                                iter.sequence_number,
-                            );
-                        }
-                    }
-                }
-            };
-
             let mut last_disk_user_key = vec![];
             // We can have this state:
             // Safe point: 6
@@ -262,7 +238,7 @@ impl CrossChecker {
             )?;
 
             if *cf == CF_WRITE {
-                check_default(&mem_iter);
+                self.check_default(region_snap, rocks_snap, &mem_iter, &cur_key_info)?;
             }
 
             while mem_iter.next().unwrap() {
@@ -315,7 +291,7 @@ impl CrossChecker {
                 )?;
 
                 if *cf == CF_WRITE {
-                    check_default(&mem_iter);
+                    self.check_default(region_snap, rocks_snap, &mem_iter, &cur_key_info)?;
                 }
             }
             prev_key_info = cur_key_info;
@@ -339,6 +315,119 @@ impl CrossChecker {
         );
 
         Ok(())
+    }
+
+    fn check_default(
+        &self,
+        region_snap: &RegionCacheSnapshot,
+        rocks_snap: &RocksSnapshot,
+        iter: &RegionCacheIterator,
+        key_info: &KeyCheckingInfo,
+    ) -> Result<()> {
+        let write = WriteRef::parse(iter.value()).unwrap();
+        if write.write_type != WriteType::Put || write.short_value.is_some() {
+            return Ok(());
+        }
+
+        let (user_key, commit_ts) = split_ts(iter.key()).unwrap();
+        let default_key = Key::from_encoded(user_key.to_vec()).append_ts(write.start_ts);
+        if region_snap
+            .get_value(default_key.as_encoded())
+            .unwrap()
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let region = &region_snap.snapshot_meta().region;
+        let ime_safe_point = {
+            let region_maps = self
+                .memory_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            let Some(meta) = region_maps.region_meta(region.id) else {
+                return Err(StopReason::RegionMetaChanged);
+            };
+            if meta.get_region() != region {
+                return Err(StopReason::RegionMetaChanged);
+            }
+            meta.safe_point()
+        };
+        let tikv_safe_point = (self.get_tikv_safe_point)();
+        let read_floor = ime_safe_point.max(tikv_safe_point.unwrap_or_default());
+
+        // At or beyond a nonzero fence to a newer version, readers either select
+        // a newer Write or reject this Write before looking up its value.
+        if write.gc_fence.is_some_and(|fence| {
+            let fence_ts = fence.into_inner();
+            commit_ts < fence_ts && fence_ts <= read_floor
+        }) {
+            return Ok(());
+        }
+
+        // The current Put is the last recording. Only Put and Delete are
+        // recorded, in newest-first order, and prior records passed disk comparison.
+        let (_, newer_versions) = key_info.mvcc_recordings.split_last().unwrap();
+        for &ts in newer_versions
+            .iter()
+            .rev()
+            .take_while(|&&ts| ts <= read_floor)
+        {
+            // GC can change the view during iteration. Require a covering Write
+            // to still be visible in both snapshots before using it as proof.
+            let newer_key = Key::from_encoded(user_key.to_vec()).append_ts(ts.into());
+            let cache_write = region_snap
+                .get_value_cf(CF_WRITE, newer_key.as_encoded())
+                .unwrap();
+            let disk_write = rocks_snap
+                .get_value_cf(CF_WRITE, newer_key.as_encoded())
+                .unwrap();
+            if let Some(value) = cache_write.as_deref()
+                && disk_write.as_deref() == Some(value)
+                && matches!(
+                    WriteRef::parse(value).unwrap().write_type,
+                    WriteType::Put | WriteType::Delete
+                )
+            {
+                return Ok(());
+            }
+        }
+
+        // During GC, the current Write and its default can disappear after the
+        // iterator has reached the Write. Recheck it before reporting a miss.
+        if region_snap
+            .get_value_cf(CF_WRITE, iter.key())
+            .unwrap()
+            .as_deref()
+            != Some(iter.value())
+        {
+            return Ok(());
+        }
+
+        let rocksdb_default_present = rocks_snap
+            .get_value(default_key.as_encoded())
+            .map(|value| value.is_some());
+        panic!(
+            "ime cross check fail(key should exist): default not found; \
+            cache_region={:?}; default_key={:?}, write_key={:?}, \
+            start_ts={}; commit_ts={}; sequence_numer={}; gc_fence={:?}; \
+            newer_version_ts={:?}; ime_safe_point={}; tikv_safe_point={:?}; \
+            snapshot_read_ts={}; rocksdb_default_present={:?};",
+            region,
+            log_wrappers::Value(default_key.as_encoded()),
+            log_wrappers::Value(iter.key()),
+            write.start_ts,
+            commit_ts,
+            iter.sequence_number,
+            write.gc_fence,
+            newer_versions.last(),
+            ime_safe_point,
+            tikv_safe_point,
+            iter.snapshot_read_ts,
+            rocksdb_default_present,
+        );
     }
 
     // In-memory engine may have GCed some versions, so we should call next of
@@ -1001,6 +1090,17 @@ mod tests {
     where
         F: FnOnce(&mut RegionCacheWriteBatch, &mut RocksWriteBatchVec),
     {
+        cross_check_with_safe_point(prepare_data, 6, get_tikv_safe_point)
+    }
+
+    fn cross_check_with_safe_point<F>(
+        prepare_data: F,
+        ime_safe_point: u64,
+        get_tikv_safe_point: Option<Box<dyn Fn() -> Option<u64> + Send>>,
+    ) -> Result<()>
+    where
+        F: FnOnce(&mut RegionCacheWriteBatch, &mut RocksWriteBatchVec),
+    {
         let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
             InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
                 InMemoryEngineConfig::config_for_test(),
@@ -1035,7 +1135,7 @@ mod tests {
             .write()
             .mut_region_meta(region.id)
             .unwrap()
-            .set_safe_point(6);
+            .set_safe_point(ime_safe_point);
 
         struct MockPdClient {}
         impl PdClient for MockPdClient {
@@ -1075,6 +1175,71 @@ mod tests {
         let raw_write_k = Key::from_raw(&data_key).append_ts(ts.into());
         let val = Write::new(ty, ts.into(), Some(vec![])).as_ref().to_bytes();
         (raw_write_k.into_encoded(), val)
+    }
+
+    fn check_missing_default(
+        ime_safe_point: u64,
+        tikv_safe_point: u64,
+        newer_write: Option<(u64, WriteType)>,
+        gc_fence: Option<u64>,
+        disk_has_default: bool,
+    ) {
+        cross_check_with_safe_point(
+            |wb, disk_wb| {
+                let user_key = Key::from_raw(&data_key(b"long-put"));
+                let put_key = user_key.clone().append_ts(4.into());
+                let mut put = Write::new(WriteType::Put, 3.into(), None);
+                if let Some(fence) = gc_fence {
+                    put = put.set_overlapped_rollback(true, Some(fence.into()));
+                }
+                let put = put.as_ref().to_bytes();
+                wb.put_cf(CF_WRITE, put_key.as_encoded(), &put).unwrap();
+                disk_wb
+                    .put_cf(CF_WRITE, put_key.as_encoded(), &put)
+                    .unwrap();
+
+                if let Some((commit_ts, write_type)) = newer_write {
+                    let (key, value) = write_key(b"long-put", commit_ts, write_type);
+                    wb.put_cf(CF_WRITE, &key, &value).unwrap();
+                    disk_wb.put_cf(CF_WRITE, &key, &value).unwrap();
+                }
+                if disk_has_default {
+                    let default_key = user_key.append_ts(3.into());
+                    disk_wb
+                        .put_cf(CF_DEFAULT, default_key.as_encoded(), &[b'v'; 256])
+                        .unwrap();
+                }
+            },
+            ime_safe_point,
+            Some(Box::new(move || Some(tikv_safe_point))),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_cross_check_skips_expired_default() {
+        check_missing_default(6, 0, Some((6, WriteType::Delete)), None, false);
+        // The load skipped IME GC, but the disk GC safe point covers this version.
+        check_missing_default(0, 6, Some((6, WriteType::Put)), None, false);
+        check_missing_default(0, 6, None, Some(6), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "rocksdb_default_present=Ok(true)")]
+    fn test_cross_check_missing_default_for_readable_history() {
+        check_missing_default(6, 0, Some((8, WriteType::Delete)), None, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "rocksdb_default_present=Ok(false)")]
+    fn test_cross_check_missing_default_before_gc_fence() {
+        check_missing_default(6, 0, None, Some(8), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "default not found")]
+    fn test_cross_check_missing_default_for_base_put() {
+        check_missing_default(6, 0, Some((6, WriteType::Rollback)), Some(0), false);
     }
 
     #[test]
