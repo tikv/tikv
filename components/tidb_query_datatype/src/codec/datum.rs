@@ -51,8 +51,8 @@ pub const MAX_FLAG: u8 = 250;
 // yields the declared direction. The leading flag byte is the complement of
 // the ordinary ASC flag. `split_datum` auto-detects the DESC layout when
 // computing per-column lengths; `read_datum` and `decode` are ASC-only by
-// design and the DESC-aware entrypoint `decode_one_with_desc` routes the
-// bytes through `un_invert_if_desc` before dispatching to them. The
+// design and the DESC-aware entrypoint `decode_one_with_desc` complements
+// the column back to its ASC form before dispatching to `read_datum`. The
 // coprocessor can therefore decode both ASC and DESC columns without
 // protocol changes.
 //
@@ -61,8 +61,8 @@ pub const MAX_FLAG: u8 = 250;
 // `Datum::Max` (a single-byte payload — see `DatumEncoder::write_datum`),
 // while a DESC-encoded float carries 8 trailing bytes. The two contexts are
 // disjoint by construction:
-//  * `decode` / `decode_one_with_desc` are invoked on stored row data, which
-//    never contains `Datum::Max`.
+//  * `split_datum` / `decode_one_with_desc` are invoked on stored keys, which
+//    never contain `Datum::Max`.
 //  * The range-sentinel path encodes `Datum::Max` as a one-byte buffer; if such
 //    a buffer reached `decode_one_with_desc`, `split_datum` would return "too
 //    short" because a DESC-float layout requires 9 bytes total.
@@ -997,31 +997,14 @@ pub trait DatumDecoder:
 
 impl<T: BufferReader> DatumDecoder for T {}
 
-/// `un_invert_if_desc` complements a descending-order index column
-/// (pingcap/tidb#2519) back into its canonical ASC form. If `value` begins
-/// with a DESC flag byte the entire slice is bitwise-complemented into an
-/// owned buffer; otherwise the input is borrowed unchanged. Use it when a
-/// whole column slice needs the ASC form before a type-specific decoder
-/// (`read_datum`, `decode_int_datum`, ...); hot paths that write into an
-/// existing buffer complement in place instead (see
-/// `BufferVec::push_inverted`).
-pub fn un_invert_if_desc(value: &[u8]) -> Cow<'_, [u8]> {
-    if !value.is_empty() && is_desc_flag(value[0]) {
-        Cow::Owned(value.iter().map(|b| !b).collect())
-    } else {
-        Cow::Borrowed(value)
-    }
-}
-
 /// `decode_one_with_desc` decodes a single datum from `buf`, transparently
 /// handling descending-order encoded columns (pingcap/tidb#2519). It returns
 /// the decoded datum and the unconsumed tail of `buf`.
 ///
 /// For ascending-encoded datums it is equivalent to calling `read_datum` on
-/// the slice. For descending-encoded ones it routes the column's bytes
-/// through `un_invert_if_desc` (sized via `split_datum`) and then dispatches
-/// through the ascending decoder, so all type-specific decoders are reused
-/// unchanged.
+/// the slice. For descending-encoded ones it complements the column's bytes
+/// (sized via `split_datum`) into a scratch buffer and dispatches through the
+/// ascending decoder, so all type-specific decoders are reused unchanged.
 pub fn decode_one_with_desc(buf: &[u8]) -> Result<(Datum, &[u8])> {
     if buf.is_empty() {
         return Err(box_err!("buf is empty"));
@@ -1032,8 +1015,8 @@ pub fn decode_one_with_desc(buf: &[u8]) -> Result<(Datum, &[u8])> {
         return Ok((datum, slice));
     }
     let (head, tail) = split_datum(buf, false)?;
-    let asc = un_invert_if_desc(head);
-    let mut slice: &[u8] = &asc;
+    let asc: Vec<u8> = head.iter().map(|b| !b).collect();
+    let mut slice = asc.as_slice();
     let datum = slice.read_datum()?;
     debug_assert!(
         slice.is_empty(),
@@ -2258,9 +2241,10 @@ mod tests {
     /// `decode_one_with_desc`. This locks in the documented contract: callers
     /// of `decode_one_with_desc` must not pass range-bound buffers
     /// where `Datum::Max` is a legal sentinel — those must go through
-    /// `read_datum` / `decode` directly. The complement of all-zero DESC-encoded float
-    /// bytes is `f64::from_bits(u64::MAX)` (a quiet NaN); we just assert that
-    /// a `Datum::F64` is produced rather than an error.
+    /// `read_datum` / `decode` directly. The complement of all-zero
+    /// DESC-encoded float bytes is `f64::from_bits(u64::MAX)` (a quiet
+    /// NaN); we just assert that a `Datum::F64` is produced rather than an
+    /// error.
     #[test]
     fn test_decode_one_with_desc_reinterprets_max_flag_with_trailing_bytes() {
         let buf = [MAX_FLAG, 0, 0, 0, 0, 0, 0, 0, 0];

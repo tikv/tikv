@@ -504,10 +504,9 @@ impl IndexScanExecutorImpl {
             // auto-detect-aware and returns the correct span, but the
             // per-type decoders downstream (decode_int_datum,
             // decode_real_datum, ...) only understand ASC flag bytes. Write
-            // the canonical ASC form directly into `LazyBatchColumn::Raw` —
+            // the canonical ASC form directly into `LazyBatchColumn::Raw`;
             // `push_inverted` complements bytes straight into the destination
-            // buffer, avoiding the per-cell `Vec` allocation that
-            // `un_invert_if_desc` would otherwise incur on this hot path.
+            // buffer, so no per-cell allocation is needed on this hot path.
             // `value[0]` is safe: `split_datum` rejects empty input.
             if datum::is_desc_flag(value[0]) {
                 column.mut_raw().push_inverted(value);
