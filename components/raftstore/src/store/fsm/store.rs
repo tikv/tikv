@@ -810,14 +810,30 @@ where
         if self.cfg.allow_unsafe_vote_after_start {
             return None;
         }
-        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
-        let current_time =
-            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
-        let remain_duration = deadline.saturating_duration_since(current_time);
-        if remain_duration > Duration::ZERO {
-            Some(remain_duration)
-        } else {
-            self.unsafe_vote_deadline.take();
+        let current_time = *self.current_time.get_or_insert_with(monotonic_raw_now);
+        take_unsafe_vote_remain(&mut self.unsafe_vote_deadline, current_time)
+    }
+}
+
+/// Returns the remaining unsafe-vote period, or `None` once the deadline has
+/// passed.
+///
+/// The deadline is one election timeout after the node starts, so it normally
+/// passes while the store is running. That is not a backward jump of the
+/// monotonic clock, and must not be reported as one:
+/// `saturating_duration_since` logs an error whenever its receiver is earlier
+/// than its argument.
+pub fn take_unsafe_vote_remain(
+    deadline: &mut Option<Timespec>,
+    current_time: Timespec,
+) -> Option<Duration> {
+    let remain = deadline.and_then(|deadline| {
+        TiInstant::Monotonic(deadline).checked_sub(TiInstant::Monotonic(current_time))
+    });
+    match remain {
+        Some(remain) if !remain.is_zero() => Some(remain),
+        _ => {
+            *deadline = None;
             None
         }
     }
@@ -3706,8 +3722,39 @@ mod tests {
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
     use kvproto::raft_serverpb::ExtraMessageType;
+    use tikv_util::time::Timespec;
 
-    use super::{ExtraMessageFullLogLimiter, StoreMeta};
+    use super::{ExtraMessageFullLogLimiter, StoreMeta, take_unsafe_vote_remain};
+
+    fn ts(sec: i64) -> Timespec {
+        Timespec::new(sec, 0)
+    }
+
+    #[test]
+    fn test_unsafe_vote_deadline_in_the_past_is_not_a_clock_jump() {
+        let mut deadline = Some(ts(100));
+        assert_eq!(take_unsafe_vote_remain(&mut deadline, ts(110)), None);
+        assert_eq!(deadline, None);
+    }
+
+    #[test]
+    fn test_unsafe_vote_deadline_counts_down_and_then_expires() {
+        let mut deadline = Some(ts(100));
+        assert_eq!(
+            take_unsafe_vote_remain(&mut deadline, ts(90)),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(deadline, Some(ts(100)));
+        assert_eq!(take_unsafe_vote_remain(&mut deadline, ts(100)), None);
+        assert_eq!(deadline, None);
+    }
+
+    #[test]
+    fn test_unsafe_vote_deadline_absent() {
+        let mut deadline = None;
+        assert_eq!(take_unsafe_vote_remain(&mut deadline, ts(110)), None);
+        assert_eq!(deadline, None);
+    }
 
     fn snapshot_source_meta(is_ready: bool) -> StoreMeta {
         let mut meta = StoreMeta::new(0);
