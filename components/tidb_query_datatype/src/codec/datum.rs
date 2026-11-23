@@ -61,8 +61,8 @@ pub const MAX_FLAG: u8 = 250;
 // `Datum::Max` (a single-byte payload — see `DatumEncoder::write_datum`),
 // while a DESC-encoded float carries 8 trailing bytes. The two contexts are
 // disjoint by construction:
-//  * `split_datum` / `decode_one_with_desc` are invoked on stored keys, which
-//    never contain `Datum::Max`.
+//  * `split_datum` / `decode_one_with_desc` are invoked on stored keys and row
+//    values, which never contain `Datum::Max`.
 //  * The range-sentinel path encodes `Datum::Max` as a one-byte buffer; if such
 //    a buffer reached `decode_one_with_desc`, `split_datum` would return "too
 //    short" because a DESC-float layout requires 9 bytes total.
@@ -1256,8 +1256,8 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         // are identical to the ASC counterpart. For variable-length types
         // the sizers peek only the few complemented marker/prefix bytes they
         // need — allocating + flipping the entire tail (which can be
-        // megabytes for a long BYTES column) would turn a constant-time
-        // length probe into an O(n) copy on a hot index-walk path.
+        // megabytes for a long BYTES column) would add a copy of the rest
+        // of the key to every length probe on a hot index-walk path.
         NIL_DESC_FLAG => 0,
         INT_DESC_FLAG | DURATION_DESC_FLAG => number::I64_SIZE,
         UINT_DESC_FLAG => number::U64_SIZE,
@@ -2237,14 +2237,9 @@ mod tests {
     }
 
     /// A 9-byte buffer starting with `MAX_FLAG` satisfies the length predicate
-    /// for a DESC float and is therefore reinterpreted as one by
-    /// `decode_one_with_desc`. This locks in the documented contract: callers
-    /// of `decode_one_with_desc` must not pass range-bound buffers
-    /// where `Datum::Max` is a legal sentinel — those must go through
-    /// `read_datum` / `decode` directly. The complement of all-zero
-    /// DESC-encoded float bytes is `f64::from_bits(u64::MAX)` (a quiet
-    /// NaN); we just assert that a `Datum::F64` is produced rather than an
-    /// error.
+    /// for a DESC float and is therefore decoded as one. This locks in the
+    /// documented contract: `decode_one_with_desc` must not be given
+    /// range-bound buffers, where `Datum::Max` is a legal sentinel.
     #[test]
     fn test_decode_one_with_desc_reinterprets_max_flag_with_trailing_bytes() {
         let buf = [MAX_FLAG, 0, 0, 0, 0, 0, 0, 0, 0];
