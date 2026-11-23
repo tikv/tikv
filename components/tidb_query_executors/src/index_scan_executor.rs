@@ -4327,7 +4327,7 @@ mod tests {
             .expect("ASC int column must decode");
         columns[1]
             .ensure_all_decoded_for_test(&mut ctx, &bytes_ft)
-            .expect("DESC bytes column must decode after extractor un-inverts the prefix");
+            .expect("DESC bytes column must decode after the extractor un-inverts it");
 
         assert_eq!(
             columns[0].decoded().to_int_vec(),
@@ -4343,9 +4343,8 @@ mod tests {
 
     /// Multi-column DESC chunk: handle column (ASC int) plus three DESC
     /// columns of differing types — int (8-byte payload), float (8-byte
-    /// payload), bytes (variable-length). Exercises every flag covered by
-    /// `BufferVec::push_inverted` and protects against a regression where
-    /// per-type byte boundaries get conflated on the inverted path.
+    /// payload), bytes (variable-length). Protects against a regression
+    /// where per-type byte boundaries get conflated on the inverted path.
     #[test]
     fn test_extract_columns_from_datum_format_multi_desc_columns() {
         use tidb_query_datatype::codec::batch::LazyBatchColumn;
@@ -4405,5 +4404,96 @@ mod tests {
             columns[3].decoded().to_bytes_vec(),
             &[Some(b"this is longer than nine".to_vec())]
         );
+    }
+
+    /// Drives non-unique indexes with a DESC column and an int handle in the
+    /// key through `process_kv_pair`: the handle has to be found behind the
+    /// complemented column, and the `_bin` restore path has to read the
+    /// column in its ASC form.
+    #[test]
+    fn test_desc_index_with_int_handle_in_key() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        const TABLE_ID: i64 = 3;
+        const INDEX_ID: i64 = 42;
+        let mut ctx = EvalContext::default();
+        let handle = datum::encode_key(&mut ctx, &[Datum::I64(7)]).unwrap();
+
+        // INDEX (a DESC), a int: old-layout value, handle read by
+        // `process_old_collation_kv`.
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            columns_id_without_handle: vec![1],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+            fill_extra_common_handle_key: false,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        let mut index_data = to_desc(datum::encode_key(&mut ctx, &[Datum::I64(-9)]).unwrap());
+        index_data.extend_from_slice(&handle);
+        let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
+        idx_exe
+            .process_kv_pair(&key, &[0x30], &mut columns, None)
+            .unwrap();
+        assert_eq!(
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(-9)
+        );
+        assert_eq!(columns[1].decoded().to_int_vec(), &[Some(7)]);
+
+        // INDEX (b DESC), b varchar collate utf8mb4_bin holding "a ": the key
+        // stores the trimmed "a", the version 1 value stores the number of
+        // trimmed spaces as restore data.
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+            fill_extra_common_handle_key: false,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        let mut index_data =
+            to_desc(datum::encode_key(&mut ctx, &[Datum::Bytes(b"a".to_vec())]).unwrap());
+        index_data.extend_from_slice(&handle);
+        let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
+        let value = [
+            // tail length, version segment
+            0x0,
+            INDEX_VALUE_VERSION_FLAG,
+            0x1,
+            // row v2: one non-null column, id 2, value 1 (trimmed spaces)
+            0x80,
+            0x0,
+            0x1,
+            0x0,
+            0x0,
+            0x0,
+            0x2,
+            0x1,
+            0x0,
+            0x1,
+        ];
+        idx_exe
+            .process_kv_pair(&key, &value, &mut columns, None)
+            .unwrap();
+        assert_eq!(
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::Bytes(b"a ".to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec(), &[Some(7)]);
     }
 }
