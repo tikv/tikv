@@ -33,7 +33,7 @@ use raftstore::{
         WriteRouterContext, WriteSenders, WriterContoller,
         fsm::{
             GlobalStoreStat, LocalStoreStat,
-            store::{ENTRY_CACHE_EVICT_TICK_DURATION, PeerTickBatch},
+            store::{ENTRY_CACHE_EVICT_TICK_DURATION, PeerTickBatch, take_unsafe_vote_remain},
         },
         local_metrics::RaftMetrics,
     },
@@ -154,16 +154,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         if self.cfg.allow_unsafe_vote_after_start {
             return None;
         }
-        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
-        let current_time =
-            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
-        let remain_duration = deadline.saturating_duration_since(current_time);
-        if remain_duration > Duration::ZERO {
-            Some(remain_duration)
-        } else {
-            self.unsafe_vote_deadline.take();
-            None
-        }
+        let current_time = *self.current_time.get_or_insert_with(monotonic_raw_now);
+        take_unsafe_vote_remain(&mut self.unsafe_vote_deadline, current_time)
     }
 }
 
