@@ -475,34 +475,34 @@ impl Interval {
             fields[index as usize - i] = matched;
         }
 
-        // Helper to parse integer fields and handle errors
-        let mut parse_field = |field: &str| -> Result<i64> {
+        // Overflowing fields invalidate the interval instead of being treated as zero.
+        let mut parse_field = |field: &str| -> Result<Option<i64>> {
             match i64::from_str(field) {
-                Ok(val) => Ok(val),
+                Ok(val) => Ok(Some(val)),
                 Err(_) => {
                     if for_duration {
                         return Err(Error::incorrect_datetime_value(original_input));
                     }
                     ctx.handle_invalid_time_error(Error::incorrect_datetime_value(original_input))?;
-                    Ok(0)
+                    Ok(None)
                 }
             }
         };
 
         // Parse the fields (year, month, day, hour, minute, second, microsecond)
-        let years = parse_field(fields[TimeIndex::Year as usize])?;
-        let months = parse_field(fields[TimeIndex::Month as usize])?;
-        let days = parse_field(fields[TimeIndex::Day as usize])?;
-        let hours = parse_field(fields[TimeIndex::Hour as usize])?;
-        let minutes = parse_field(fields[TimeIndex::Minute as usize])?;
-        let seconds = parse_field(fields[TimeIndex::Second as usize])?;
+        let years = try_opt!(parse_field(fields[TimeIndex::Year as usize]));
+        let months = try_opt!(parse_field(fields[TimeIndex::Month as usize]));
+        let days = try_opt!(parse_field(fields[TimeIndex::Day as usize]));
+        let hours = try_opt!(parse_field(fields[TimeIndex::Hour as usize]));
+        let minutes = try_opt!(parse_field(fields[TimeIndex::Minute as usize]));
+        let seconds = try_opt!(parse_field(fields[TimeIndex::Second as usize]));
 
         let mut frac_part = fields[TimeIndex::Microsecond as usize].to_string();
         let frac_part_len = frac_part.len();
         if frac_part_len < MAX_FSP as usize {
             frac_part.push_str(&"0".repeat(MAX_FSP as usize - frac_part_len));
         }
-        let microseconds = parse_field(&frac_part)?;
+        let microseconds = try_opt!(parse_field(&frac_part));
 
         let mut check_result = |res: Option<i64>| -> Result<Option<i64>> {
             match res {
@@ -1925,6 +1925,55 @@ mod tests {
                 unit
             );
         }
+    }
+
+    #[test]
+    fn test_interval_parse_compound_overflow() {
+        use IntervalUnit::*;
+
+        let cases = [
+            ("9223372036854775808:1", YearMonth),
+            ("1:9223372036854775808", YearMonth),
+            ("9223372036854775808 1", DayHour),
+            ("0 9223372036854775808", DayHour),
+            ("0 0:9223372036854775808", DayMinute),
+            ("0 0:0:9223372036854775808", DaySecond),
+            ("0 0:0:0.9223372036854775808", DayMicrosecond),
+            ("9223372036854775808:0", HourMinute),
+            ("0:0:9223372036854775808", HourSecond),
+            ("0:0:0.9223372036854775808", HourMicrosecond),
+            ("0:9223372036854775808", MinuteSecond),
+            ("0:0.9223372036854775808", MinuteMicrosecond),
+            ("0.9223372036854775808", SecondMicrosecond),
+            ("18446744073709551616:1", YearMonth),
+            ("9999999999999999999999999999999999999999:1", YearMonth),
+        ];
+        for (input, unit) in cases {
+            for input in [input.to_owned(), format!("-{}", input)] {
+                let mut ctx = EvalContext::default();
+                let result = Interval::parse_from_str(&mut ctx, &unit, &input).unwrap();
+                assert!(result.is_none(), "input: {}, unit: {:?}", input, unit);
+                assert_eq!(ctx.warnings.warnings.len(), 1);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), 1292);
+
+                let mut cfg = EvalConfig::from_flag(Flag::IN_INSERT_STMT);
+                cfg.set_sql_mode(crate::expr::SqlMode::STRICT_TRANS_TABLES);
+                let mut ctx = EvalContext::new(cfg.into());
+                let err = Interval::parse_from_str(&mut ctx, &unit, &input).unwrap_err();
+                assert_eq!(err.code(), 1292);
+
+                let mut ctx = EvalContext::default();
+                let err = Interval::extract_duration(&mut ctx, &unit, &input).unwrap_err();
+                assert_eq!(err.code(), 1292);
+            }
+        }
+
+        let mut ctx = EvalContext::default();
+        let interval = Interval::parse_from_str(&mut ctx, &YearMonth, "9223372036854775807")
+            .unwrap()
+            .unwrap();
+        assert_eq!(interval.month(), i64::MAX);
+        assert!(ctx.warnings.warnings.is_empty());
     }
 
     #[test]
