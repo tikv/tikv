@@ -131,10 +131,11 @@ eviction.
   can deadlock the whole in-memory engine.
 - Memory accounting must stay aligned with actual cached data structures.
 - The cross-checker requires a default-CF value for each long Put that can still
-  serve an MVCC read. A newer Put or Delete, or a nonzero GC fence, can make a
-  missing value acceptable once the expiry is at or below the common IME and
-  TiKV read floor. On a failure, compare default-CF presence in the same RocksDB
-  snapshot to diagnose which view is missing the value.
+  serve an IME snapshot. A newer matching Put or Delete, or a nonzero GC fence,
+  makes the older value unnecessary once its expiry timestamp is at or below
+  the cached region's safe point. IME can admit earlier reads while the disk GC
+  safe point is ahead. On failure, the checker reports both safe points and
+  whether the same RocksDB snapshot contains the default-CF value.
 
 ## Observability And Operational Signals
 

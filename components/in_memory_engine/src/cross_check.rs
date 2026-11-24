@@ -355,14 +355,12 @@ impl CrossChecker {
             }
             meta.safe_point()
         };
-        let tikv_safe_point = (self.get_tikv_safe_point)();
-        let read_floor = ime_safe_point.max(tikv_safe_point.unwrap_or_default());
-
+        // IME can serve reads above the region safe point even when disk GC is ahead.
         // At or beyond a nonzero fence to a newer version, readers either select
         // a newer Write or reject this Write before looking up its value.
         if write.gc_fence.is_some_and(|fence| {
             let fence_ts = fence.into_inner();
-            commit_ts < fence_ts && fence_ts <= read_floor
+            commit_ts < fence_ts && fence_ts <= ime_safe_point
         }) {
             return Ok(());
         }
@@ -373,7 +371,7 @@ impl CrossChecker {
         for &ts in newer_versions
             .iter()
             .rev()
-            .take_while(|&&ts| ts <= read_floor)
+            .take_while(|&&ts| ts <= ime_safe_point)
         {
             // GC can change the view during iteration. Require a covering Write
             // to still be visible in both snapshots before using it as proof.
@@ -424,7 +422,7 @@ impl CrossChecker {
             write.gc_fence,
             newer_versions.last(),
             ime_safe_point,
-            tikv_safe_point,
+            (self.get_tikv_safe_point)(),
             iter.snapshot_read_ts,
             rocksdb_default_present,
         );
@@ -1090,12 +1088,13 @@ mod tests {
     where
         F: FnOnce(&mut RegionCacheWriteBatch, &mut RocksWriteBatchVec),
     {
-        cross_check_with_safe_point(prepare_data, 6, get_tikv_safe_point)
+        cross_check_with_safe_point(prepare_data, 6, 10, get_tikv_safe_point)
     }
 
     fn cross_check_with_safe_point<F>(
         prepare_data: F,
         ime_safe_point: u64,
+        read_ts: u64,
         get_tikv_safe_point: Option<Box<dyn Fn() -> Option<u64> + Send>>,
     ) -> Result<()>
     where
@@ -1163,7 +1162,7 @@ mod tests {
             wb.write().unwrap();
             disk_wb.write().unwrap();
 
-            let snap = engine.snapshot(cache_region.clone(), 10, 10000).unwrap();
+            let snap = engine.snapshot(cache_region, read_ts, 10000).unwrap();
             let disk_snap = rocks_engine.snapshot();
 
             cross_checker.cross_check_region(&snap, &disk_snap)
@@ -1180,6 +1179,7 @@ mod tests {
     fn check_missing_default(
         ime_safe_point: u64,
         tikv_safe_point: u64,
+        read_ts: u64,
         newer_write: Option<(u64, WriteType)>,
         gc_fence: Option<u64>,
         disk_has_default: bool,
@@ -1211,6 +1211,7 @@ mod tests {
                 }
             },
             ime_safe_point,
+            read_ts,
             Some(Box::new(move || Some(tikv_safe_point))),
         )
         .unwrap();
@@ -1218,28 +1219,40 @@ mod tests {
 
     #[test]
     fn test_cross_check_skips_expired_default() {
-        check_missing_default(6, 0, Some((6, WriteType::Delete)), None, false);
-        // The load skipped IME GC, but the disk GC safe point covers this version.
-        check_missing_default(0, 6, Some((6, WriteType::Put)), None, false);
-        check_missing_default(0, 6, None, Some(6), false);
+        check_missing_default(6, 6, 10, Some((6, WriteType::Delete)), None, true);
+        check_missing_default(6, 0, 10, Some((6, WriteType::Put)), None, false);
+        check_missing_default(6, 0, 10, None, Some(6), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "snapshot_read_ts=5; rocksdb_default_present=Ok(true)")]
+    fn test_cross_check_disk_safe_point_ahead_of_ime_with_delete() {
+        // At 5 the cache snapshot still needs the value of Put@4. Only disk has it.
+        check_missing_default(0, 6, 5, Some((6, WriteType::Delete)), None, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "snapshot_read_ts=5; rocksdb_default_present=Ok(true)")]
+    fn test_cross_check_disk_safe_point_ahead_of_ime_with_gc_fence() {
+        check_missing_default(0, 6, 5, None, Some(6), true);
     }
 
     #[test]
     #[should_panic(expected = "rocksdb_default_present=Ok(true)")]
     fn test_cross_check_missing_default_for_readable_history() {
-        check_missing_default(6, 0, Some((8, WriteType::Delete)), None, true);
+        check_missing_default(6, 0, 10, Some((8, WriteType::Delete)), None, true);
     }
 
     #[test]
     #[should_panic(expected = "rocksdb_default_present=Ok(false)")]
     fn test_cross_check_missing_default_before_gc_fence() {
-        check_missing_default(6, 0, None, Some(8), false);
+        check_missing_default(6, 0, 10, None, Some(8), false);
     }
 
     #[test]
     #[should_panic(expected = "default not found")]
     fn test_cross_check_missing_default_for_base_put() {
-        check_missing_default(6, 0, Some((6, WriteType::Rollback)), Some(0), false);
+        check_missing_default(6, 0, 10, Some((6, WriteType::Rollback)), Some(0), false);
     }
 
     #[test]
