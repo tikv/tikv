@@ -817,7 +817,8 @@ pub fn check_need_gc(
             return (false, false);
         }
 
-        if props.min_ts > safe_point {
+        // make sure max_ts is less than safe_point 
+        if props.max_ts > safe_point {
             return (false, false);
         }
         if ratio_threshold < 1.0 || context.is_bottommost_level() {
@@ -826,7 +827,8 @@ pub fn check_need_gc(
             // to avoid garbage accumulation.
             return (true, true);
         }
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold || 
+            props.num_deletes as f64 > props.num_versions as f64 * (ratio_threshold - 1.0) {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
             // treat internal levels specially.
             return (true, false);
