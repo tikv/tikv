@@ -2733,3 +2733,78 @@ fn test_select_with_commit_ts() {
         }
     }
 }
+
+fn max_keys_read_data(n: i64) -> Vec<(i64, Option<&'static str>, i64)> {
+    (1..=n).map(|id| (id, Some("name"), 1)).collect()
+}
+
+/// Sends `req` with the coprocessor cache enabled, so `can_be_cached` is
+/// reported.
+fn handle_max_keys_read_request<E: tikv::storage::Engine>(
+    endpoint: &tikv::coprocessor::Endpoint<E>,
+    mut req: Request,
+) -> (Response, SelectResponse) {
+    req.set_is_cache_enabled(true);
+    let resp = handle_request(endpoint, req);
+    assert!(!resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    let mut sel_resp = SelectResponse::default();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    (resp, sel_resp)
+}
+
+fn assert_max_keys_read_complete(resp: &Response, sel_resp: &SelectResponse) {
+    assert!(!sel_resp.has_error(), "{:?}", sel_resp.get_error());
+    assert!(!resp.has_range());
+    assert!(resp.get_can_be_cached());
+}
+
+fn assert_max_keys_read_exceeded(resp: &Response, sel_resp: &SelectResponse) {
+    assert_eq!(sel_resp.get_error().get_code(), 8274);
+    assert!(sel_resp.get_chunks().is_empty());
+    assert!(!resp.has_range());
+    assert!(!resp.get_can_be_cached());
+}
+
+#[test]
+fn test_max_keys_read_table_scan_exact_budget_and_exceeded() {
+    let product = ProductTable::new();
+
+    // 32 rows with budget 32: all rows are returned.
+    let (_, endpoint) = init_with_data(&product, &max_keys_read_data(32));
+    let req = DagSelect::from(&product).max_keys_read(32).build();
+    let (resp, mut sel_resp) = handle_max_keys_read_request(&endpoint, req);
+    assert_max_keys_read_complete(&resp, &sel_resp);
+    let rows = DagChunkSpliter::new(sel_resp.take_chunks().into(), 3).count();
+    assert_eq!(rows, 32);
+
+    // 33 rows with budget 32: the budget is exceeded.
+    let (_, endpoint) = init_with_data(&product, &max_keys_read_data(33));
+    let req = DagSelect::from(&product).max_keys_read(32).build();
+    let (resp, sel_resp) = handle_max_keys_read_request(&endpoint, req);
+    assert_max_keys_read_exceeded(&resp, &sel_resp);
+}
+
+#[test]
+fn test_max_keys_read_count_exact_budget_and_exceeded() {
+    let product = ProductTable::new();
+    let build = |budget| {
+        DagSelect::from(&product)
+            .count(&product["count"])
+            .output_offsets(Some(vec![0]))
+            .max_keys_read(budget)
+            .build()
+    };
+
+    // COUNT over 1024 rows with budget 1024 completes.
+    let (_, endpoint) = init_with_data(&product, &max_keys_read_data(1024));
+    let (resp, mut sel_resp) = handle_max_keys_read_request(&endpoint, build(1024));
+    assert_max_keys_read_complete(&resp, &sel_resp);
+    let rows: Vec<Vec<Datum>> = DagChunkSpliter::new(sel_resp.take_chunks().into(), 1).collect();
+    assert_eq!(rows, vec![vec![Datum::U64(1024)]]);
+
+    // COUNT over 4096 rows with budget 1024: an error, not COUNT = 0.
+    let (_, endpoint) = init_with_data(&product, &max_keys_read_data(4096));
+    let (resp, sel_resp) = handle_max_keys_read_request(&endpoint, build(1024));
+    assert_max_keys_read_exceeded(&resp, &sel_resp);
+}
