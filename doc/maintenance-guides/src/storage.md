@@ -160,6 +160,10 @@ High-risk contracts:
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
+- `ResolveLockReadPhase` and `ResolveLock` debug logs identify batches that
+  process multiple shared-lock holders for one key. A duplicate `CF_WRITE` in
+  `resolved_ts::group_row_changes` logs the Raft region, index, term, and both
+  MVCC write timestamps before panicking.
 - PD read-flow reports include reads performed by foreground write commands;
   inspect `txn/sched_pool.rs` when PD read bytes do not match the read-pool
   workload.
