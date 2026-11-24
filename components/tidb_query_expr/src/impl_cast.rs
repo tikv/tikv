@@ -2210,7 +2210,7 @@ mod tests {
             ),
             (
                 EnumRef::new("18446744073709551615".as_bytes(), &1),
-                Json::from_f64(18446744073709552000.0).unwrap(),
+                Json::from_u64(18446744073709551615).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
@@ -6968,7 +6968,7 @@ mod tests {
             (
                 FieldType::default(),
                 "18446744073709551615".to_string(),
-                Json::from_f64(18446744073709552000.0).unwrap(),
+                Json::from_u64(18446744073709551615).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
