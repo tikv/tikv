@@ -225,3 +225,38 @@ fn test_evict_early_avoids_reject() {
         "Entry cache should be evicted after the second round of insertions"
     );
 }
+
+#[test]
+fn test_evict_entry_cache_disables_unpersisted_apply() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 1024;
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let value = vec![b'x'; 1024];
+    for i in 0..10 {
+        let k = format!("k{:02}", i).into_bytes();
+        cluster.must_put(&k, &value);
+        must_get_equal(&cluster.get_engine(1), &k, &value);
+    }
+
+    // Trigger high memory pressure and entry cache evict
+    fail::cfg("needs_evict_entry_cache", "return").unwrap();
+
+    // After write with high memory pressure, unpersisted apply should be disabled on leader
+    for i in 10..20 {
+        let k = format!("k{:02}", i).into_bytes();
+        cluster.must_put(&k, &value);
+        must_get_equal(&cluster.get_engine(1), &k, &value);
+    }
+
+    // Verify unpersisted apply gauge is 0 when memory pressure is active
+    assert_eq!(
+        raftstore::store::metrics::RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.get(),
+        0
+    );
+
+    fail::cfg("needs_evict_entry_cache", "off").unwrap();
+}
