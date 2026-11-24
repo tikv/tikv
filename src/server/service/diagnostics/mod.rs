@@ -1,9 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use futures::{
     compat::Future01CompatExt,
@@ -19,11 +16,7 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
     ServerInfoResponse, ServerInfoType,
 };
-use lazy_static::lazy_static;
-use tikv_util::{
-    sys::{SystemExt, ioload},
-    timer::GLOBAL_TIMER_HANDLE,
-};
+use tikv_util::{sys::ioload, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::Handle;
 
 use crate::server::Error;
@@ -31,10 +24,6 @@ use crate::server::Error;
 mod log;
 /// Information about the current hardware and operating system.
 pub mod sys;
-
-lazy_static! {
-    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
-}
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -114,16 +103,9 @@ impl Diagnostics for Service {
         let collect = async move {
             let (load, when) = match tp {
                 ServerInfoType::LoadInfo | ServerInfoType::All => {
-                    let mut system = SYS_INFO.lock().unwrap();
-                    system.refresh_networks_list();
-                    system.refresh_all();
                     let load = (
                         sys::cpu_time_snapshot(),
-                        system
-                            .networks()
-                            .into_iter()
-                            .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
-                            .collect(),
+                        sys::nic_snapshot(),
                         ioload::IoLoad::snapshot(),
                     );
                     let when = Instant::now() + Duration::from_millis(1000);
