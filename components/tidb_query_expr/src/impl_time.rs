@@ -93,16 +93,21 @@ pub fn week_with_mode(
     t: Option<&DateTime>,
     m: Option<&Int>,
 ) -> Result<Option<Int>> {
-    if t.is_none() || m.is_none() {
-        return Ok(None);
-    }
-    let (t, m) = (t.unwrap(), m.unwrap());
+    // A NULL date has no well-defined week; a NULL mode defaults to mode 0,
+    // matching TiDB's root-level evalInt semantics (builtinWeekWithModeSig)
+    // so that predicates pushed down to the coprocessor produce the same
+    // result as evaluation at the root.
+    let t = match t {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let m = m.copied().unwrap_or(0);
     if t.invalid_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
-    let week = t.week(WeekMode::from_bits_truncate(*m as u32));
+    let week = t.week(WeekMode::from_bits_truncate(m as u32));
     Ok(Some(i64::from(week)))
 }
 
@@ -2131,7 +2136,9 @@ mod tests {
             ("2017-12-31", Some(6), Some(1i64)),
             ("2017-12-31", Some(7), Some(52i64)),
             ("2017-12-31", Some(14), Some(1i64)),
-            ("2017-12-31", None::<Int>, None),
+            // A NULL mode defaults to mode 0, matching TiDB's root-level
+            // evalInt semantics, so this must equal the Some(0) case above.
+            ("2017-12-31", None::<Int>, Some(53i64)),
             ("0000-00-00", Some(0), None),
             ("2018-12-00", Some(0), None),
             ("2018-00-03", Some(0), None),
