@@ -851,6 +851,60 @@ mod tests {
     }
 
     #[test]
+    fn test_gb18030_bin_top_n() {
+        let values = [
+            "Bb😊不qtkᨓ희WU经是࿙是CஇHR不EmCceLr",
+            "Bŭy院显DR伦s济YrE🌟A",
+            "B经✨ByWDඇ显BR⩻数౽f数不D本v经EwF",
+            "B🌟ᢴDr伦Ʃn字生s🔥基y学Cn是j",
+            "B显😊ඇ🍺ඇo🔥基字w🍺是本P济IGqⵎWƩnfஇ",
+        ];
+        // These rows are ordered by their GB18030 bytes, not by the numeric
+        // values of their variable-width character encodings.
+        for (desc, expected_rows) in [(false, [0, 1, 3]), (true, [4, 2, 3])] {
+            let src_exec = MockExecutor::new(
+                vec![
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarChar)
+                        .collation(Collation::Gb18030Bin)
+                        .into(),
+                ],
+                vec![BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Bytes(
+                        values
+                            .iter()
+                            .map(|s| Some(s.as_bytes().to_vec()))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    )]),
+                    logical_rows: (0..values.len()).collect(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
+                }],
+            );
+            let mut exec = BatchTopNExecutor::new_for_test(
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
+                vec![desc],
+                3,
+            );
+
+            let r = block_on(exec.next_batch(5));
+            assert!(r.is_drained.unwrap().stop());
+            assert_eq!(r.logical_rows, vec![0, 1, 2]);
+            assert_eq!(
+                r.physical_columns[0].decoded().to_bytes_vec(),
+                &expected_rows.map(|i| Some(values[i].as_bytes().to_vec())),
+                "desc = {desc}",
+            );
+        }
+    }
+
+    #[test]
     fn test_bytes_1() {
         // Order by multiple expressions with collation, data len > n.
         //

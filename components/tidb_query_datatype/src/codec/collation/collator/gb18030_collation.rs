@@ -62,12 +62,22 @@ impl Collator for CollatorGb18030Bin {
         let sb = if force_no_pad { b } else { trim_end_padding(b) };
         let mut a_rest = sa;
         let mut b_rest = sb;
+        // GB18030 encodings have one, two or four bytes. Align the leading
+        // bytes so integer comparison follows encoded-byte order.
+        let sort_weight = |ch| {
+            let weight = Self::char_weight(ch);
+            match weight {
+                0..=0xFF => weight << 24,
+                0x100..=0xFFFF => weight << 16,
+                _ => weight,
+            }
+        };
 
         while !a_rest.is_empty() && !b_rest.is_empty() {
             let (ch_a, a_next) = next_utf8_char(a_rest).unwrap_or(('?', &a_rest[1..]));
             let (ch_b, b_next) = next_utf8_char(b_rest).unwrap_or(('?', &b_rest[1..]));
 
-            let ord = Self::char_weight(ch_a).cmp(&Self::char_weight(ch_b));
+            let ord = sort_weight(ch_a).cmp(&sort_weight(ch_b));
             if ord != Ordering::Equal {
                 return Ok(ord);
             }
@@ -203,6 +213,46 @@ mod tests {
         Collator,
         collator::{CollatorGb18030Bin, CollatorGb18030ChineseCi},
     };
+
+    #[test]
+    fn test_gb18030_bin_sort_compare() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+
+        // Four-byte encodings can sort before two-byte encodings, even when
+        // they share the same leading byte (ŭ = 81 30 95 39, 丂 = 81 40).
+        let cases = [
+            ("ŭ", "经", Less),
+            ("🌟", "经", Less),
+            ("丂", "ŭ", Greater),
+            ("b", "ŭ", Less),
+            ("\0", "b", Less),
+            ("a\0", "a", Greater),
+            ("ŭ", "ŭ ", Equal),
+            ("Bŭ", "B经", Less),
+        ];
+        for (a, b, expected) in cases {
+            let (a, b) = (a.as_bytes(), b.as_bytes());
+            assert_eq!(
+                CollatorGb18030Bin::sort_compare(a, b, false).unwrap(),
+                expected,
+                "{a:?} vs {b:?}",
+            );
+            assert_eq!(
+                CollatorGb18030Bin::sort_compare(b, a, false).unwrap(),
+                expected.reverse(),
+            );
+            assert_eq!(
+                CollatorGb18030Bin::sort_key(a)
+                    .unwrap()
+                    .cmp(&CollatorGb18030Bin::sort_key(b).unwrap()),
+                expected,
+            );
+        }
+        assert_eq!(
+            CollatorGb18030Bin::sort_compare("ŭ".as_bytes(), "ŭ ".as_bytes(), true).unwrap(),
+            Less,
+        );
+    }
 
     #[test]
     fn test_weight() {
