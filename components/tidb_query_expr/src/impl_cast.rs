@@ -1492,14 +1492,26 @@ fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+// Apply the same length/truncation/padding logic as TiDB's
+// ProduceStrWithSpecifiedTp (via cast_as_string_helper, already used by
+// cast_string_as_string below), rather than returning the full converted
+// JSON string unconditionally. Without this, a CAST(json AS CHAR(n))
+// pushed down to the coprocessor could accept overlong values that
+// TiDB's root evaluation would truncate (or reject under strict mode),
+// making a predicate over the cast result select different rows than
+// the same predicate evaluated at the root.
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
-fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
+fn cast_json_as_bytes(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {
             let val = val.convert(ctx)?;
-            Ok(Some(val))
+            cast_as_string_helper(ctx, extra, val)
         }
     }
 }
@@ -4669,7 +4681,7 @@ mod tests {
 
     #[test]
     fn test_json_as_string() {
-        test_none_with_ctx(cast_json_as_bytes);
+        test_none_with_ctx_and_extra(cast_json_as_bytes);
 
         // FIXME: this case is not exactly same as TiDB's,
         //  such as(left is TiKV, right is TiDB)
@@ -4728,11 +4740,34 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_json_as_bytes(&mut ctx, Some(input.as_ref()));
+            let mut ret_field_type: FieldType = FieldType::default();
+            ret_field_type.set_flen(UNSPECIFIED_LENGTH as i32);
+            let extra = RpnFnCallExtra {
+                ret_field_type: &ret_field_type,
+            };
+            let r = cast_json_as_bytes(&mut ctx, &extra, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
+
+        // Regression case for the reported issue: CAST(json AS CHAR(n))
+        // pushed down to the coprocessor must truncate to the target
+        // length, matching TiDB's root evaluation, rather than returning
+        // the full converted string unconditionally.
+        let mut ctx = EvalContext::default();
+        let mut ret_field_type: FieldType = FieldType::default();
+        ret_field_type.set_flen(4);
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+        };
+        let input = Json::from_f64(1234.5).unwrap();
+        let r = cast_json_as_bytes(&mut ctx, &extra, Some(input.as_ref()));
+        assert!(
+            r.is_err(),
+            "expected CAST(1234.5 AS CHAR(4)) to error under strict mode, got: {:?}",
+            r
+        );
     }
 
     macro_rules! cast_closure_with_metadata {
