@@ -398,8 +398,12 @@ impl SubscriptionTracer {
     /// the window. The epoch is deliberately kept so that the later
     /// `try_update_region` still sees the version bump and refreshes.
     ///
-    /// Only shrinking is applied: if `new_region` isn't enclosed by the
-    /// recorded range (e.g. a merge), nothing changes.
+    /// The recorded range becomes `meta ∩ new_region`, so it never grows. In
+    /// particular a merge followed by a split before the refresh is handled
+    /// (`[a, b)` -> merge `[a, d)` -> split `[x, d)`) still sheds `[a, x)`,
+    /// even though neither `new_region` is enclosed by the recorded range.
+    /// If the intersection is empty the recorded range collapses to an empty
+    /// one so nothing can be resolved through it.
     ///
     /// Returns whether the range was narrowed.
     pub fn narrow_range_on_version_change(&self, new_region: &Region) -> bool {
@@ -408,13 +412,28 @@ impl SubscriptionTracer {
             None => return false,
         };
         let meta = &mut sub.value_mut().meta;
-        if new_region.get_region_epoch().version <= meta.get_region_epoch().version
-            || !utils::region_encloses(meta, new_region)
-        {
+        if new_region.get_region_epoch().version <= meta.get_region_epoch().version {
             return false;
         }
-        meta.set_start_key(new_region.get_start_key().to_vec());
-        meta.set_end_key(new_region.get_end_key().to_vec());
+        // Intersect `[meta.start, meta.end)` with `[new.start, new.end)`; an empty end
+        // key means +inf.
+        let start = std::cmp::max(meta.get_start_key(), new_region.get_start_key()).to_vec();
+        let (m_end, n_end) = (meta.get_end_key(), new_region.get_end_key());
+        let mut end = match (m_end.is_empty(), n_end.is_empty()) {
+            (true, _) => n_end.to_vec(),
+            (_, true) => m_end.to_vec(),
+            _ => std::cmp::min(m_end, n_end).to_vec(),
+        };
+        // Disjoint ranges: collapse to the empty range `[start, start)`. `start` is
+        // non-empty here because `end` is non-empty and `start >= end`.
+        if !end.is_empty() && start >= end {
+            end = start.clone();
+        }
+        if start == meta.get_start_key() && end == meta.get_end_key() {
+            return false;
+        }
+        meta.set_start_key(start);
+        meta.set_end_key(end);
         true
     }
 
@@ -733,11 +752,40 @@ mod test {
         // Wider range (e.g. merge): untouched.
         assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"d")));
         assert_eq!(meta(&subs), (b"a".to_vec(), b"c".to_vec(), 1));
+        assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"", b"")));
+        assert_eq!(meta(&subs), (b"a".to_vec(), b"c".to_vec(), 1));
 
         // Split: range is narrowed, the epoch is kept so the refresh still triggers.
         assert!(subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"b")));
         assert_eq!(meta(&subs), (b"a".to_vec(), b"b".to_vec(), 1));
         assert!(!subs.try_update_region(&region_of(1, 2, b"a", b"b")));
+    }
+
+    #[test]
+    fn test_narrow_range_merge_then_split() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        let range = |subs: &SubscriptionTracer| {
+            let sub = subs.get_subscription_of(1).unwrap();
+            let m = &sub.value().meta;
+            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
+        };
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+        // Merge with the right neighbour: [a, c) -> (v2, [a, f)); not narrowed.
+        assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"f")));
+        assert_eq!(range(&subs), (b"a".to_vec(), b"c".to_vec()));
+        // Split before the refresh runs sheds [a, b): (v3, [b, f)). The subscription
+        // must shrink to [b, c) rather than keep claiming [a, b).
+        assert!(subs.narrow_range_on_version_change(&region_of(1, 3, b"b", b"f")));
+        assert_eq!(range(&subs), (b"b".to_vec(), b"c".to_vec()));
+        // Open-ended new region intersects correctly too.
+        assert!(subs.narrow_range_on_version_change(&region_of(1, 4, b"bb", b"")));
+        assert_eq!(range(&subs), (b"bb".to_vec(), b"c".to_vec()));
+        // Disjoint: collapses to an empty range.
+        assert!(subs.narrow_range_on_version_change(&region_of(1, 5, b"d", b"f")));
+        assert_eq!(range(&subs), (b"d".to_vec(), b"d".to_vec()));
     }
 
     #[test]
