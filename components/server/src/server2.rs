@@ -370,6 +370,7 @@ where
                 &background_worker,
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
