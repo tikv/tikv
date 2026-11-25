@@ -2864,6 +2864,10 @@ mod tests {
                 Some("ßßåı".as_bytes().to_vec()),
                 Some("ßßÅI".as_bytes().to_vec()),
             ),
+            (
+                Some("ƛɤ".as_bytes().to_vec()),
+                Some("ꟜꟋ".as_bytes().to_vec()),
+            ),
             (None, None),
         ];
 
@@ -3100,6 +3104,10 @@ mod tests {
             (
                 Some("İİIIÅI".as_bytes().to_vec()),
                 Some("iiiiåi".as_bytes().to_vec()),
+            ),
+            (
+                Some("ꟜꟋ".as_bytes().to_vec()),
+                Some("ƛɤ".as_bytes().to_vec()),
             ),
             (None, None),
         ];

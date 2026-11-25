@@ -29,7 +29,7 @@ use tikv_util::{
     warn,
 };
 
-use crate::{metrics::*, service::ConnId};
+use crate::{metrics::*, types::ConnId, watchdog::FlushActivity};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
@@ -56,10 +56,13 @@ const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
 /// ```
 const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
+pub(crate) type BarrierCallback = Box<dyn FnOnce(()) + Send>;
+pub(crate) type Barrier = Option<BarrierCallback>;
+
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
-    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
+    Barrier(Barrier),
 }
 
 impl CdcEvent {
@@ -392,7 +395,7 @@ impl<'a> Drain {
     pub async fn forward<S, E>(
         &'a mut self,
         sink: &mut S,
-        last_flush_time: Option<&crossbeam::atomic::AtomicCell<std::time::Instant>>,
+        activity: Option<&FlushActivity>,
     ) -> Result<(), E>
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
@@ -423,9 +426,8 @@ impl<'a> Drain {
             sink.flush().await?;
             #[cfg(feature = "failpoints")]
             sleep_after_sink_flush().await;
-            // Update last flush time if provided
-            if let Some(time_tracker) = last_flush_time {
-                time_tracker.store(std::time::Instant::now());
+            if let Some(activity) = activity {
+                activity.record_flush();
             }
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);

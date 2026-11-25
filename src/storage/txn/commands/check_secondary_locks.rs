@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use concurrency_manager::MaxTsUpdateSource;
 use protobuf::Message;
 use resource_metering::record_network_out_bytes;
 use tikv_util::Either;
@@ -148,11 +149,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
-        context
-            .concurrency_manager
-            .update_max_ts(self.start_ts, || {
-                format!("check_secondary_locks-{}", self.start_ts)
-            })?;
+        context.concurrency_manager.update_max_ts(
+            self.start_ts,
+            MaxTsUpdateSource::new(|| format!("check_secondary_locks-{}", self.start_ts))
+                .require_request_origin_check(self.ctx.get_request_origin()),
+        )?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

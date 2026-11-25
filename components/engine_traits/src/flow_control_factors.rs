@@ -7,4 +7,6 @@ pub trait FlowControlFactorsExt {
     fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
 
     fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>>;
+
+    fn get_cf_base_level(&self, cf: &str) -> Result<Option<u64>>;
 }

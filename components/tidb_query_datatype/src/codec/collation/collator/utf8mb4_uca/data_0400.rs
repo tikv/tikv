@@ -30,6 +30,17 @@ impl UnicodeVersion for Unicode0400 {
 
         u as u128
     }
+
+    #[inline]
+    fn like_pattern_match(a: char, b: char) -> bool {
+        if a > '\u{FFFF}' || b > '\u{FFFF}' {
+            return a == b;
+        }
+
+        let a_weight = UNICODE_CI_TABLE[a as usize];
+        let b_weight = UNICODE_CI_TABLE[b as usize];
+        a_weight == b_weight && (a_weight != LONG_RUNE || a == b)
+    }
 }
 
 #[inline]

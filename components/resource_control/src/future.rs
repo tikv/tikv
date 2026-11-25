@@ -15,9 +15,15 @@ use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE, warn};
 use tokio_timer::Delay;
 
 use crate::{
-    resource_group::{ResourceConsumeType, ResourceController},
+    resource_group::{ResourceConsumeType, ResourceController, ResourceGroupManager},
     resource_limiter::{ResourceLimiter, ResourceType},
 };
+
+#[inline]
+fn cpu_timer() -> impl FnOnce() -> Duration {
+    let start = std::time::Instant::now();
+    move || start.elapsed()
+}
 
 const MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
 
@@ -55,8 +61,19 @@ impl<F: Future> Future for ControlledFuture<F> {
 }
 
 // `LimitedFuture` wraps a Future with ResourceLimiter, it will automatically
-// get statistics of the cpu time and io bytes consumed by the future, and do
-// async waiting according the configuration of the ResourceLimiter.
+// track the cpu time and io bytes consumed by the future.
+//
+// Two modes controlled by `measure_only`:
+//
+// `measure_only = false` (default, used by background jobs like backup/import):
+//   Measures CPU+IO per poll and sleeps proportionally to token-bucket debt.
+//   Pre-delay pays off existing debt before starting; post-delay sleeps after
+//   each pending poll. This throttles the task inside the thread pool.
+//
+// `measure_only = true` (used by read/write pools):
+//   Measures CPU+IO per poll and builds token-bucket debt, but NEVER sleeps.
+//   Throttling is handled pre-pool by `admission_decision` which reads the
+//   accumulated debt before submitting the next request.
 #[pin_project]
 pub struct LimitedFuture<F: Future> {
     #[pin]
@@ -69,12 +86,20 @@ pub struct LimitedFuture<F: Future> {
     #[pin]
     post_delay: OptionalFuture<Compat01As03<Delay>>,
     resource_limiter: Arc<ResourceLimiter>,
+    skip_compaction_pressure: bool,
     // if the future is first polled, we need to let it consume a 0 value
     // to compensate the debt of previously finished tasks.
     is_first_poll: bool,
-    // Skip the compaction pressure write IO limiter. Set to true for
-    // operations like SST ingestion that don't cause compaction.
-    skip_compaction_pressure: bool,
+    // When true: measure CPU/IO and build token-bucket debt, but never sleep.
+    // When false: existing behavior — sleep inside the pool to throttle.
+    measure_only: bool,
+    // For measure-only mode: feed RuTracker + token-bucket via record_ru_consumption.
+    resource_mgr: Option<Arc<ResourceGroupManager>>,
+    // Known write bytes for this request (from cmd.write_bytes()), used as the
+    // write component of io_bytes passed to consume() instead of /proc iostat.
+    // Avoids syscall overhead and thread-level IO noise from compaction on the
+    // same thread. Zero means fall back to IoBytesTracker (e.g. reads, background).
+    write_bytes: u64,
 }
 
 impl<F: Future> LimitedFuture<F> {
@@ -82,14 +107,20 @@ impl<F: Future> LimitedFuture<F> {
         f: F,
         resource_limiter: Arc<ResourceLimiter>,
         skip_compaction_pressure: bool,
+        measure_only: bool,
+        resource_mgr: Option<Arc<ResourceGroupManager>>,
+        write_bytes: u64,
     ) -> Self {
         Self {
             f,
             pre_delay: None.into(),
             post_delay: None.into(),
             resource_limiter,
-            is_first_poll: true,
             skip_compaction_pressure,
+            is_first_poll: true,
+            measure_only,
+            resource_mgr,
+            write_bytes,
         }
     }
 }
@@ -99,7 +130,10 @@ impl<F: Future> Future for LimitedFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        if *this.is_first_poll {
+
+        // Pre-delay: pay off existing token-bucket debt before starting work.
+        // Skipped in measure-only mode — foreground pools never sleep in-pool.
+        if *this.is_first_poll && !*this.measure_only {
             debug_assert!(this.pre_delay.finished && this.post_delay.finished);
             *this.is_first_poll = false;
             let wait_dur = this
@@ -119,6 +153,8 @@ impl<F: Future> Future for LimitedFuture<F> {
                 )
                 .into();
             }
+        } else if *this.is_first_poll {
+            *this.is_first_poll = false;
         }
         if !this.post_delay.finished {
             assert!(this.pre_delay.finished);
@@ -130,8 +166,7 @@ impl<F: Future> Future for LimitedFuture<F> {
                 return Poll::Pending;
             }
         }
-        // get io stats is very expensive, so we only do so if only io control is
-        // enabled.
+        // get io stats is very expensive, so we only do so if io control is enabled.
         let mut io_tracker = if this
             .resource_limiter
             .get_limiter(ResourceType::Io)
@@ -142,20 +177,32 @@ impl<F: Future> Future for LimitedFuture<F> {
         } else {
             None
         };
-        let start = Instant::now();
+        let elapsed = cpu_timer();
         let res = this.f.poll(cx);
-        let dur = start.saturating_elapsed();
-        let io_bytes = io_tracker
+        let dur = elapsed();
+        let mut io_bytes = io_tracker
             .as_mut()
             .and_then(|tracker| tracker.update())
             .unwrap_or_else(IoBytes::default);
+        // Only count write_bytes when the future completes to avoid
+        // double-counting across multiple pending polls.
+        if *this.write_bytes > 0 && res.is_ready() {
+            io_bytes.write = *this.write_bytes;
+        }
         let mut wait_dur = this.resource_limiter.consume(
             dur,
             io_bytes,
             res.is_pending(),
             *this.skip_compaction_pressure,
         );
-        if wait_dur == Duration::ZERO || res.is_ready() {
+        // Feed RuTracker so admission_decision has baseline data.
+        // Only for foreground limiters — background jobs shouldn't shift the baseline.
+        if !this.resource_limiter.is_background()
+            && let Some(mgr) = &this.resource_mgr
+        {
+            mgr.record_ru_consumption(this.resource_limiter.name(), dur.as_micros() as u64);
+        }
+        if wait_dur == Duration::ZERO || res.is_ready() || *this.measure_only {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
@@ -173,8 +220,8 @@ impl<F: Future> Future for LimitedFuture<F> {
     }
 }
 
-/// `OptionalFuture` is similar to futures::OptionFuture, but provide an extra
-/// `finished` flag to determine if the future requires poll.
+/// `OptionalFuture` is similar to futures::OptionFuture, but provides an extra
+/// `finished` flag to determine if the future requires polling.
 #[pin_project]
 struct OptionalFuture<F> {
     #[pin]
@@ -214,9 +261,20 @@ pub async fn with_resource_limiter<F: Future>(
     f: F,
     limiter: Option<Arc<ResourceLimiter>>,
     skip_compaction_pressure: bool,
+    measure_only: bool,
+    resource_mgr: Option<Arc<ResourceGroupManager>>,
+    write_bytes: u64,
 ) -> F::Output {
     if let Some(limiter) = limiter {
-        LimitedFuture::new(f, limiter, skip_compaction_pressure).await
+        LimitedFuture::new(
+            f,
+            limiter,
+            skip_compaction_pressure,
+            measure_only,
+            resource_mgr,
+            write_bytes,
+        )
+        .await
     } else {
         f.await
     }
@@ -280,7 +338,10 @@ mod tests {
             <F as Future>::Output: Send,
         {
             let (sender, receiver) = channel::<()>();
-            let fut = NotifyFuture::new(LimitedFuture::new(f, limiter, false), sender);
+            let fut = NotifyFuture::new(
+                LimitedFuture::new(f, limiter, false, false, None, 0),
+                sender,
+            );
             pool.spawn(fut).unwrap();
             receiver.recv().unwrap();
         }

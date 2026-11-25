@@ -43,6 +43,7 @@ use resource_metering::{
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     GLOBAL_SERVER_READINESS, box_err, debug, error, info,
+    logger::{Level, get_log_level},
     metrics::ThreadInfoStatistics,
     store::QueryStats,
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
@@ -68,6 +69,7 @@ use crate::{
         SnapManager, StoreMsg, StoreTick, TxnExt,
         cmd_resp::new_error,
         metrics::*,
+        msg::AUTO_SPLIT_SOURCE,
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
@@ -86,6 +88,20 @@ pub const NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT: u32 = 2;
 const STATS_CHANNEL_CAPACITY_LIMIT: usize = 128;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
+
+fn take_auto_split_message<EK: KvEngine>(
+    region_epoch: metapb::RegionEpoch,
+    split_info: &mut SplitInfo,
+) -> Option<CasualMessage<EK>> {
+    let split_key = split_info.split_key.take()?;
+    Some(CasualMessage::SplitRegion {
+        region_epoch,
+        split_keys: vec![split_key],
+        callback: Callback::None,
+        source: AUTO_SPLIT_SOURCE.into(),
+        share_source_region_size: false,
+    })
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct FlowStatistics {
@@ -152,6 +168,7 @@ where
         right_derive: bool,
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
+        split_reason: pdpb::SplitReason,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -626,10 +643,15 @@ where
     }
 
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
+        if split_infos.is_empty() {
+            return;
+        }
+        let candidate_count = split_infos.len() as u64;
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
             warn!(
                 "failed to send split infos to pd worker";
+                "candidate_count" => candidate_count,
                 "err" => ?e,
             );
         }
@@ -1071,6 +1093,69 @@ fn collect_report_peers_for_store_heartbeat(
 
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
+const STORE_HEARTBEAT_TOPN_LOG_LIMIT: usize = 5;
+const STORE_HEARTBEAT_TOPN_LOG_MIN_CPU: u64 = 10;
+
+#[derive(Debug)]
+struct TopReadCpuPeer {
+    region_id: u64,
+    read_cpu: u64,
+    sched_cpu: u64,
+}
+
+fn should_log_store_heartbeat_top_read_cpu() -> bool {
+    matches!(get_log_level(), Some(Level::Debug) | Some(Level::Trace))
+}
+
+fn log_store_heartbeat_top_read_cpu(
+    store_id: u64,
+    interval_seconds: u64,
+    report_peers: &HashMap<u64, pdpb::PeerStat>,
+) {
+    if report_peers.is_empty() {
+        return;
+    }
+
+    let mut top_peers: Vec<TopReadCpuPeer> = report_peers
+        .values()
+        .map(|stat| TopReadCpuPeer {
+            region_id: stat.get_region_id(),
+            read_cpu: stat.get_cpu_stats().get_unified_read(),
+            sched_cpu: stat.get_cpu_stats().get_scheduler(),
+        })
+        .collect();
+    top_peers.sort_unstable_by(|lhs, rhs| {
+        rhs.read_cpu
+            .cmp(&lhs.read_cpu)
+            .then_with(|| rhs.sched_cpu.cmp(&lhs.sched_cpu))
+            .then_with(|| lhs.region_id.cmp(&rhs.region_id))
+    });
+    if top_peers[0].read_cpu < STORE_HEARTBEAT_TOPN_LOG_MIN_CPU {
+        return;
+    }
+    top_peers.truncate(STORE_HEARTBEAT_TOPN_LOG_LIMIT);
+    let top_peers_max_cpu = top_peers[0].read_cpu;
+    let top_peers_avg_cpu =
+        top_peers.iter().map(|peer| peer.read_cpu).sum::<u64>() / top_peers.len() as u64;
+    let top_peers_p50_cpu = if top_peers.len() % 2 == 1 {
+        top_peers[top_peers.len() / 2].read_cpu
+    } else {
+        let upper = top_peers[(top_peers.len() / 2) - 1].read_cpu;
+        let lower = top_peers[top_peers.len() / 2].read_cpu;
+        (upper + lower) / 2
+    };
+
+    debug!(
+        "store heartbeat top read cpu peers";
+        "store_id" => store_id,
+        "interval_seconds" => interval_seconds,
+        "reported_peers_count" => report_peers.len(),
+        "top_peers_max_cpu" => top_peers_max_cpu,
+        "top_peers_avg_cpu" => top_peers_avg_cpu,
+        "top_peers_p50_cpu" => top_peers_p50_cpu,
+        "top_peers" => ?top_peers,
+    );
+}
 
 pub struct Runner<EK, ER, T>
 where
@@ -1155,7 +1240,7 @@ where
             cfg.inspect_network_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
-        let split_validator = SplitValidator::new();
+        let split_validator = coprocessor_host.split_validator.clone();
         if let Err(e) = stats_monitor.start(
             auto_split_controller,
             collector_reg_handle,
@@ -1230,9 +1315,11 @@ where
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
+        split_reason: pdpb::SplitReason,
     ) {
         let router = self.router.clone();
         let resp = self.pd_client.ask_split(region.clone());
+        let is_load_split = split_reason == pdpb::SplitReason::Load;
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1253,7 +1340,12 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(
+                    let callback = if is_load_split {
+                        Self::load_base_split_callback(callback)
+                    } else {
+                        callback
+                    };
+                    if !send_admin_request(
                         &router,
                         region_id,
                         epoch,
@@ -1261,13 +1353,19 @@ where
                         req,
                         callback,
                         Default::default(),
-                    );
+                    ) && is_load_split
+                    {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
                 Err(e) => {
                     warn!("failed to ask split";
                     "region_id" => region.get_id(),
                     "err" => ?e,
                     "task"=>task);
+                    if is_load_split {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
             }
         };
@@ -1299,6 +1397,7 @@ where
         if reason != pdpb::SplitReason::Admin && split_validator.is_disabled(region.get_id()) {
             return;
         }
+        let is_load_split = reason == pdpb::SplitReason::Load;
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let f = async move {
             match resp.await {
@@ -1319,7 +1418,12 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(
+                    let callback = if is_load_split {
+                        Self::load_base_split_callback(callback)
+                    } else {
+                        callback
+                    };
+                    if !send_admin_request(
                         &router,
                         region_id,
                         epoch,
@@ -1327,7 +1431,10 @@ where
                         req,
                         callback,
                         Default::default(),
-                    );
+                    ) && is_load_split
+                    {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
                 // When rolling update, there might be some old version tikvs that don't support
                 // batch split in cluster. In this situation, PD version check would refuse
@@ -1346,17 +1453,24 @@ where
                         right_derive,
                         share_source_region_size,
                         callback,
+                        split_reason: reason,
                     };
-                    if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
+                    if let Err(e) = scheduler.schedule(task) {
+                        let error_kind: &'static str = match &e {
+                            ScheduleError::Stopped(_) => "Stopped",
+                            ScheduleError::Full(_) => "Full",
+                        };
                         error!(
-                            "failed to notify pd to split: Stopped";
+                            "failed to notify pd to split";
                             "region_id" => region_id,
-                            "peer_id" =>  peer_id
+                            "peer_id" => peer_id,
+                            "reason" => error_kind,
                         );
-                        match t {
+                        match e.into_inner() {
                             Task::AskSplit { callback, .. } => {
                                 callback.invoke_with_response(new_error(box_err!(
-                                    "failed to split: Stopped"
+                                    "failed to split: {}",
+                                    error_kind
                                 )));
                             }
                             _ => unreachable!(),
@@ -1369,6 +1483,9 @@ where
                         "region_id" => region.get_id(),
                         "err" => ?e,
                     );
+                    if is_load_split {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
             }
         };
@@ -1417,6 +1534,17 @@ where
         self.remote.spawn(f);
     }
 
+    fn load_base_split_callback(callback: Callback<EK::Snapshot>) -> Callback<EK::Snapshot> {
+        Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+            } else {
+                LOAD_BASE_SPLIT_EVENT.split_success.inc();
+            }
+            callback.invoke_with_response(resp.response);
+        }))
+    }
+
     fn handle_store_heartbeat(
         &mut self,
         mut stats: pdpb::StoreStats,
@@ -1445,6 +1573,9 @@ where
                     interval_seconds,
                 )
             };
+            if should_log_store_heartbeat_top_read_cpu() {
+                log_store_heartbeat_top_read_cpu(self.store_id, interval_seconds, &report_peers);
+            }
 
             // Emit per-pool CPU metrics: region-sum vs store-level.
             {
@@ -1855,6 +1986,7 @@ where
                     } else {
                         split_validator.disable(region_id);
                     }
+                    fail_point!("pd_after_change_split");
                 }
 
                 if resp.has_change_peer() {
@@ -2438,6 +2570,7 @@ where
                 right_derive,
                 share_source_region_size,
                 callback,
+                split_reason,
             } => self.handle_ask_split(
                 region,
                 split_key,
@@ -2446,6 +2579,7 @@ where
                 share_source_region_size,
                 callback,
                 String::from("ask_split"),
+                split_reason,
             ),
             Task::AskBatchSplit {
                 region,
@@ -2473,34 +2607,44 @@ where
             Task::AutoSplit { split_infos } => {
                 let pd_client = self.pd_client.clone();
                 let router = self.router.clone();
-                let scheduler = self.scheduler.clone();
-                let remote = self.remote.clone();
-                let split_validator = self.split_validator.clone();
 
                 let f = async move {
-                    for split_info in split_infos {
-                        let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await
-                        else {
-                            continue;
+                    for mut split_info in split_infos {
+                        let region_id = split_info.region_id;
+                        let region = match pd_client.get_region_by_id(region_id).await {
+                            Ok(Some(region)) => region,
+                            Ok(None) => {
+                                warn!(
+                                    "region disappeared before auto split dispatch";
+                                    "region_id" => region_id,
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "failed to load region before auto split dispatch";
+                                    "region_id" => region_id,
+                                    "err" => ?e,
+                                );
+                                continue;
+                            }
                         };
                         // Try to split the region with the given split key.
-                        if let Some(split_key) = split_info.split_key {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                split_validator.clone(),
-                                region,
-                                vec![split_key],
-                                split_info.peer,
-                                true,
-                                false,
-                                Callback::None,
-                                String::from("auto_split"),
-                                remote.clone(),
-                                pdpb::SplitReason::Load,
-                            );
+                        // Classic raftstore intentionally ignores the telemetry peer here.
+                        // The current peer FSM owns execution identity and rejects candidates
+                        // received after leadership is lost instead of forwarding them.
+                        if let Some(msg) = take_auto_split_message(
+                            region.get_region_epoch().clone(),
+                            &mut split_info,
+                        ) {
+                            let result = router.send_casual_msg(region_id, msg);
+                            if let Err(e) = result {
+                                warn!(
+                                    "failed to route auto split through current peer";
+                                    "region_id" => region_id,
+                                    "err" => ?e,
+                                );
+                            }
                         // Try to split the region on half within the given key
                         // range if there is no `split_key` been given.
                         } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
@@ -2514,7 +2658,7 @@ where
                                 start_key: Some(start_key.clone()),
                                 end_key: Some(end_key.clone()),
                                 policy: pdpb::CheckPolicy::Scan,
-                                source: "auto_split",
+                                source: AUTO_SPLIT_SOURCE,
                                 cb: Callback::None,
                             });
                             if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
@@ -2812,7 +2956,8 @@ fn send_admin_request<EK, ER>(
     request: AdminRequest,
     callback: Callback<EK::Snapshot>,
     extra_opts: RaftCmdExtraOpts,
-) where
+) -> bool
+where
     EK: KvEngine,
     ER: RaftEngine,
 {
@@ -2830,7 +2975,9 @@ fn send_admin_request<EK, ER>(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
         );
+        return false;
     }
+    true
 }
 
 /// Sends a raft message to destroy the specified stale Peer
@@ -2966,6 +3113,43 @@ mod tests {
     use crate::store::util::build_key_range;
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
+
+    #[test]
+    fn test_auto_split_message_ignores_sampled_peer() {
+        let mut epoch = metapb::RegionEpoch::default();
+        epoch.set_version(7);
+        let mut sampled_peer = metapb::Peer::default();
+        sampled_peer.set_id(99);
+        let mut split_info = SplitInfo {
+            region_id: 42,
+            peer: sampled_peer,
+            split_key: Some(b"k".to_vec()),
+            start_key: None,
+            end_key: None,
+        };
+        let msg = take_auto_split_message::<KvTestEngine>(epoch.clone(), &mut split_info).unwrap();
+
+        match msg {
+            CasualMessage::SplitRegion {
+                region_epoch,
+                split_keys,
+                callback,
+                source,
+                share_source_region_size,
+            } => {
+                assert_eq!(region_epoch, epoch);
+                assert_eq!(split_keys, vec![b"k".to_vec()]);
+                assert!(matches!(callback, Callback::None));
+                assert_eq!(source, AUTO_SPLIT_SOURCE);
+                assert!(!share_source_region_size);
+                // The shared candidate retains this field for raftstore-v2, but the
+                // classic execution message carries no peer identity.
+                assert_eq!(split_info.peer.get_id(), 99);
+                assert!(split_info.split_key.is_none());
+            }
+            _ => panic!("unexpected auto split message"),
+        }
+    }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
@@ -3396,6 +3580,7 @@ mod tests {
                             network_out_bytes: 0,
                             logical_read_bytes: 0,
                             logical_write_bytes: 0,
+                            rocksdb_block_read_count: 0,
                         },
                     );
                     records
@@ -3558,6 +3743,7 @@ mod tests {
                             network_out_bytes: 0,
                             logical_read_bytes: 0,
                             logical_write_bytes: 0,
+                            rocksdb_block_read_count: 0,
                         },
                     );
                     records

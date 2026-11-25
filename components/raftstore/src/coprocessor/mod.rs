@@ -26,7 +26,7 @@ pub mod config;
 mod consistency_check;
 pub mod dispatcher;
 mod error;
-mod metrics;
+pub(crate) mod metrics;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
@@ -54,7 +54,7 @@ pub use self::{
     split_check::{
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
         TableCheckObserver, get_region_approximate_keys, get_region_approximate_middle,
-        get_region_approximate_size,
+        get_region_approximate_middle_in_range, get_region_approximate_size,
     },
 };
 pub use crate::store::{Bucket, KeyEntry};

@@ -68,6 +68,7 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
         ExprType::Sum => Ok(Box::new(super::impl_sum::AggrFnDefinitionParserSum)),
+        ExprType::SumInt => Ok(Box::new(super::impl_sum_int::AggrFnDefinitionParserSumInt)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
         ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
         ExprType::AggBitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>::new())),

@@ -159,6 +159,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.is_leader() {
             if !self.maybe_reject_transfer_leader_msg(ctx, msg.get_from(), peer_disk_usage) {
                 self.set_pending_transfer_leader_msg(&ctx.cfg, msg);
+                // A retry keeps the original deadline, which may have already
+                // elapsed. Check it immediately instead of waiting for another
+                // poll cycle.
                 if self.maybe_ack_transfer_leader_msg(ctx) {
                     self.set_has_ready();
                 }
@@ -259,6 +262,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.transfer_leader_state_mut().transfer_leader_msg = None;
             return false;
         }
+        let current_leader = self.leader_id();
+        let current_term = self.term();
+        if self
+            .transfer_leader_state_mut()
+            .reset_if_stale(current_leader, current_term)
+        {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state().transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
@@ -313,7 +324,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state_mut().transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state_mut()
+            .set_pending_message(msg, deadline);
     }
 
     /// Before ack the transfer leader message sent by the leader.

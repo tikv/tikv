@@ -48,6 +48,7 @@ use raft::{
     eraftpb::{self, Entry, EntryType, MessageType},
 };
 use rand::seq::SliceRandom;
+use resource_control::ResourceGroupManager;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -79,7 +80,7 @@ use super::{
     worker::BucketStatsInfo,
 };
 use crate::{
-    Error, Result,
+    DiscardReason, Error, Result,
     coprocessor::{
         CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
         TransferLeaderCustomContext,
@@ -117,6 +118,42 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
+
+fn extra_message_type_label(msg_type: ExtraMessageType) -> &'static str {
+    match msg_type {
+        ExtraMessageType::MsgRegionWakeUp => "region_wake_up",
+        ExtraMessageType::MsgWantRollbackMerge => "want_rollback_merge",
+        ExtraMessageType::MsgCheckStalePeer => "check_stale_peer",
+        ExtraMessageType::MsgCheckStalePeerResponse => "check_stale_peer_response",
+        ExtraMessageType::MsgHibernateRequest => "hibernate_request",
+        ExtraMessageType::MsgHibernateResponse => "hibernate_response",
+        ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+            "reject_raft_log_caused_by_memory_usage"
+        }
+        ExtraMessageType::MsgAvailabilityRequest => "availability_request",
+        ExtraMessageType::MsgAvailabilityResponse => "availability_response",
+        ExtraMessageType::MsgVoterReplicatedIndexRequest => "voter_replicated_index_request",
+        ExtraMessageType::MsgVoterReplicatedIndexResponse => "voter_replicated_index_response",
+        ExtraMessageType::MsgGcPeerRequest => "gc_peer_request",
+        ExtraMessageType::MsgGcPeerResponse => "gc_peer_response",
+        ExtraMessageType::MsgFlushMemtable => "flush_memtable",
+        ExtraMessageType::MsgRefreshBuckets => "refresh_buckets",
+        ExtraMessageType::MsgSnapGenPrecheckRequest => "snap_gen_precheck_request",
+        ExtraMessageType::MsgSnapGenPrecheckResponse => "snap_gen_precheck_response",
+        ExtraMessageType::MsgPreLoadRegionRequest => "pre_load_region_request",
+        ExtraMessageType::MsgPreLoadRegionResponse => "pre_load_region_response",
+    }
+}
+
+fn extra_message_send_failure_reason(err: &Error) -> &'static str {
+    match err {
+        Error::Transport(DiscardReason::Full) => "full",
+        Error::Transport(DiscardReason::Disconnected) => "disconnected",
+        Error::Transport(DiscardReason::Paused) => "paused",
+        Error::Transport(DiscardReason::Filtered) => "filtered",
+        _ => "other",
+    }
+}
 
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -535,6 +572,86 @@ pub fn should_renew_lease(
     // if commit merge runs slow on sibling peers.
     // when it enters force leader mode, should not renew lease.
     is_leader && !is_splitting && !is_merging && !has_force_leader
+}
+
+/// The encoded keys a proposal touches, for attributing it to tables.
+fn request_keys(req: &RaftCmdRequest) -> impl Iterator<Item = &[u8]> {
+    req.get_requests().iter().flat_map(|r| {
+        let key: &[u8] = match r.get_cmd_type() {
+            CmdType::Put => r.get_put().get_key(),
+            CmdType::Delete => r.get_delete().get_key(),
+            CmdType::Get => r.get_get().get_key(),
+            CmdType::DeleteRange => r.get_delete_range().get_start_key(),
+            _ => &[],
+        };
+        // `read_index` rides on `ReadIndex` and on transactional `Snap`
+        // requests alike (raftkv fills it for both), so key off the field.
+        let ranges = if r.has_read_index() {
+            r.get_read_index().get_key_ranges()
+        } else {
+            &[]
+        };
+        std::iter::once(key)
+            .chain(ranges.iter().map(|range| range.get_start_key()))
+            .filter(|k| !k.is_empty())
+    })
+}
+
+/// Marks the tables a blamed group's proposal touches as noisy, so every
+/// region holding them moves to the low-priority store pool.
+///
+/// Tables come from the request's own keys, since a region can hold several
+/// small tables. A keyless request (e.g. a snapshot read without ranges)
+/// falls back to the
+/// region's table only when the region holds exactly one.
+pub fn mark_noisy_table_if_blamed(
+    manager: Option<&Arc<ResourceGroupManager>>,
+    region: &metapb::Region,
+    req: &RaftCmdRequest,
+) {
+    let Some(manager) = manager else {
+        NOISY_MARK.no_manager.inc();
+        return;
+    };
+    let group = req.get_header().get_resource_group_name();
+    // Cheapest check first. Every exit is counted.
+    if group.is_empty() {
+        NOISY_MARK.no_group.inc();
+        return;
+    }
+    if !manager.is_noisy_group(group) {
+        NOISY_MARK.not_blamed.inc();
+        return;
+    }
+    let mut last = None;
+    let mut has_key = false;
+    for key in request_keys(req) {
+        has_key = true;
+        // Apply rejects a key outside the region, but only after this ran, so
+        // a bad request must not leave a mark on another region's table.
+        if util::check_key_in_region(key, region).is_err() {
+            NOISY_MARK.key_not_in_region.inc();
+            continue;
+        }
+        if let Some(table) = util::encoded_key_table_id(key) {
+            if last != Some(table) {
+                manager.mark_noisy_table(group, table);
+                last = Some(table);
+            }
+        }
+    }
+    if !has_key {
+        last = util::region_table_range(region)
+            .filter(|(first, last)| first == last)
+            .map(|(table, _)| table);
+        if let Some(table) = last {
+            manager.mark_noisy_table(group, table);
+        }
+    }
+    match last {
+        Some(_) => NOISY_MARK.marked.inc(),
+        None => NOISY_MARK.no_table.inc(),
+    }
 }
 
 // check if the request can be amended to the last pending read?
@@ -997,7 +1114,7 @@ where
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: !cfg.unsafe_disable_check_quorum,
-            skip_bcast_commit: true,
+            skip_bcast_commit: !cfg.raft_bcast_commit,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
@@ -1409,6 +1526,7 @@ where
         &mut self,
         engines: &Engines<EK, ER>,
         keep_data: bool,
+        fsm_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> Option<PeerClearMetaStat> {
@@ -1435,6 +1553,7 @@ where
             .schedule_destroy_peer(
                 peer.clone(),
                 region.clone(),
+                fsm_id,
                 keep_data,
                 local_first_replicate,
                 last_compacted_idx,
@@ -1748,9 +1867,20 @@ where
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
 
-        // Update leader info
-        self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+        // Test hook: a region update is the point where the raw Raft `leader_id` used
+        // to be published into the resolved-ts cache. While an election is still
+        // pending, `leader_id` is already `INVALID_ID` here even though the cache holds
+        // the old leader, so the tuple `consume_leader_info` compares would be poisoned
+        // without any published leadership change. Read-only: it decides when the test
+        // may inspect the window, it never writes state.
+        fail_point!(
+            "set_region_publishes_raw_leader_id",
+            self.leader_id() == raft::INVALID_ID
+                && self.read_progress.dump_leader_info().0.get_peer_id() != raft::INVALID_ID,
+            |_| {}
+        );
+
+        self.read_progress.update_region(self.region());
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
@@ -2413,6 +2543,11 @@ where
     fn on_role_changed<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            // A pending pre-transfer request belongs to the previous SoftState.
+            // In particular, a follower can learn about a new leader without
+            // changing its role. Do not let it ACK the old request to the new
+            // leader.
+            self.transfer_leader_state.reset_transferee_state();
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -2448,8 +2583,6 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
-                    // Exit entry cache warmup state when the peer becomes leader.
-                    self.transfer_leader_state.cache_warmup_state = None;
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -2813,7 +2946,7 @@ where
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
             msg.wait_data = false;
-            self.send_extra_message(msg, &mut ctx.trans, &leader);
+            self.send_extra_message(msg, ctx, &leader);
             info!(
                 "notify leader the peer is available";
                 "region_id" => self.region().get_id(),
@@ -3251,9 +3384,16 @@ where
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
-                // Urgent requests are flushed, make it lazy again.
-                self.raft_group.skip_bcast_commit(true);
+                // Urgent requests are flushed.
                 self.last_urgent_proposal_idx = u64::MAX;
+            }
+            if self.last_urgent_proposal_idx == u64::MAX {
+                // No urgent proposal is pending, so follow the configured
+                // policy. This runs on every batch of committed entries so a
+                // hot-reloaded `raft-bcast-commit` reaches existing leaders
+                // instead of only peers created after the change.
+                self.raft_group
+                    .skip_bcast_commit(!ctx.cfg.raft_bcast_commit);
             }
             let cbs = if !self.proposals.is_empty() {
                 let current_term = self.term();
@@ -3967,6 +4107,10 @@ where
         }
 
         ctx.raft_metrics.propose.all.inc();
+
+        if ctx.cfg.enable_noisy_tenant_demotion {
+            mark_noisy_table_if_blamed(ctx.resource_manager.as_ref(), self.region(), &req);
+        }
 
         let req_admin_cmd_type = if !req.has_admin_request() {
             None
@@ -4892,7 +5036,8 @@ where
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state
+            .set_pending_message(msg, deadline);
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -4905,6 +5050,14 @@ where
             return false;
         }
 
+        let current_leader = self.leader_id();
+        let current_term = self.term();
+        if self
+            .transfer_leader_state
+            .reset_if_stale(current_leader, current_term)
+        {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
@@ -5901,7 +6054,7 @@ where
     pub fn send_extra_message<T: Transport>(
         &self,
         msg: ExtraMessage,
-        trans: &mut T,
+        ctx: &mut PollContext<EK, ER, T>,
         to: &metapb::Peer,
     ) {
         let mut send_msg = self.prepare_raft_message();
@@ -5914,15 +6067,39 @@ where
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
-        if let Err(e) = trans.send(send_msg) {
-            warn!(
-                "failed to send extra message";
-                "err" => ?e,
-                "type" => ?ty,
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target" => ?to,
-            );
+        if let Err(e) = ctx.trans.send(send_msg) {
+            STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC
+                .with_label_values(&[
+                    extra_message_type_label(ty),
+                    extra_message_send_failure_reason(&e),
+                ])
+                .inc();
+            if matches!(&e, Error::Transport(DiscardReason::Full)) {
+                if let Some(suppressed_count) = ctx
+                    .extra_message_full_log_limiter
+                    .record(to.get_store_id(), ty)
+                {
+                    warn!(
+                        "failed to send extra message";
+                        "err" => ?e,
+                        "type" => ?ty,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "target" => ?to,
+                        "target_store_id" => to.get_store_id(),
+                        "suppressed_count" => suppressed_count,
+                    );
+                }
+            } else {
+                warn!(
+                    "failed to send extra message";
+                    "err" => ?e,
+                    "type" => ?ty,
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target" => ?to,
+                );
+            }
         }
     }
 
@@ -5997,7 +6174,7 @@ where
     ) {
         let mut msg = ExtraMessage::default();
         msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-        self.send_extra_message(msg, &mut ctx.trans, peer);
+        self.send_extra_message(msg, ctx, peer);
     }
 
     pub fn bcast_check_stale_peer_message<T: Transport>(
@@ -6022,7 +6199,7 @@ where
             }
             let mut extra_msg = ExtraMessage::default();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
-            self.send_extra_message(extra_msg, &mut ctx.trans, peer);
+            self.send_extra_message(extra_msg, ctx, peer);
         }
     }
 
@@ -6044,7 +6221,7 @@ where
     ) {
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckRequest);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_snap_gen_precheck_response<T: Transport>(
@@ -6056,7 +6233,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckResponse);
         extra_msg.set_snap_gen_precheck_passed(passed);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_want_rollback_merge<T: Transport>(
@@ -6079,7 +6256,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_index(premerge_commit);
-        self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
+        self.send_extra_message(extra_msg, ctx, &to_peer);
     }
 
     pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
@@ -6491,6 +6668,58 @@ pub struct TransferLeaderState {
     pub cache_warmup_state: Option<CacheWarmupState>,
 }
 
+impl TransferLeaderState {
+    /// Discards transferee state created for a previous leader or term.
+    ///
+    /// The peer FSM checks pending messages before processing Ready, so the
+    /// SoftState cleanup may not have run when this check is made.
+    /// A term change with the same leader ID may not produce a new SoftState,
+    /// so the leader ID alone cannot establish that the request is current.
+    /// This check must also happen before deadline evaluation: an expired
+    /// request from a previous leader or term must be discarded, not ACKed to
+    /// the current leader.
+    pub fn reset_if_stale(&mut self, current_leader: u64, current_term: u64) -> bool {
+        let is_stale = match &self.transfer_leader_msg {
+            Some((msg, _)) => {
+                msg.get_from() != current_leader || msg.get_log_term() != current_term
+            }
+            None => false,
+        };
+        if is_stale {
+            self.reset_transferee_state();
+        }
+        is_stale
+    }
+
+    /// Clears state created while this peer was a leader transferee.
+    ///
+    /// The state is valid only while the leader ID and term that accepted the
+    /// pre-transfer request remain current.
+    pub fn reset_transferee_state(&mut self) {
+        self.transfer_leader_msg = None;
+        self.cache_warmup_state = None;
+    }
+
+    /// Records a pre-transfer-leader message without extending the deadline
+    /// when the leader retries the same transfer attempt. A different sender
+    /// or leader term starts a new attempt.
+    ///
+    /// The preserved deadline may already have elapsed. Callers immediately
+    /// check the pending message: a request from the current leader receives
+    /// its timeout ACK, while a stale request is discarded first.
+    pub fn set_pending_message(&mut self, msg: &eraftpb::Message, deadline: Instant) {
+        let is_retry = self
+            .transfer_leader_msg
+            .as_ref()
+            .is_some_and(|(pending, _)| {
+                pending.get_from() == msg.get_from() && pending.get_log_term() == msg.get_log_term()
+            });
+        if !is_retry {
+            self.transfer_leader_msg = Some((msg.clone(), deadline));
+        }
+    }
+}
+
 mod memtrace {
     use std::mem;
 
@@ -6534,9 +6763,77 @@ mod memtrace {
 mod tests {
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
+    use tidb_query_datatype::codec::table as table_codec;
+    use tikv_util::codec::number::NumberEncoder;
+    use txn_types::Key;
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_pending_transfer_leader_message_deadline() {
+        let mut state = TransferLeaderState::default();
+        let first_deadline = Instant::now() + Duration::from_secs(1);
+        let mut first = eraftpb::Message::default();
+        first.set_from(1);
+        first.set_log_term(1);
+        first.set_index(10);
+        state.set_pending_message(&first, first_deadline);
+
+        // A retry of the same transfer attempt must preserve the first message
+        // and deadline even if fields such as the cache warmup index change.
+        let retry_deadline = first_deadline + Duration::from_secs(1);
+        let mut retry = first.clone();
+        retry.set_index(20);
+        state.set_pending_message(&retry, retry_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 10);
+        assert_eq!(*deadline, first_deadline);
+
+        // A request from a new leader term is a new attempt and gets its own
+        // message and deadline.
+        let next_deadline = retry_deadline + Duration::from_secs(1);
+        let mut next = retry;
+        next.set_log_term(2);
+        state.set_pending_message(&next, next_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 20);
+        assert_eq!(pending.get_log_term(), 2);
+        assert_eq!(*deadline, next_deadline);
+    }
+
+    #[test]
+    fn test_reset_transfer_leader_transferee_state() {
+        let mut msg = eraftpb::Message::default();
+        msg.set_from(1);
+        msg.set_log_term(5);
+        let mut state = TransferLeaderState {
+            leader_transferee: 10,
+            transfer_leader_msg: Some((msg.clone(), Instant::now() - Duration::from_secs(1))),
+            cache_warmup_state: Some(CacheWarmupState::new(
+                1,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )),
+        };
+
+        // Even an expired request must not be ACKed to a different leader.
+        assert!(state.reset_if_stale(2, 5));
+
+        // The leader-side state is handled separately when Ready is processed.
+        assert_eq!(state.leader_transferee, 10);
+        assert!(state.transfer_leader_msg.is_none());
+        assert!(state.cache_warmup_state.is_none());
+
+        state.transfer_leader_msg = Some((msg.clone(), Instant::now() - Duration::from_secs(1)));
+        assert!(state.reset_if_stale(1, 6));
+        assert!(state.transfer_leader_msg.is_none());
+
+        state.transfer_leader_msg = Some((msg, Instant::now() - Duration::from_secs(1)));
+        assert!(!state.reset_if_stale(1, 5));
+        assert!(state.transfer_leader_msg.is_some());
+    }
 
     #[test]
     fn test_sync_log() {
@@ -6999,5 +7296,268 @@ mod tests {
                 .get_custom_ctx(b"key3".as_slice()),
             None
         );
+    }
+
+    fn blamed_manager(groups: &[&str]) -> Arc<ResourceGroupManager> {
+        let manager = Arc::new(ResourceGroupManager::default());
+        manager.set_noisy_groups_for_test(groups.iter().map(|g| g.to_string()).collect());
+        manager
+    }
+
+    /// An encoded row key of `table_id`, with a timestamp as write-CF keys
+    /// have.
+    fn row_key(table_id: i64) -> Vec<u8> {
+        Key::from_raw(&table_codec::encode_row_key(table_id, 1))
+            .append_ts(10.into())
+            .into_encoded()
+    }
+
+    /// The encoded `t{table_id}` boundary a region split on that table has.
+    fn table_boundary(table_id: i64) -> Vec<u8> {
+        let mut raw = table_codec::TABLE_PREFIX.to_vec();
+        raw.encode_i64(table_id).unwrap();
+        Key::from_raw(&raw).into_encoded()
+    }
+
+    fn region(start: Vec<u8>, end: Vec<u8>) -> metapb::Region {
+        let mut region = metapb::Region::default();
+        region.set_start_key(start);
+        region.set_end_key(end);
+        region
+    }
+
+    fn cmd(group: &str, requests: Vec<Request>) -> RaftCmdRequest {
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_resource_group_name(group.to_owned());
+        req.set_requests(requests.into());
+        req
+    }
+
+    fn put(key: Vec<u8>) -> Request {
+        let mut r = Request::default();
+        r.set_cmd_type(CmdType::Put);
+        r.mut_put().set_key(key);
+        r
+    }
+
+    fn snap() -> Request {
+        let mut r = Request::default();
+        r.set_cmd_type(CmdType::Snap);
+        r
+    }
+
+    /// A region holding the small tables 100..=104.
+    fn multi_table_region() -> metapb::Region {
+        region(row_key(100), table_boundary(105))
+    }
+
+    #[test]
+    fn test_encoded_key_table_id() {
+        for table_id in [0i64, 1, 42, 255, 256, i64::MAX, -1] {
+            assert_eq!(
+                util::encoded_key_table_id(&row_key(table_id)),
+                Some(table_id)
+            );
+            assert_eq!(
+                util::encoded_key_table_id(&table_boundary(table_id)),
+                Some(table_id)
+            );
+        }
+        let index_key = Key::from_raw(&table_codec::encode_index_seek_key(7, 1, b"v"));
+        assert_eq!(util::encoded_key_table_id(index_key.as_encoded()), Some(7));
+
+        assert_eq!(util::encoded_key_table_id(b""), None);
+        assert_eq!(
+            util::encoded_key_table_id(Key::from_raw(b"m").as_encoded()),
+            None
+        );
+        assert_eq!(
+            util::encoded_key_table_id(Key::from_raw(b"t\x80").as_encoded()),
+            None
+        );
+        assert_eq!(util::encoded_key_table_id(b"t\x00\x00\x00"), None);
+    }
+
+    #[test]
+    fn test_region_table_range() {
+        let range = |start, end| util::region_table_range(&region(start, end));
+        // Small tables 100..=104 merged into one region; the end is exclusive.
+        assert_eq!(range(row_key(100), table_boundary(105)), Some((100, 104)));
+        // Ends inside table 105's data, so 105 is included.
+        assert_eq!(range(row_key(100), row_key(105)), Some((100, 105)));
+        assert_eq!(
+            range(table_boundary(100), table_boundary(101)),
+            Some((100, 100))
+        );
+        assert_eq!(range(row_key(100), row_key(100)), Some((100, 100)));
+
+        assert_eq!(range(vec![], vec![]), Some((i64::MIN, i64::MAX)));
+        assert_eq!(range(row_key(100), vec![]), Some((100, i64::MAX)));
+        assert_eq!(range(vec![], table_boundary(3)), Some((i64::MIN, 2)));
+
+        // Only keys before or after table data.
+        let enc = |raw: &[u8]| Key::from_raw(raw).into_encoded();
+        assert_eq!(range(vec![], enc(b"m\xff")), None);
+        assert_eq!(range(vec![], enc(b"t")), None);
+        assert_eq!(range(enc(b"u"), vec![]), None);
+        assert_eq!(
+            range(table_boundary(i64::MIN), table_boundary(i64::MIN)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_marks_the_table_the_request_touches() {
+        let manager = blamed_manager(&["noisy"]);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("noisy", vec![put(row_key(103))]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(103));
+        assert!(
+            !manager.is_noisy_table(100),
+            "the region's start table is not the one the group wrote to"
+        );
+    }
+
+    #[test]
+    fn test_marks_every_table_in_a_batch() {
+        let manager = blamed_manager(&["noisy"]);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd(
+                "noisy",
+                vec![put(row_key(101)), put(row_key(101)), put(row_key(102))],
+            ),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(101));
+        assert!(manager.is_noisy_table(102));
+    }
+
+    #[test]
+    fn test_marks_the_table_of_a_read_index_range() {
+        let manager = blamed_manager(&["noisy"]);
+        let mut r = Request::default();
+        r.set_cmd_type(CmdType::ReadIndex);
+        let mut range = kvproto::kvrpcpb::KeyRange::default();
+        range.set_start_key(row_key(104));
+        r.mut_read_index().mut_key_ranges().push(range);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("noisy", vec![r]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(104));
+    }
+
+    #[test]
+    fn test_marks_the_table_of_a_snap_read_range() {
+        // The shape `raftkv::async_snapshot` builds for a transactional read:
+        // `Snap` with the ranges in `read_index`.
+        let manager = blamed_manager(&["noisy"]);
+        let mut r = snap();
+        r.mut_read_index().set_start_ts(10);
+        let mut range = kvproto::kvrpcpb::KeyRange::default();
+        range.set_start_key(row_key(104));
+        r.mut_read_index().mut_key_ranges().push(range);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("noisy", vec![r]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(104));
+    }
+
+    #[test]
+    fn test_a_keyless_request_marks_only_a_single_table_region() {
+        let manager = blamed_manager(&["noisy"]);
+        let single = region(table_boundary(100), table_boundary(101));
+        mark_noisy_table_if_blamed(Some(&manager), &single, &cmd("noisy", vec![snap()]));
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &region(row_key(200), table_boundary(205)),
+            &cmd("noisy", vec![snap()]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(100));
+        assert!(
+            !manager.any_noisy_table_in(200, 204),
+            "a multi-table region cannot tell which table a keyless read was for"
+        );
+    }
+
+    #[test]
+    fn test_a_well_behaved_group_never_marks_its_table() {
+        let manager = blamed_manager(&["noisy"]);
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("quiet", vec![put(row_key(100))]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(!manager.is_noisy_table(100));
+    }
+
+    #[test]
+    fn test_a_key_outside_the_region_marks_nothing() {
+        let manager = blamed_manager(&["noisy"]);
+        // Right epoch, wrong region: apply would reject the write later.
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &region(table_boundary(300), table_boundary(301)),
+            &cmd("noisy", vec![put(row_key(100)), put(row_key(300))]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(!manager.is_noisy_table(100));
+        assert!(manager.is_noisy_table(300), "the in-region key still marks");
+    }
+
+    #[test]
+    fn test_a_table_is_re_marked_so_it_stays_demoted() {
+        let manager = blamed_manager(&["noisy"]);
+        let req = cmd("noisy", vec![put(row_key(300))]);
+        let r = region(table_boundary(300), table_boundary(301));
+
+        mark_noisy_table_if_blamed(Some(&manager), &r, &req);
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(300));
+
+        mark_noisy_table_if_blamed(Some(&manager), &r, &req);
+        manager.publish_noisy_tables_for_test(true);
+        assert!(manager.is_noisy_table(300));
+    }
+
+    #[test]
+    fn test_proposals_with_no_table_are_ignored() {
+        // No group, no manager, or a key outside table data: nothing is marked.
+        let manager = blamed_manager(&["noisy"]);
+        let r = multi_table_region();
+        mark_noisy_table_if_blamed(Some(&manager), &r, &cmd("", vec![put(row_key(100))]));
+        mark_noisy_table_if_blamed(None, &r, &cmd("noisy", vec![put(row_key(100))]));
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &region(vec![], vec![]),
+            &cmd("noisy", vec![put(Key::from_raw(b"m_meta").into_encoded())]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(!manager.any_noisy_table_in(i64::MIN, i64::MAX));
+    }
+
+    #[test]
+    fn test_nothing_is_marked_while_nothing_is_blamed() {
+        let manager = Arc::new(ResourceGroupManager::default());
+        mark_noisy_table_if_blamed(
+            Some(&manager),
+            &multi_table_region(),
+            &cmd("noisy", vec![put(row_key(100))]),
+        );
+        manager.publish_noisy_tables_for_test(true);
+        assert!(!manager.is_noisy_table(100));
     }
 }

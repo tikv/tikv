@@ -133,6 +133,12 @@ where
         Mailbox { mailbox, scheduler }
     }
 
+    /// Returns whether both mailboxes belong to the same FSM instance.
+    #[inline]
+    pub fn is_same_fsm(&self, other: &BasicMailbox<Owner>) -> bool {
+        Arc::ptr_eq(&self.mailbox.state, &other.state)
+    }
+
     /// Force sending a message despite channel capacity limit.
     #[inline]
     pub fn force_send(&self, msg: Owner::Message) -> Result<(), SendError<Owner::Message>> {

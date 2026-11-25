@@ -1,10 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::{StreamExt, compat::Future01CompatExt, stream};
 use kvproto::{
@@ -17,7 +13,9 @@ use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
+use tikv_util::{
+    error, info, resource_control::DEFAULT_RESOURCE_GROUP_NAME, timer::GLOBAL_TIMER_HANDLE, warn,
+};
 
 use crate::{ResourceGroupManager, resource_limiter::ResourceType};
 
@@ -187,37 +185,13 @@ impl ResourceManagerService {
 
     // report ru metrics periodically.
     pub async fn report_ru_metrics(&self) {
-        let mut last_group_statistics_map: HashMap<String, ReportStatistic> = HashMap::new();
+        let mut last_bg_statistics: Option<ReportStatistic> = None;
         // load controller config firstly.
         let config = self.load_controller_config().await;
         info!("load controller config"; "config" => ?config);
 
         loop {
-            let background_groups: Vec<_> = self
-                .manager
-                .resource_groups
-                .iter()
-                .filter_map(|kv| {
-                    let g = kv.value();
-                    g.limiter.clone().map(|limiter| {
-                        let io_statistics = limiter.get_limit_statistics(ResourceType::Io);
-                        let cpu_statistics = limiter.get_limit_statistics(ResourceType::Cpu);
-
-                        (
-                            g.group.name.clone(),
-                            ReportStatistic {
-                                // io statistics and cpu statistics should have the same version.
-                                version: io_statistics.version,
-                                read_bytes_consumed: io_statistics.read_consumed,
-                                write_bytes_consumed: io_statistics.write_consumed,
-                                cpu_consumed: cpu_statistics.total_consumed,
-                            },
-                        )
-                    })
-                })
-                .collect();
-
-            if background_groups.is_empty() {
+            if !self.manager.has_background_groups() {
                 let _ = GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + BACKGROUND_RU_REPORT_DURATION)
                     .compat()
@@ -225,55 +199,69 @@ impl ResourceManagerService {
                 continue;
             }
 
+            // All background groups share a single limiter; read it once and
+            // report under the fixed label "background".
+            let limiter = self.manager.get_background_limiter();
+            let io_statistics = limiter.get_limit_statistics(ResourceType::Io);
+            let cpu_statistics = limiter.get_limit_statistics(ResourceType::Cpu);
+            let statistic = ReportStatistic {
+                // io statistics and cpu statistics should have the same version.
+                version: io_statistics.version,
+                read_bytes_consumed: io_statistics.read_consumed,
+                write_bytes_consumed: io_statistics.write_consumed,
+                cpu_consumed: cpu_statistics.total_consumed,
+            };
+
+            // Non-existence or version change means this is a brand new limiter,
+            // so no need to sub the old statistics.
+            let (cpu_consumed, io_consumed) = if let Some(last_stats) = last_bg_statistics
+                .as_ref()
+                .filter(|s| s.version == statistic.version)
+            {
+                if statistic == *last_stats {
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + BACKGROUND_RU_REPORT_DURATION)
+                        .compat()
+                        .await;
+                    continue;
+                }
+                (
+                    statistic.cpu_consumed - last_stats.cpu_consumed,
+                    (
+                        statistic.read_bytes_consumed - last_stats.read_bytes_consumed,
+                        statistic.write_bytes_consumed - last_stats.write_bytes_consumed,
+                    ),
+                )
+            } else {
+                (
+                    statistic.cpu_consumed,
+                    (
+                        statistic.read_bytes_consumed,
+                        statistic.write_bytes_consumed,
+                    ),
+                )
+            };
+            last_bg_statistics = Some(statistic);
+
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
-            for (name, statistic) in background_groups.into_iter() {
-                // Non-existence or version change means this is a brand new limiter, so no need
-                // to sub the old statistics.
-                let (cpu_consumed, io_consumed) = if let Some(last_stats) =
-                    last_group_statistics_map
-                        .get(&name)
-                        .filter(|stats| statistic.version == stats.version)
-                {
-                    if statistic == *last_stats {
-                        continue;
-                    }
-                    (
-                        statistic.cpu_consumed - last_stats.cpu_consumed,
-                        (
-                            statistic.read_bytes_consumed - last_stats.read_bytes_consumed,
-                            statistic.write_bytes_consumed - last_stats.write_bytes_consumed,
-                        ),
-                    )
-                } else {
-                    (
-                        statistic.cpu_consumed,
-                        (
-                            statistic.read_bytes_consumed,
-                            statistic.write_bytes_consumed,
-                        ),
-                    )
-                };
-                // replace the previous statistics.
-                last_group_statistics_map.insert(name.clone(), statistic);
-                // report ru statistics.
-                let mut req = TokenBucketRequest::default();
-                req.set_resource_group_name(name.clone());
-                req.set_is_background(true);
-                let report_consumption = req.mut_consumption_since_last_request();
+            // report ru statistics.
+            let mut bucket_req = TokenBucketRequest::default();
+            bucket_req.set_resource_group_name(DEFAULT_RESOURCE_GROUP_NAME.to_owned());
+            bucket_req.set_is_background(true);
+            let report_consumption = bucket_req.mut_consumption_since_last_request();
 
-                let read_total = config.read_cpu_ms_cost * cpu_consumed as f64
-                    + config.read_cost_per_byte * io_consumed.0 as f64;
-                let write_total = config.write_cost_per_byte * io_consumed.1 as f64;
+            let read_total = config.read_cpu_ms_cost * cpu_consumed as f64
+                + config.read_cost_per_byte * io_consumed.0 as f64;
+            let write_total = config.write_cost_per_byte * io_consumed.1 as f64;
 
-                report_consumption.set_r_r_u(read_total);
-                report_consumption.set_w_r_u(write_total);
-                report_consumption.set_read_bytes(io_consumed.0 as f64);
-                report_consumption.set_write_bytes(io_consumed.1 as f64);
-                report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
+            report_consumption.set_r_r_u(read_total);
+            report_consumption.set_w_r_u(write_total);
+            report_consumption.set_read_bytes(io_consumed.0 as f64);
+            report_consumption.set_write_bytes(io_consumed.1 as f64);
+            report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
 
-                all_reqs.push(req);
-            }
+            all_reqs.push(bucket_req);
 
             if !all_reqs.is_empty()
                 && let Err(e) = self.pd_client.report_ru_metrics(req).await
@@ -555,7 +543,7 @@ pub mod tests {
         background_worker.spawn_async_task(async move {
             s_clone.report_ru_metrics().await;
         });
-        // Mock consume.
+        // Mock consume on the shared background limiter.
         let bg_limiter = s
             .manager
             .get_background_resource_limiter(BACKGROUND_WORKER_THREAD, "br")
@@ -571,22 +559,18 @@ pub mod tests {
         );
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
-        // Mock update version.
-        let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD.into(), 1000, 15);
-        s.manager.add_resource_group(bg);
 
+        // Add a second background group; all groups share the same limiter.
         let background_group = new_background_resource_group_ru(
-            BACKGROUND_WORKER_THREAD.into(),
+            "lightning_group".into(),
             500,
             8,
             vec!["lightning".into()],
         );
         s.manager.add_resource_group(background_group);
-        let new_bg_limiter = s
-            .manager
-            .get_background_resource_limiter(BACKGROUND_WORKER_THREAD, "lightning")
-            .unwrap();
-        new_bg_limiter.consume(
+        // Consuming through either group's limiter goes to the same shared
+        // limiter; the next report will reflect the delta.
+        bg_limiter.consume(
             Duration::from_secs(5),
             IoBytes {
                 read: 2000,

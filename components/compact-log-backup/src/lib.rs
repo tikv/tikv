@@ -3,6 +3,7 @@
 #![feature(test)]
 #![feature(custom_test_frameworks)]
 
+mod cache;
 mod compaction;
 mod errors;
 mod source;
@@ -15,5 +16,6 @@ pub mod exec_hooks;
 pub mod execute;
 
 pub use errors::{Error, ErrorKind, OtherErrExt, Result, TraceResultExt};
+pub use execute::ShardConfig;
 
 mod util;

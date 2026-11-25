@@ -23,6 +23,18 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
     OutOfBounds = 6,
 }}
 
+/// Lightweight, engine-agnostic PerfContext delta captured during the current
+/// observation window.
+///
+/// Currently only `block_read_count` is reported. Resource metering exposes it
+/// as `rocksdb_block_read_count` for the downstream `read_iops` dimension and
+/// uses it for relative attribution; it is not a device-level IOPS measurement.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PerfContextDelta {
+    /// RocksDB block read delta used for the downstream `read_iops` dimension.
+    pub block_read_count: u64,
+}
+
 /// Extensions for measuring engine performance.
 ///
 /// A PerfContext is created with a specific measurement level,
@@ -63,6 +75,10 @@ pub trait PerfContext: Send {
     /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
 
-    /// Reports the current collected metrics to prometheus and trackers
-    fn report_metrics(&mut self, trackers: &[TrackerToken]);
+    /// Reports the current collected metrics to prometheus and trackers.
+    ///
+    /// The returned delta covers the observation window started by the most
+    /// recent `start_observe` call. Callers should invoke this once per window
+    /// and attribute the returned values directly.
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> PerfContextDelta;
 }

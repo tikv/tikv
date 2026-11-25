@@ -11,7 +11,7 @@ use txn_types::{
 };
 
 use crate::storage::{
-    kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
+    kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, kv_processed_size},
     mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result, default_not_found_error},
     need_check_locks,
 };
@@ -362,13 +362,15 @@ impl<S: Snapshot> PointGetter<S> {
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
-                            self.statistics.processed_size += user_key.len() + value.len();
+                            self.statistics.processed_size +=
+                                kv_processed_size(user_key.len(), value.len());
                             return Ok(Some(ValueEntry::new(value.to_vec(), key_commit_ts)));
                         }
                         None => {
                             let start_ts = write.start_ts;
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
-                            self.statistics.processed_size += user_key.len() + value.len();
+                            self.statistics.processed_size +=
+                                kv_processed_size(user_key.len(), value.len());
                             return Ok(Some(ValueEntry::new(value, key_commit_ts)));
                         }
                     }
@@ -466,12 +468,14 @@ impl<S: Snapshot> PointGetter<S> {
                 match lock.short_value {
                     Some(value) => {
                         // Value is carried in `lock`.
-                        self.statistics.processed_size += user_key.len() + value.len();
+                        self.statistics.processed_size +=
+                            kv_processed_size(user_key.len(), value.len());
                         Ok(Some(value.to_vec()))
                     }
                     None => {
                         let value = self.load_data_from_default_cf(lock.ts, user_key)?;
-                        self.statistics.processed_size += user_key.len() + value.len();
+                        self.statistics.processed_size +=
+                            kv_processed_size(user_key.len(), value.len());
                         Ok(Some(value))
                     }
                 }

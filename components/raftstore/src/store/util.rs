@@ -29,16 +29,18 @@ use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
 };
 use raft_proto::ConfChangeI;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::{
     Either, box_err,
     codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
     time::{Instant, Timespec, monotonic_raw_now},
+    warn,
 };
 use time::Duration;
 use tokio::sync::Notify;
-use txn_types::WriteBatchFlags;
+use txn_types::{Key, WriteBatchFlags};
 
 use super::{Config, metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage};
 use crate::{
@@ -48,6 +50,7 @@ use crate::{
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
+const CHECK_LEADER_REJECT_LOG_LIMIT: usize = 3;
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
@@ -1313,7 +1316,20 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        // A rejected region is recorded while the registry lock is held and
+        // logged after it is released, so that formatting the entry never
+        // extends the critical section.
+        struct Rejection<'a> {
+            reason: &'static str,
+            request: &'a LeaderInfo,
+            /// `None` when the region is absent from the registry.
+            cached: Option<(LeaderInfo, Option<u64>)>,
+        }
+
+        let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
+        let mut rejected_count = 0;
+        let mut rejections: Vec<Rejection<'_>> = Vec::new();
         let registry = self.registry.lock().unwrap();
         let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
@@ -1321,8 +1337,67 @@ impl RegionReadProgressRegistry {
             if let Some(rp) = registry.get(&region_id) {
                 if rp.consume_leader_info(leader_info, coprocessor, now) {
                     regions.push(region_id);
+                } else {
+                    rejected_count += 1;
+                    if rejections.len() < CHECK_LEADER_REJECT_LOG_LIMIT {
+                        rejections.push(Rejection {
+                            reason: "leader_info_mismatch",
+                            request: leader_info,
+                            cached: Some(rp.dump_leader_info()),
+                        });
+                    }
+                }
+            } else {
+                rejected_count += 1;
+                if rejections.len() < CHECK_LEADER_REJECT_LOG_LIMIT {
+                    rejections.push(Rejection {
+                        reason: "registry_miss",
+                        request: leader_info,
+                        cached: None,
+                    });
                 }
             }
+        }
+        drop(registry);
+
+        let logged_rejection_count = rejections.len();
+        for rejection in &rejections {
+            let request = rejection.request;
+            match &rejection.cached {
+                Some((cached, cached_leader_store_id)) => warn!(
+                    "[resolved-ts-stuck] check leader task rejected region";
+                    "reason" => rejection.reason,
+                    "region_id" => request.get_region_id(),
+                    "request_peer_id" => request.peer_id,
+                    "request_term" => request.term,
+                    "request_epoch_conf_ver" => request.get_region_epoch().get_conf_ver(),
+                    "request_epoch_version" => request.get_region_epoch().get_version(),
+                    "cached_leader_peer_id" => cached.peer_id,
+                    "cached_leader_term" => cached.term,
+                    "cached_epoch_conf_ver" => cached.get_region_epoch().get_conf_ver(),
+                    "cached_epoch_version" => cached.get_region_epoch().get_version(),
+                    "cached_leader_store_id" => ?cached_leader_store_id,
+                ),
+                None => warn!(
+                    "[resolved-ts-stuck] check leader task rejected region";
+                    "reason" => rejection.reason,
+                    "region_id" => request.get_region_id(),
+                    "request_peer_id" => request.peer_id,
+                    "request_term" => request.term,
+                    "request_epoch_conf_ver" => request.get_region_epoch().get_conf_ver(),
+                    "request_epoch_version" => request.get_region_epoch().get_version(),
+                ),
+            }
+        }
+        if regions.len() < request_count {
+            warn!(
+                "[resolved-ts-stuck] check leader task returned partial regions";
+                "request_count" => request_count,
+                "response_count" => regions.len(),
+                "rejected_count" => rejected_count,
+                "logged_rejection_count" => logged_rejection_count,
+                "rejection_log_truncated" => rejected_count > logged_rejection_count,
+            );
         }
         regions
     }
@@ -1518,16 +1593,11 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
-        if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
-            core.leader_info.epoch = region.get_region_epoch().clone();
-        }
-        if core.leader_info.peers != region.get_peers() {
-            // In v2, we check peers and region epoch independently, because
-            // peers are incomplete but epoch is set correctly during split.
-            core.leader_info.peers = region.get_peers().to_vec();
-        }
-        core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+        core.update_region(region);
+    }
+
+    pub fn update_region(&self, region: &Region) {
+        self.core.lock().unwrap().update_region(region);
     }
 
     /// Reset `safe_ts` and `read_index_safe_ts` to 0 and stop updating them
@@ -1703,6 +1773,19 @@ impl RegionReadProgressCore {
             last_instant_of_update_safe_ts: None,
             last_instant_of_consume_leader: None,
         }
+    }
+
+    fn update_region(&mut self, region: &Region) {
+        if !is_region_epoch_equal(region.get_region_epoch(), &self.leader_info.epoch) {
+            self.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if self.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
+            self.leader_info.peers = region.get_peers().to_vec();
+        }
+        self.leader_info.leader_store_id =
+            find_store_id(&self.leader_info.peers, self.leader_info.leader_id);
     }
 
     // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
@@ -1901,6 +1984,64 @@ pub fn validate_split_region(
         check_key_in_region(key, region)?;
     }
     Ok(())
+}
+
+/// The TiDB table a memcomparable-encoded key belongs to, or `None` if it is
+/// not table data. A trailing timestamp is ignored.
+///
+/// Runs on the proposal path, so it does not decode the key. The encoding
+/// writes the raw key in groups of eight bytes, each followed by a marker of
+/// `0xFF` minus the group's padding. The table prefix is `t` plus an 8-byte
+/// id, nine raw bytes: all of the first group and the first byte of the
+/// second, so only the first eighteen encoded bytes are read.
+pub fn encoded_key_table_id(encoded_key: &[u8]) -> Option<i64> {
+    const GROUP: usize = 8;
+    const MARKER: u8 = 0xFF;
+    const ENCODED_GROUP: usize = GROUP + 1;
+    if encoded_key.len() < 2 * ENCODED_GROUP {
+        return None;
+    }
+    let (first, second) = encoded_key.split_at(ENCODED_GROUP);
+    // The first group is full; the second holds at least one raw byte.
+    if first[GROUP] != MARKER || second[GROUP] < MARKER - (GROUP as u8 - 1) {
+        return None;
+    }
+    let mut prefix = [0u8; table_codec::TABLE_PREFIX_KEY_LEN];
+    prefix[..GROUP].copy_from_slice(&first[..GROUP]);
+    prefix[GROUP] = second[0];
+    table_codec::decode_table_id(&prefix).ok()
+}
+
+/// The inclusive range of TiDB table ids the region's keys can belong to, or
+/// `None` if it holds no table data.
+pub fn region_table_range(region: &metapb::Region) -> Option<(i64, i64)> {
+    // Encoded start of the `t` and `u` keyspaces, bounding all table data.
+    let space = |prefix: &[u8]| Key::from_raw(prefix).into_encoded();
+
+    let start = region.get_start_key();
+    let first = match encoded_key_table_id(start) {
+        Some(table) => table,
+        None if start < space(b"u").as_slice() => i64::MIN,
+        None => return None,
+    };
+
+    let end = region.get_end_key();
+    let last = if end.is_empty() {
+        i64::MAX
+    } else {
+        let raw = Key::from_encoded_slice(end).to_raw().ok();
+        match raw
+            .as_deref()
+            .map(|r| (r.len(), table_codec::decode_table_id(r)))
+        {
+            // Exactly `t{table}`: the end is exclusive, so `table` is outside.
+            Some((table_codec::TABLE_PREFIX_KEY_LEN, Ok(table))) => table.checked_sub(1)?,
+            Some((_, Ok(table))) => table,
+            _ if end <= space(b"t").as_slice() => return None,
+            _ => i64::MAX,
+        }
+    };
+    (first <= last).then_some((first, last))
 }
 
 #[cfg(test)]
@@ -2524,6 +2665,31 @@ mod tests {
     }
 
     #[test]
+    fn test_update_region_keeps_leader_info() {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
+        region.set_peers(vec![new_peer(1, 1), new_peer(2, 2)].into());
+
+        let rrp = RegionReadProgress::new(&region, 10, 10, 2);
+        rrp.update_leader_info(1, 5, &region);
+
+        let mut updated_region = region.clone();
+        updated_region.mut_region_epoch().set_conf_ver(2);
+        updated_region.mut_peers().push(new_peer(3, 3));
+        rrp.update_region(&updated_region);
+
+        let core = rrp.core.lock().unwrap();
+        let leader_info = core.get_local_leader_info();
+        assert_eq!(leader_info.leader_id, 1);
+        assert_eq!(leader_info.leader_term, 5);
+        assert_eq!(leader_info.epoch, *updated_region.get_region_epoch());
+        assert_eq!(leader_info.peers, *updated_region.get_peers());
+        assert_eq!(leader_info.leader_store_id, Some(1));
+    }
+
+    #[test]
     fn test_peer_id_mismatch() {
         use kvproto::errorpb::{Error, MismatchPeerId};
         let mut header = RaftRequestHeader::default();
@@ -2902,5 +3068,38 @@ mod tests {
         let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
         rrp.merge_safe_ts(40, 10, &coprocessor_host);
         assert_eq!(rrp.read_index_safe_ts(), 0);
+    }
+
+    #[test]
+    fn test_encoded_key_table_id_matches_a_full_decode() {
+        let full = |encoded: &[u8]| -> Option<i64> {
+            let raw = Key::from_encoded_slice(encoded).to_raw().ok()?;
+            table_codec::decode_table_id(&raw).ok()
+        };
+        let mut boundary = table_codec::TABLE_PREFIX.to_vec();
+        boundary.encode_i64(104).unwrap();
+        let cases: Vec<Vec<u8>> = vec![
+            Key::from_raw(&table_codec::encode_row_key(104, 1)).into_encoded(),
+            Key::from_raw(&table_codec::encode_row_key(-5, 7)).into_encoded(),
+            Key::from_raw(&table_codec::encode_row_key(104, 1))
+                .append_ts(10.into())
+                .into_encoded(),
+            Key::from_raw(&boundary).into_encoded(),
+            Key::from_raw(&table_codec::encode_index_seek_key(104, 2, &[1u8; 40])).into_encoded(),
+            Key::from_raw(b"t").into_encoded(),
+            Key::from_raw(b"t1234").into_encoded(),
+            Key::from_raw(b"m_meta").into_encoded(),
+            Key::from_raw(b"u12345678xyz").into_encoded(),
+            Vec::new(),
+            vec![0u8; 5],
+            vec![0xFFu8; 18],
+        ];
+        for key in cases {
+            assert_eq!(encoded_key_table_id(&key), full(&key), "{:?}", key);
+        }
+        assert_eq!(
+            encoded_key_table_id(&Key::from_raw(&boundary).into_encoded()),
+            Some(104)
+        );
     }
 }

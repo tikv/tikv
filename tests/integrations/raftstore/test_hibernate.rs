@@ -11,9 +11,28 @@ use futures::executor::block_on;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raftstore::store::msg::*;
+use raftstore::store::{GroupState, msg::*};
 use test_raftstore::*;
 use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
+
+fn must_wait_until_hibernated<T: Simulator>(cluster: &Cluster<T>, region_id: u64, store_id: u64) {
+    let start = Instant::now();
+    let timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * 3
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let mut state = GroupState::Ordered;
+    while start.saturating_elapsed() < timeout {
+        state = cluster.unstable_entries_state(region_id, store_id).0;
+        if state == GroupState::Idle {
+            return;
+        }
+        thread::sleep(cluster.cfg.raft_store.raft_base_tick_interval.0);
+    }
+    panic!(
+        "region {} store {} failed to hibernate, state: {:?}",
+        region_id, store_id, state
+    );
+}
 
 #[test]
 fn test_proposal_prevent_sleep() {
@@ -513,19 +532,18 @@ fn test_hibernate_quorum_feature_basic() {
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // Wait till leader peer goes to sleep.
-    thread::sleep(
-        cluster.cfg.raft_store.raft_base_tick_interval.0
-            * 3
-            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
-    );
+    must_wait_until_hibernated(&cluster, 1, 1);
     let awakened = Arc::new(AtomicBool::new(false));
     let filter = Arc::new(AtomicBool::new(false));
     let a = awakened.clone();
+    let enabled = filter.clone();
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Send)
             .set_msg_callback(Arc::new(move |_| {
-                a.store(true, Ordering::SeqCst);
+                if enabled.load(Ordering::SeqCst) {
+                    a.store(true, Ordering::SeqCst);
+                }
             }))
             .when(filter.clone()),
     ));
@@ -550,20 +568,19 @@ fn test_hibernate_quorum_feature_basic() {
     filter.store(false, Ordering::SeqCst);
     awakened.store(false, Ordering::SeqCst);
     let a = awakened.clone();
+    let enabled = filter.clone();
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Send)
             .set_msg_callback(Arc::new(move |_| {
-                a.store(true, Ordering::SeqCst);
+                if enabled.load(Ordering::SeqCst) {
+                    a.store(true, Ordering::SeqCst);
+                }
             }))
             .when(filter.clone()),
     ));
     // Wait till leader peer goes to sleep.
-    thread::sleep(
-        cluster.cfg.raft_store.raft_base_tick_interval.0
-            * 3
-            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
-    );
+    must_wait_until_hibernated(&cluster, 1, 1);
     filter.store(true, Ordering::SeqCst);
     thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
     // Leader can go to sleep as voters can reach majority.
@@ -579,20 +596,19 @@ fn test_hibernate_quorum_feature_basic() {
     filter.store(false, Ordering::SeqCst);
     awakened.store(false, Ordering::SeqCst);
     let a = awakened.clone();
+    let enabled = filter.clone();
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Send)
             .set_msg_callback(Arc::new(move |_| {
-                a.store(true, Ordering::SeqCst);
+                if enabled.load(Ordering::SeqCst) {
+                    a.store(true, Ordering::SeqCst);
+                }
             }))
             .when(filter.clone()),
     ));
     // Wait till leader peer goes to sleep.
-    thread::sleep(
-        cluster.cfg.raft_store.raft_base_tick_interval.0
-            * 3
-            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
-    );
+    must_wait_until_hibernated(&cluster, 1, 1);
     filter.store(true, Ordering::SeqCst);
     thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
     // Leader can go to sleep as voters can reach majority.
@@ -609,20 +625,19 @@ fn test_hibernate_quorum_feature_basic() {
     filter.store(false, Ordering::SeqCst);
     awakened.store(false, Ordering::SeqCst);
     let a = awakened.clone();
+    let enabled = filter.clone();
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Send)
             .set_msg_callback(Arc::new(move |_| {
-                a.store(true, Ordering::SeqCst);
+                if enabled.load(Ordering::SeqCst) {
+                    a.store(true, Ordering::SeqCst);
+                }
             }))
             .when(filter.clone()),
     ));
     // Wait till leader peer goes to sleep.
-    thread::sleep(
-        cluster.cfg.raft_store.raft_base_tick_interval.0
-            * 3
-            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
-    );
+    must_wait_until_hibernated(&cluster, 1, 1);
     filter.store(true, Ordering::SeqCst);
     thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
     // Leader can go to sleep after down voter recover.

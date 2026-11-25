@@ -21,6 +21,7 @@ use txn_types::{WriteRef, WriteType};
 
 use super::{EpochHint, Subcompaction, SubcompactionResult};
 use crate::{
+    cache::PhysicalFileCache,
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
@@ -73,12 +74,14 @@ pub struct SubcompactionExecArg<DB> {
     pub db: Option<DB>,
     /// The output storage.
     pub storage: Arc<dyn ExternalStorage>,
+    /// Optional cache for raw physical input files.
+    pub physical_file_cache: Option<Arc<PhysicalFileCache>>,
 }
 
 impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
     fn from(value: SubcompactionExecArg<DB>) -> Self {
         Self {
-            source: Source::new(Arc::clone(&value.storage)),
+            source: Source::new(Arc::clone(&value.storage), value.physical_file_cache),
             output: value.storage,
             out_prefix: value
                 .out_prefix
@@ -99,6 +102,7 @@ impl SubcompactionExec<RocksEngine> {
             storage,
             out_prefix: None,
             db: None,
+            physical_file_cache: None,
         })
     }
 }
@@ -255,6 +259,7 @@ where
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
+        let _cache_refs = self.source.cache_input_refs(&c.inputs);
 
         let items = super::util::execute_all_ext(
             c.inputs

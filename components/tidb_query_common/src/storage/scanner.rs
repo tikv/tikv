@@ -173,8 +173,9 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     .map_err(|e| StorageError(anyhow::Error::from(e)))?;
                 return Ok(Some(kv));
             } else {
-                // No more row in the range.
+                // Empty ranges consume the scheduling budget too.
                 self.ranges_iter.notify_drained();
+                self.rescheduler.check_reschedule(force_check).await;
             }
         }
     }
@@ -190,6 +191,19 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     pub fn collect_scanned_rows_per_range(&mut self, dest: &mut Vec<usize>) {
         dest.append(&mut self.scanned_rows_per_range);
         self.scanned_rows_per_range.push(0);
+    }
+
+    /// Returns the total number of rows scanned since the last collection,
+    /// without clearing the internal state.
+    pub fn peek_scanned_rows_sum(&self) -> usize {
+        self.scanned_rows_per_range.iter().sum()
+    }
+
+    /// Returns the total number of bytes scanned so far (key plus value of
+    /// every returned entry), without modifying internal state. Delegates to
+    /// the underlying storage; see `Storage::scanned_bytes`.
+    pub fn peek_scanned_bytes_sum(&self) -> usize {
+        self.storage.scanned_bytes()
     }
 
     /// Returns scanned range since last call.
@@ -317,6 +331,47 @@ mod tests {
             (b"foo_3", b"5"),
         ];
         FixtureStorage::from(data)
+    }
+
+    #[test]
+    fn test_empty_ranges_yield() {
+        use std::{future::Future, task::Context};
+
+        use futures::{pin_mut, task::noop_waker};
+
+        // Cover point lookups and interval scans in both directions. The
+        // scheduling assertion uses an expired budget rather than slow storage.
+        for ranges in [
+            vec![PointRange::from("a").into(), PointRange::from("c").into()],
+            vec![
+                IntervalRange::from(("a", "b")).into(),
+                IntervalRange::from(("c", "d")).into(),
+            ],
+        ] {
+            for scan_backward_in_range in [false, true] {
+                let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+                    storage: FixtureStorage::from(Vec::<(Vec<u8>, Vec<u8>)>::new()),
+                    ranges: ranges.clone(),
+                    scan_backward_in_range,
+                    is_key_only: false,
+                    is_scanned_range_aware: true,
+                    load_commit_ts: false,
+                });
+                scanner.rescheduler.prev_start = Instant::now() - Duration::from_millis(10);
+                {
+                    let next = scanner.next();
+                    pin_mut!(next);
+                    let waker = noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    assert!(next.as_mut().poll(&mut cx).is_pending());
+                    assert_eq!(block_on(next).unwrap(), None);
+                }
+                let mut scanned_rows = Vec::new();
+                scanner.collect_scanned_rows_per_range(&mut scanned_rows);
+                assert_eq!(scanned_rows, vec![0, 0]);
+                assert_eq!(block_on(scanner.next()).unwrap(), None);
+            }
+        }
     }
 
     #[test]
@@ -488,6 +543,50 @@ mod tests {
         scanner.collect_scanned_rows_per_range(&mut scanned_rows_per_range);
         assert_eq!(scanned_rows_per_range, vec![0]);
         scanned_rows_per_range.clear();
+    }
+
+    #[test]
+    fn test_scanned_bytes() {
+        let storage = create_storage();
+
+        // [foo, foo_3a) yields foo->1, foo_2->3, foo_3->5; the trailing point
+        // ranges exercise the get path with a hit and a miss.
+        let ranges: Vec<Range> = vec![
+            IntervalRange::from(("foo", "foo_3a")).into(),
+            PointRange::from("bar_2").into(),
+            PointRange::from("bar_3").into(),
+        ];
+        let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            storage,
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+            load_commit_ts: false,
+        });
+
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 0);
+
+        // "foo" (3) + "1" (1) = 4.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 4);
+
+        // "foo_2" (5) + "3" (1) = 6, cumulative 10.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_2");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 10);
+
+        // "foo_3" (5) + "5" (1) = 6, cumulative 16.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_3");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 16);
+
+        // Point-range hit: "bar_2" (5) + "4" (1) = 6, cumulative 22.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"bar_2");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 22);
+
+        // Point-range miss adds nothing, and draining does not change the
+        // (non-destructive) peeked total.
+        assert_eq!(block_on(scanner.next()).unwrap(), None);
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 22);
     }
 
     #[test]

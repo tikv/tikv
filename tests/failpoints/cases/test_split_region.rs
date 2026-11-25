@@ -2,7 +2,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, channel},
     },
     thread,
@@ -17,7 +17,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-    pdpb::CheckPolicy,
+    pdpb::{CheckPolicy, RegionHeartbeatResponse},
     raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
@@ -25,6 +25,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
     Result,
+    coprocessor::{get_region_approximate_keys, get_region_approximate_size},
     store::{
         Callback, PeerMsg, WriteResponse,
         config::Config as RaftstoreConfig,
@@ -749,6 +750,131 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     must_get_none(&cluster.get_engine(2), b"k1");
 }
 
+#[test]
+fn test_async_destroy_completion_after_same_id_split() {
+    check_async_destroy_completion_during_same_id_split(false);
+}
+
+#[test]
+fn test_async_destroy_finalization_after_same_id_split() {
+    check_async_destroy_completion_during_same_id_split(true);
+}
+
+fn check_async_destroy_completion_during_same_id_split(completion_received: bool) {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let region_id = cluster.run_conf_change();
+    assert_eq!(region_id, 1);
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Store 2 first creates an uninitialized split child from Raft messages.
+    // Hold both snapshots until the parent can replay its split log.
+    let parent_snapshot = "before_check_snapshot_1_2";
+    let child_snapshot = "before_check_snapshot_1000_2";
+    fail::cfg(parent_snapshot, "pause").unwrap();
+    fail::cfg(child_snapshot, "pause").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k22", b"v22");
+    must_get_none(&cluster.get_engine(2), b"k1");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let child_peer = find_peer(&left, 2).cloned().unwrap();
+    pd_client.must_remove_peer(left.get_id(), child_peer.clone());
+
+    // Mark the child for split replacement, but let its removal start before
+    // the parent persists and registers that replacement.
+    let (split_tx, split_rx) = crossbeam::channel::bounded(0);
+    let split_check = "on_handle_apply_split_2_after_mem_check";
+    fail::cfg_callback(split_check, move || {
+        let _ = split_tx.send(());
+        let _ = split_tx.send(());
+    })
+    .unwrap();
+    fail::remove(parent_snapshot);
+    split_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Exercise both routing to a replacement and finalizing the old FSM after
+    // it has already received completion. Neither may touch the replacement.
+    let completion_gate = if completion_received {
+        "raft_store_after_destroy_peer"
+    } else {
+        "before_clear_peer_meta"
+    };
+    let (started_tx, started_rx) = crossbeam::channel::bounded(0);
+    let (resume_tx, resume_rx) = crossbeam::channel::bounded::<()>(0);
+    fail::cfg_callback(completion_gate, move || {
+        let _ = started_tx.send(());
+        let _ = resume_rx.recv();
+    })
+    .unwrap();
+    let (stale_tx, stale_rx) = mpsc::channel();
+    fail::cfg_callback("on_stale_destroy_peer_completion", move || {
+        stale_tx.send(()).unwrap();
+    })
+    .unwrap();
+    fail::remove(child_snapshot);
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Keep the split-created child alive even though PD has already removed it.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    fail::cfg("peer_check_stale_state", "return()").unwrap();
+    fail::remove(split_check);
+    split_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    for _ in 0..500 {
+        let ready = cluster.store_metas[&2]
+            .lock()
+            .unwrap()
+            .regions
+            .get(&left.get_id())
+            .is_some_and(|r| !r.get_peers().is_empty());
+        if ready {
+            break;
+        }
+        sleep_ms(10);
+    }
+    let replacement = cluster.store_metas[&2].lock().unwrap().regions[&left.get_id()].clone();
+    assert_eq!(find_peer(&replacement, 2), Some(&child_peer));
+
+    drop(resume_tx);
+    stale_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove(completion_gate);
+    fail::remove("on_stale_destroy_peer_completion");
+
+    // Check routing as well as data: a stale completion must not close the new
+    // mailbox or erase its shared Region/read metadata.
+    let response = cluster
+        .call_command_on_node(
+            2,
+            new_status_request(left.get_id(), child_peer, new_region_leader_cmd()),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(!response.get_header().has_error(), "{:?}", response);
+    {
+        let meta = cluster.store_metas[&2].lock().unwrap();
+        assert_eq!(meta.regions[&left.get_id()], replacement);
+        assert!(meta.readers.contains_key(&left.get_id()));
+        assert!(meta.region_read_progress.get(&left.get_id()).is_some());
+    }
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    cluster.clear_send_filters();
+    fail::remove("peer_check_stale_state");
+    must_get_none(&cluster.get_engine(2), b"k1");
+}
+
 // Test if a peer can be created from splitting when another uninitialied peer
 // with the same peer id has been created on this store.
 #[test]
@@ -1091,6 +1217,14 @@ fn test_report_approximate_size_after_split_check() {
     fail::remove("on_approximate_region_size");
     rx.recv().unwrap();
     fail::remove("test_raftstore::pd::region_heartbeat");
+    // Notifications may belong to an earlier check or a retry-hint-only
+    // update. Wait for PD to receive statistics reflecting the writes.
+    test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .is_some_and(|size| size > approximate_size)
+    });
     let size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
@@ -1099,6 +1233,106 @@ fn test_report_approximate_size_after_split_check() {
     let region_number = cluster.pd_client.get_regions_number();
     assert_eq!(region_number, 1);
     assert!(size > approximate_size);
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_disable_split_check() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(1440));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(960));
+    cluster.cfg.coprocessor.enable_region_bucket = Some(false);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    // Wait for PD's disable notification before allowing any split checks.
+    fail::cfg("on_split_region_check_tick", "return").unwrap();
+    let region_id = cluster.run_conf_change();
+    cluster.must_put_cf(CF_WRITE, b"k0", b"v0");
+    let region = cluster.get_region(b"k0");
+    let peer = region.get_peers()[0].clone();
+    let (change_tx, change_rx) = mpsc::channel();
+    fail::cfg_callback("pd_after_change_split", move || {
+        let _ = change_tx.send(());
+    })
+    .unwrap();
+    let change_split = |enabled| {
+        let mut resp = RegionHeartbeatResponse::default();
+        resp.set_region_id(region_id);
+        resp.set_region_epoch(region.get_region_epoch().clone());
+        resp.set_target_peer(peer.clone());
+        resp.mut_change_split().set_auto_split_enabled(enabled);
+        pd_client.send_region_heartbeat_response(peer.get_store_id(), resp);
+        change_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    };
+    change_split(false);
+
+    let scans = Arc::new(AtomicUsize::new(0));
+    let scans1 = scans.clone();
+    fail::cfg_callback("scan_split_keys", move || {
+        scans1.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+    let (check_tx, check_rx) = mpsc::channel();
+    fail::cfg_callback("split_check_disabled", move || {
+        let _ = check_tx.send(());
+    })
+    .unwrap();
+    fail::remove("on_split_region_check_tick");
+
+    let value = vec![0; 1024];
+    for i in 1..10 {
+        cluster.must_put_cf(CF_WRITE, format!("k{i:04}").as_bytes(), &value);
+    }
+    cluster.must_flush_cf(CF_WRITE, true);
+    let engine = cluster.get_engine(peer.get_store_id());
+    let read_stats = || {
+        (
+            get_region_approximate_size(&engine, &region, 0).unwrap(),
+            get_region_approximate_keys(&engine, &region, 0).unwrap(),
+        )
+    };
+    // A check racing with a flush can count both the memtable and its SST.
+    // Wait for the stable post-flush values before comparing two write batches.
+    let (old_size, old_keys) = read_stats();
+    assert!(old_size >= 9 * 1024);
+    assert!(old_keys >= 10);
+    // Discard notifications caused by the initial writes and flush. The
+    // following receives must correspond to idle split-check ticks.
+    while check_rx.try_recv().is_ok() {}
+    // Multiple ticks must keep running without scanning or requiring new writes.
+    for _ in 0..3 {
+        check_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        pd_client.get_region_approximate_size(region_id) == Some(old_size)
+            && pd_client.get_region_approximate_keys(region_id) == Some(old_keys)
+    });
+    for i in 10..20 {
+        cluster.must_put_cf(CF_WRITE, format!("k{i:04}").as_bytes(), &value);
+    }
+    cluster.must_flush_cf(CF_WRITE, true);
+    let (size, keys) = read_stats();
+    assert!(size > old_size);
+    assert!(keys > old_keys);
+    test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        pd_client.get_region_approximate_size(region_id) == Some(size)
+            && pd_client.get_region_approximate_keys(region_id) == Some(keys)
+    });
+    assert_eq!(scans.load(Ordering::SeqCst), 0);
+    assert_eq!(pd_client.get_regions_number(), 1);
+
+    // An idle oversized Region must resume automatic splitting after re-enabling.
+    change_split(true);
+    test_util::eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        pd_client.get_regions_number() > 1
+    });
+    assert!(scans.load(Ordering::SeqCst) > 0);
+    fail::remove("pd_after_change_split");
+    fail::remove("scan_split_keys");
+    fail::remove("split_check_disabled");
 }
 
 #[test]

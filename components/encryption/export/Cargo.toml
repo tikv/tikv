@@ -7,6 +7,10 @@ license = "Apache-2.0"
 
 [features]
 sm4 = ["encryption/sm4"]
+# Forwards the FIPS feature down to gcp_v2 (which gates rustls/fips). gcp_v2 is
+# only a transitive dependency of the binaries, so the feature must be forwarded
+# through this chain rather than enabled directly as `gcp_v2/fips`.
+fips = ["gcp_v2/fips"]
 
 [dependencies]
 aws = { workspace = true }
@@ -24,5 +28,5 @@ slog-global = { workspace = true }
 tikv_util = { workspace = true }
 
 [dev-dependencies]
+clap = { version = "3.1.6", default-features = false, features = ["std", "derive"] }
 rust-ini = "0.14.0"
-structopt = "0.3"

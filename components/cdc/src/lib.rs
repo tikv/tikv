@@ -13,6 +13,8 @@ mod observer;
 mod old_value;
 mod service;
 mod txn_source;
+mod types;
+mod watchdog;
 
 pub use channel::{CdcEvent, recv_timeout};
 pub use config::CdcConfigManager;

@@ -3,12 +3,13 @@
 use std::{
     sync::{atomic::*, mpsc::channel, *},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use kvproto::raft_serverpb::{ExtraMessage, ExtraMessageType, RaftMessage};
+use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::{PeerMsg, PeerTick};
+use raftstore::store::{GroupState, PeerMsg, PeerTick};
 use test_raftstore::*;
 use tikv_util::{HandyRwLock, config::ReadableDuration};
 
@@ -239,6 +240,73 @@ fn test_restart_peer_busy_on_apply() {
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
     fail::remove("on_check_peer_complete_apply_1003");
+}
+
+#[test]
+fn test_hibernate_region_releases_unstable_entry_buffer() {
+    let mut cluster = new_node_cluster(0, 3);
+    let base_tick_ms = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10_000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10_000);
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = cluster.pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    let value = vec![b'v'; 32];
+    for i in 0..600 {
+        let key = format!("k{:04}", i + 1);
+        cluster.must_put(key.as_bytes(), &value);
+    }
+
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(3), b"k0600", &value);
+
+    let mut persisted = cluster.unstable_entries_state(region.get_id(), 3);
+    for _ in 0..50 {
+        if persisted.1 == 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+        persisted = cluster.unstable_entries_state(region.get_id(), 3);
+    }
+    assert_eq!(
+        persisted.1, 0,
+        "unstable entries should be fully persisted before hibernation: {:?}",
+        persisted
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut hibernated = persisted;
+    while Instant::now() < deadline {
+        hibernated = cluster.unstable_entries_state(region.get_id(), 3);
+        if hibernated.0 == GroupState::Idle {
+            break;
+        }
+        thread::sleep(Duration::from_millis(base_tick_ms));
+    }
+    assert_eq!(
+        hibernated.0,
+        GroupState::Idle,
+        "peer should eventually hibernate after catch-up: {:?}",
+        hibernated
+    );
+    assert_eq!(
+        hibernated.2, 0,
+        "hibernated peer should release the unstable entry buffer: {:?}",
+        hibernated
+    );
 }
 
 #[test]

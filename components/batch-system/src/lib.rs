@@ -14,7 +14,7 @@ pub mod test_runner;
 pub use self::{
     batch::{
         BatchRouter, BatchSystem, FsmTypes, HandleResult, HandlerBuilder, PollHandler, Poller,
-        PoolState, create_system,
+        PoolState, create_system, set_poller_thread_priority,
     },
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},

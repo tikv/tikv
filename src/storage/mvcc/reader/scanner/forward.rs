@@ -13,7 +13,7 @@ use txn_types::{
 use super::ScannerConfig;
 use crate::storage::{
     Cursor, Snapshot, Statistics,
-    kv::SEEK_BOUND,
+    kv::{SEEK_BOUND, kv_processed_size},
     mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
     txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
 };
@@ -515,7 +515,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 
     fn output_size(&mut self, output: &Self::Output) -> usize {
-        output.0.len() + output.1.value.len()
+        kv_processed_size(output.0.len(), output.1.value.len())
     }
 }
 

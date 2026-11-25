@@ -60,6 +60,16 @@ where
         }
     }
 
+    fn approximate_split_keys(&mut self, _: &Region, _: &E) -> Result<Vec<Vec<u8>>> {
+        match self.split_key.take() {
+            // Approximate split keys use the engine's data-key encoding.
+            Some(key) => Ok(vec![keys::data_key(&key)]),
+            // A bucket-only size checker may select Approximate for the host.
+            // An unknown table boundary still requires the normal scan path.
+            None => Err(box_err!("table boundary split requires a scan")),
+        }
+    }
+
     fn policy(&self) -> CheckPolicy {
         self.policy
     }

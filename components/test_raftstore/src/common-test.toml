@@ -106,6 +106,7 @@ min-blob-size = 0
 [raftdb.defaultcf.titan]
 
 [security]
+redact-info-log = false
 
 [import]
 num-threads = 1

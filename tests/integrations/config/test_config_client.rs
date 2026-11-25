@@ -2,13 +2,13 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write},
     str::FromStr,
     sync::{Arc, Mutex},
 };
 
-use online_config::{ConfigChange, OnlineConfig};
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
 use tikv_util::config::{ReadableDuration, ReadableOffsetTime, ReadableSchedule};
@@ -94,10 +94,68 @@ fn test_update_config() {
 }
 
 #[test]
+fn test_update_config_preserves_sub_millisecond_duration() {
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+    cfg.validate().unwrap();
+    let cfg_controller = ConfigController::new(cfg);
+
+    cfg_controller
+        .update(change("raftstore.raft-write-wait-duration", "200us"))
+        .unwrap();
+
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_write_wait_duration,
+        ReadableDuration::micros(200)
+    );
+}
+
+#[test]
+fn test_update_config_rejects_exact_over_limit_duration() {
+    struct RecordingManager(Arc<Mutex<Vec<ConfigChange>>>);
+
+    impl ConfigManager for RecordingManager {
+        fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
+            self.0.lock().unwrap().push(change);
+            Ok(())
+        }
+    }
+
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+    cfg.validate().unwrap();
+    let cfg_controller = ConfigController::new(cfg);
+    let dispatched = Arc::new(Mutex::new(Vec::new()));
+    cfg_controller.register(
+        Module::Raftstore,
+        Box::new(RecordingManager(dispatched.clone())),
+    );
+    let cfg_path = cfg_controller.get_current().cfg_path;
+    let persisted = fs::read(&cfg_path).unwrap();
+    let original = cfg_controller
+        .get_current()
+        .raft_store
+        .raft_write_wait_duration;
+
+    cfg_controller
+        .update(change("raftstore.raft-write-wait-duration", "1001us"))
+        .unwrap_err();
+
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_write_wait_duration,
+        original
+    );
+    assert!(dispatched.lock().unwrap().is_empty());
+    assert_eq!(fs::read(cfg_path).unwrap(), persisted);
+}
+
+#[test]
 fn test_dispatch_change() {
     use std::{error::Error, result::Result};
-
-    use online_config::ConfigManager;
 
     #[derive(Clone)]
     struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
@@ -227,6 +285,31 @@ blob-run-mode = "read-only"
 }
 
 #[test]
+fn test_write_update_to_file_preserves_sub_millisecond_duration() {
+    let (mut cfg, tmp_dir) = TikvConfig::with_tmp().unwrap();
+    cfg.cfg_path = tmp_dir.path().join("tikv.toml").display().to_string();
+    let cfg_controller = ConfigController::new(cfg);
+
+    cfg_controller
+        .update(change("raftstore.raft-write-wait-duration", "200us"))
+        .unwrap();
+    let mut persisted = String::new();
+    File::open(cfg_controller.get_current().cfg_path)
+        .unwrap()
+        .read_to_string(&mut persisted)
+        .unwrap();
+
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_write_wait_duration,
+        ReadableDuration::micros(200)
+    );
+    assert!(persisted.contains("raft-write-wait-duration = \"200us\""));
+}
+
+#[test]
 fn test_update_from_toml_file() {
     use std::{error::Error, result::Result};
 
@@ -272,5 +355,26 @@ raft-log-gc-threshold = 2000
             .raft_store
             .raft_log_gc_threshold,
         2000
+    );
+}
+
+#[test]
+fn test_update_from_toml_file_preserves_sub_millisecond_duration() {
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+    cfg.raft_store.raft_write_wait_duration = ReadableDuration::micros(300);
+    let cfg_controller = ConfigController::new(cfg);
+    let cfg_path = cfg_controller.get_current().cfg_path;
+    let mut file = File::create(cfg_path).unwrap();
+    file.write_all(b"[raftstore]\nraft-write-wait-duration = \"200us\"\n")
+        .unwrap();
+
+    cfg_controller.update_from_toml_file().unwrap();
+
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_write_wait_duration,
+        ReadableDuration::micros(200)
     );
 }

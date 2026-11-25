@@ -20,6 +20,7 @@ use tikv_util::{
     sys::SysQuota,
     worker::Scheduler,
 };
+use tokio::sync::Semaphore;
 
 use super::{Result, snap::Task as SnapTask};
 pub use crate::storage::config::Config as StorageConfig;
@@ -103,7 +104,6 @@ lazy_static! {
 
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
-
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
@@ -150,6 +150,11 @@ pub struct Config {
     // When merge raft messages into a batch message, leave a buffer.
     #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
+    // NOTE: the memory of a single item is 216B, so with 16k capacity, the memory of a single
+    // queue is ~3MB.
+    /// The total capacity of the raft client's message queues for a specific
+    /// store. The capacity of a single connection is
+    /// `raft_client_queue_size / grpc_raft_conn_num`.
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
     // Test only
@@ -203,6 +208,11 @@ pub struct Config {
     pub end_point_request_max_handle_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    /// Optional maximum number of concurrently running background-limited
+    /// Analyze tasks. `None` or `Some(0)` keeps Analyze requests on the
+    /// shared semaphore.
+    #[online_config(skip)]
+    pub end_point_max_bg_concurrency: Option<usize>,
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
@@ -336,6 +346,7 @@ impl Default for Config {
             end_point_enable_batch_if_possible: true,
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_max_bg_concurrency: None,
             end_point_perf_level: PerfLevel::Uninitialized,
             end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
@@ -437,6 +448,14 @@ impl Config {
             }
         }
 
+        if let Some(value) = self.end_point_max_bg_concurrency {
+            if value > Semaphore::MAX_PERMITS {
+                return Err(box_err!(
+                    "server.end-point-max-bg-concurrency is too large."
+                ));
+            }
+        }
+
         if self.end_point_recursion_limit < 100 {
             return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
@@ -500,6 +519,17 @@ impl Config {
         }
         if self.graceful_shutdown_timeout.0.as_secs() == 0 {
             warn!("graceful shutdown timeout is disabled");
+        }
+
+        if self.grpc_raft_conn_num == 0 {
+            return Err(box_err!(
+                "server.grpc-raft-conn-num must be greater than 0."
+            ));
+        }
+        if self.raft_client_queue_size < self.grpc_raft_conn_num {
+            return Err(box_err!(
+                "server.raft-client-queue-size must be greater than or equal to server.grpc-raft-conn-num"
+            ));
         }
         Ok(())
     }
@@ -627,6 +657,32 @@ mod tests {
     use tikv_util::config::ReadableDuration;
 
     use super::*;
+
+    #[test]
+    fn test_config_validate_does_not_record_addr_probe_failures() {
+        use crate::server::metrics::ADVERTISE_ADDR_PROBE_FAILURE_COUNTER;
+
+        let labels = [["store", "unresolved"], ["status", "unresolved"]];
+        let before = labels.map(|labels| {
+            ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                .with_label_values(&labels)
+                .get()
+        });
+
+        let mut cfg = Config::default();
+        cfg.advertise_addr = "store.invalid:20160".to_owned();
+        cfg.advertise_status_addr = "status.invalid:20180".to_owned();
+        cfg.validate().unwrap();
+
+        for (labels, before) in labels.iter().zip(before) {
+            assert_eq!(
+                ADVERTISE_ADDR_PROBE_FAILURE_COUNTER
+                    .with_label_values(labels)
+                    .get(),
+                before
+            );
+        }
+    }
 
     #[test]
     fn test_config_validate() {

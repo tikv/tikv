@@ -12,6 +12,7 @@ impl Collator for CollatorUtf8Mb4Bin {
     type Weight = u32;
 
     const IS_CASE_INSENSITIVE: bool = false;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::BinaryRunes;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
@@ -49,6 +50,7 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
     type Weight = u32;
 
     const IS_CASE_INSENSITIVE: bool = false;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::BinaryRunes;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {

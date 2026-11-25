@@ -176,7 +176,7 @@ pub struct Cluster<T: Simulator> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub resource_manager: Option<Arc<ResourceGroupManager>>,
     pub force_partition_mgr: ForcePartitionRangeManager,
 }
 
@@ -1193,6 +1193,35 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
+    }
+
+    pub fn unstable_entries_stat(&self, region_id: u64, store_id: u64) -> (usize, usize, usize) {
+        let (_, len, cap, size) = self.unstable_entries_state(region_id, store_id);
+        (len, cap, size)
+    }
+
+    pub fn unstable_entries_state(
+        &self,
+        region_id: u64,
+        store_id: u64,
+    ) -> (GroupState, usize, usize, usize) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = mpsc::channel();
+        CasualRouter::send(
+            &router,
+            region_id,
+            CasualMessage::AccessPeer(Box::new(move |meta| {
+                tx.send((
+                    meta.group_state,
+                    meta.raft_status.unstable_entries_len,
+                    meta.raft_status.unstable_entries_capacity,
+                    meta.raft_status.unstable_entries_size,
+                ))
+                .unwrap();
+            })),
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {

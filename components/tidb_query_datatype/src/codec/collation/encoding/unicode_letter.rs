@@ -1,7 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 /// In order to keep the same behavoir as TiDB that uses go standard library to
-/// implement lower and upper functions. Below code is ported from https://github.com/golang/go/blob/go1.21.3/src/unicode/letter.go.
+/// implement lower and upper functions. The algorithm is ported from Go
+/// unicode/letter.go. The case table is from https://github.com/golang/go/blob/go1.27.3/src/unicode/tables.go (Unicode 17.0.0).
 const UPPER_CASE: usize = 0;
 const LOWER_CASE: usize = 1;
 const TITLE_CASE: usize = 2;
@@ -49,6 +50,7 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0x0197, 0x0197, [0, 209, 0]),
     (0x0198, 0x0199, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
     (0x019A, 0x019A, [163, 0, 163]),
+    (0x019B, 0x019B, [42561, 0, 42561]),
     (0x019C, 0x019C, [0, 211, 0]),
     (0x019D, 0x019D, [0, 213, 0]),
     (0x019E, 0x019E, [130, 0, 130]),
@@ -109,6 +111,7 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0x0260, 0x0260, [-205, 0, -205]),
     (0x0261, 0x0261, [42315, 0, 42315]),
     (0x0263, 0x0263, [-207, 0, -207]),
+    (0x0264, 0x0264, [42343, 0, 42343]),
     (0x0265, 0x0265, [42280, 0, 42280]),
     (0x0266, 0x0266, [42308, 0, 42308]),
     (0x0268, 0x0268, [-209, 0, -209]),
@@ -195,6 +198,7 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0x1C86, 0x1C86, [-6236, 0, -6236]),
     (0x1C87, 0x1C87, [-6181, 0, -6181]),
     (0x1C88, 0x1C88, [35266, 0, 35266]),
+    (0x1C89, 0x1C8A, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
     (0x1C90, 0x1CBA, [0, -3008, 0]),
     (0x1CBD, 0x1CBF, [0, -3008, 0]),
     (0x1D79, 0x1D79, [35332, 0, 35332]),
@@ -315,8 +319,9 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0xA7C5, 0xA7C5, [0, -42307, 0]),
     (0xA7C6, 0xA7C6, [0, -35384, 0]),
     (0xA7C7, 0xA7CA, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
-    (0xA7D0, 0xA7D1, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
-    (0xA7D6, 0xA7D9, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
+    (0xA7CB, 0xA7CB, [0, -42343, 0]),
+    (0xA7CC, 0xA7DB, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
+    (0xA7DC, 0xA7DC, [0, -42561, 0]),
     (0xA7F5, 0xA7F6, [UPPER_LOWER, UPPER_LOWER, UPPER_LOWER]),
     (0xAB53, 0xAB53, [-928, 0, -928]),
     (0xAB70, 0xABBF, [-38864, 0, -38864]),
@@ -336,10 +341,14 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0x105BB, 0x105BC, [-39, 0, -39]),
     (0x10C80, 0x10CB2, [0, 64, 0]),
     (0x10CC0, 0x10CF2, [-64, 0, -64]),
+    (0x10D50, 0x10D65, [0, 32, 0]),
+    (0x10D70, 0x10D85, [-32, 0, -32]),
     (0x118A0, 0x118BF, [0, 32, 0]),
     (0x118C0, 0x118DF, [-32, 0, -32]),
     (0x16E40, 0x16E5F, [0, 32, 0]),
     (0x16E60, 0x16E7F, [-32, 0, -32]),
+    (0x16EA0, 0x16EB8, [0, 27, 0]),
+    (0x16EBB, 0x16ED3, [-27, 0, -27]),
     (0x1E900, 0x1E921, [0, 34, 0]),
     (0x1E922, 0x1E943, [-34, 0, -34]),
 ];
@@ -521,6 +530,13 @@ mod tests {
         (UPPER_CASE, 0x10450, 0x10450),
         (LOWER_CASE, 0x10450, 0x10450),
         (TITLE_CASE, 0x10450, 0x10450),
+        // Unicode 16/17 additions that must agree with TiDB's Go 1.27 tables.
+        (UPPER_CASE, 0x019B, 0xA7DC),
+        (TITLE_CASE, 0x019B, 0xA7DC),
+        (LOWER_CASE, 0xA7DC, 0x019B),
+        (UPPER_CASE, 0x0264, 0xA7CB),
+        (TITLE_CASE, 0x0264, 0xA7CB),
+        (LOWER_CASE, 0xA7CB, 0x0264),
         // Non-letters with case.
         (LOWER_CASE, 0x2161, 0x2171),
         (UPPER_CASE, 0x0345, 0x0399),

@@ -209,6 +209,7 @@ mod tests {
             ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
             // expire_ts = 0 is no longer a special case in API V2
             ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
+            ApiVersion::V3 => unreachable!("API V3 is not supported by this TiKV build"),
         }
 
         let case2 = [("zr\0a", 0)];

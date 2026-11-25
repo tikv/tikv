@@ -183,7 +183,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     Ok(())
 }
 
-fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
+pub fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftLocalState> {
@@ -762,6 +762,7 @@ where
         &mut self,
         peer: metapb::Peer,
         region: metapb::Region,
+        fsm_id: u64,
         keep_data: bool,
         local_first_replicate: bool,
         first_index: u64,
@@ -776,6 +777,7 @@ where
                 .schedule_force(RegionTask::ClearPeerMeta {
                     peer,
                     region,
+                    fsm_id,
                     raft_state: self.raft_state().clone(),
                     initialized: self.is_initialized(),
                     keep_data,

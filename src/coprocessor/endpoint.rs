@@ -6,7 +6,8 @@ use std::{
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, get_tls_tracker_token, set_tls_tracker_token, track,
+    with_tls_tracker,
 };
 use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
@@ -15,13 +16,16 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{
     channel::{mpsc, oneshot},
-    future::Either,
+    future::{BoxFuture, Either},
     prelude::*,
+    stream::BoxStream,
 };
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, update_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -31,13 +35,14 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
-use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
+    DeferContext,
     deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
+    resource_control::group_label,
     store::find_peer,
     time::Instant,
 };
@@ -47,7 +52,7 @@ use tokio::sync::Semaphore;
 use super::config_manager::CopConfigManager;
 use crate::{
     coprocessor::{
-        cache::CachedRequestHandler, interceptors::*, metrics::*,
+        batch::*, cache::CachedRequestHandler, interceptors::*, metrics::*,
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
     read_pool::ReadPoolHandle,
@@ -66,14 +71,23 @@ use crate::{
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
+#[derive(Clone, Copy)]
+enum UnaryOutputMode {
+    Materialize,
+    PreserveMergeable,
+}
+
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
 
-    /// The concurrency limiter of the coprocessor.
-    semaphore: Option<Arc<Semaphore>>,
+    /// Concurrency limiter shared by ordinary coprocessor requests.
+    shared_semaphore: Option<Arc<Semaphore>>,
+    /// Dedicated limiter for requests that intentionally use the background
+    /// quota limiter.
+    background_limited_semaphore: Option<Arc<Semaphore>>,
     /// The memory quota for coprocessor requests.
     memory_quota: Arc<MemoryQuota>,
 
@@ -106,6 +120,7 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
+    semaphore_group: SemaphoreGroup,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -115,14 +130,57 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }
+    }
+}
+
+/// Maps a request type to its heavy-task admission lane before the payload is
+/// decoded. Analyze requests (every variant) are throttled by the
+/// background-limited semaphore; all other types contend on the shared one.
+/// Request parsing and the batch-merge finalizer's parse-failure fallback must
+/// agree on this mapping.
+fn semaphore_group_for_req_tp(tp: i64) -> SemaphoreGroup {
+    if tp == REQ_TYPE_ANALYZE {
+        SemaphoreGroup::BackgroundLimited
+    } else {
+        SemaphoreGroup::Shared
     }
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
+    fn build_request_semaphores(
+        read_pool: &ReadPoolHandle,
+        max_concurrency: usize,
+        max_bg_concurrency: Option<usize>,
+    ) -> (Option<Arc<Semaphore>>, Option<Arc<Semaphore>>) {
+        match read_pool {
+            ReadPoolHandle::Yatp { .. } => {
+                // Keep the legacy shared behavior unless the operator explicitly
+                // enables a positive background-limited Analyze cap.
+                let shared = Arc::new(Semaphore::new(max_concurrency));
+                let background = match max_bg_concurrency {
+                    Some(max_bg_concurrency) if max_bg_concurrency > 0 => {
+                        Arc::new(Semaphore::new(max_bg_concurrency))
+                    }
+                    _ => shared.clone(),
+                };
+                (Some(shared), Some(background))
+            }
+            _ => (None, None),
+        }
+    }
+
+    fn request_semaphore(&self, group: SemaphoreGroup) -> Option<Arc<Semaphore>> {
+        match group {
+            SemaphoreGroup::Shared => self.shared_semaphore.clone(),
+            SemaphoreGroup::BackgroundLimited => self.background_limited_semaphore.clone(),
+        }
+    }
+
     pub fn new(
         cfg: &Config,
         read_pool: ReadPoolHandle,
@@ -131,17 +189,17 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        let semaphore = match &read_pool {
-            ReadPoolHandle::Yatp { .. } => {
-                Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
-            }
-            _ => None,
-        };
+        let (shared_semaphore, background_limited_semaphore) = Self::build_request_semaphores(
+            &read_pool,
+            cfg.end_point_max_concurrency,
+            cfg.end_point_max_bg_concurrency,
+        );
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
             read_pool,
-            semaphore,
+            shared_semaphore,
+            background_limited_semaphore,
             memory_quota,
             concurrency_manager,
             perf_level: cfg.end_point_perf_level,
@@ -176,6 +234,12 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<ParseCopRequestResult<E::IMSnap>> {
+        // Reject unsupported API versions before dispatching, so that a
+        // request-provided `ApiVersion::V3` gets a graceful error instead of
+        // hitting the panic branch in `dispatch_api_version!`.
+        if req.get_context().get_api_version() == kvrpcpb::ApiVersion::V3 {
+            return Err(box_err!("API V3 is not supported by this TiKV build"));
+        }
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
@@ -206,13 +270,13 @@ impl<E: Engine> Endpoint<E> {
         } else {
             None
         };
-
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
+        let semaphore_group = semaphore_group_for_req_tp(req.get_tp());
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -272,6 +336,20 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    // max_keys_read = 0 means unlimited (disabled); any positive value
+                    // is a per-task row budget for early termination.  This is independent
+                    // of paging_size — both can be set simultaneously and whichever
+                    // threshold is reached first stops the scan.
+                    let max_keys_read = match req.get_max_keys_read() {
+                        0 => None,
+                        i => Some(i),
+                    };
+                    // Byte-budget counterpart of paging_size: 0 disables it,
+                    // otherwise the scan stops once scanned bytes reach the limit.
+                    let paging_size_bytes = match req.get_paging_size_bytes() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -285,6 +363,8 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        max_keys_read,
+                        paging_size_bytes,
                         quota_limiter,
                     )
                     .data_version(data_version)
@@ -387,6 +467,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(ParseCopRequestResult {
             req_tag,
             req_ctx,
+            semaphore_group,
             handler_builder,
         })
     }
@@ -463,11 +544,18 @@ impl<E: Engine> Endpoint<E> {
     /// snapshot and the given `handler_builder`. Finally, it calls the unary
     /// request interface of the `RequestHandler` to process the request and
     /// produce a result.
+    ///
+    /// `Materialize` serializes a mergeable output inside the request's
+    /// deadline, tracking, concurrency, and resource protections.
+    /// `PreserveMergeable` defers serialization to the batch finalizer.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
+        semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
-    ) -> Result<MemoryTraceGuard<coppb::Response>> {
+        output_mode: UnaryOutputMode,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
         });
@@ -517,13 +605,33 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future = check_deadline(handler.handle_request(), deadline);
-        let handle_request_future = track(handle_request_future, tracker.as_mut());
+        let handle_request_future = handler.handle_request();
+        let process_future = async move {
+            let output = handle_request_future.await?;
+            match output_mode {
+                UnaryOutputMode::Materialize => match output.into_response() {
+                    Ok(response) => Ok(HandlerOutput {
+                        response,
+                        state: HandlerOutputState::Ready,
+                    }),
+                    Err(ResponseMaterializationFailure { error, .. }) => Err(error),
+                },
+                UnaryOutputMode::PreserveMergeable => Ok(output),
+            }
+        };
+        let process_future = check_deadline(process_future, deadline);
+        let process_future = track(process_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(
+                process_future,
+                semaphore,
+                semaphore_group,
+                LIGHT_TASK_THRESHOLD,
+            )
+            .await
         } else {
-            handle_request_future.await
+            process_future.await
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
@@ -535,18 +643,18 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let mut resp = match result {
-            Ok(resp) => {
-                let resp_size = resp.data.len() as u64;
-                COPR_RESP_SIZE.inc_by(resp_size);
-                record_network_out_bytes(resp_size);
-                with_tls_tracker(|tracker| {
-                    tracker.metrics.coprocessor_response_bytes = tracker
-                        .metrics
-                        .coprocessor_response_bytes
-                        .saturating_add(resp_size);
-                });
-                resp
+        let mut resp: HandlerOutput = match result {
+            Ok(output) => {
+                // On the merge path nothing is recorded here: even a ready
+                // output's data is accounted only when the batched response
+                // is committed, so bytes are neither charged twice nor
+                // charged for a response that is never returned.
+                if matches!(output_mode, UnaryOutputMode::Materialize) {
+                    let resp_size = output.response.get_data().len() as u64;
+                    record_coprocessor_response_size(resp_size, get_tls_tracker_token());
+                    update_background_egress(&resource_limiter, resp_size, true);
+                }
+                output
             }
             Err(e) => {
                 if let Error::DefaultNotFound(errmsg) = &e {
@@ -555,27 +663,38 @@ impl<E: Engine> Endpoint<E> {
                         "reqCtx" => ?&tracker.req_ctx,
                     );
                 }
-                make_error_response(e).into()
+                HandlerOutput::ready(make_error_response(e))
             }
         };
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
-        resp.set_exec_details(exec_details);
-        resp.set_exec_details_v2(exec_details_v2);
-        resp.set_latest_buckets_version(buckets_version);
+        resp.response.set_exec_details(exec_details);
+        resp.response.set_exec_details_v2(exec_details_v2);
+        resp.response.set_latest_buckets_version(buckets_version);
         Ok(resp)
     }
 
-    /// Handle a unary request and run on the read pool.
+    /// Schedules a unary request on the read pool with the requested output
+    /// materialization policy.
     ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
-    /// other cases. The future inside may be an error however.
-    fn handle_unary_request(
+    /// With `charge_egress`, a materialized response is charged to the
+    /// background egress limiter as soon as it is built. Requests with batch
+    /// tasks pass `false` for the top task and every child, because their
+    /// responses are only buffered until the outer response is committed,
+    /// which charges them once instead.
+    fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
-        let req_ctx = r.req_ctx;
+        output_mode: UnaryOutputMode,
+        charge_egress: bool,
+    ) -> impl Future<Output = Result<HandlerOutput>> {
+        let ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            semaphore_group,
+            handler_builder,
+        } = r;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -602,18 +721,41 @@ impl<E: Engine> Endpoint<E> {
                     .get_override_priority(),
             )
         });
+        let deadline = req_ctx.deadline;
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
-        let res = self.read_pool_spawn_with_memory_quota_check(
+        let future = Self::handle_unary_request_impl(
+            self.request_semaphore(semaphore_group),
+            semaphore_group,
+            tracker,
+            handler_builder,
+            output_mode,
+            if charge_egress {
+                resource_limiter.clone()
+            } else {
+                None
+            },
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
+        let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
             priority,
@@ -622,8 +764,32 @@ impl<E: Engine> Endpoint<E> {
             resource_limiter,
         );
         async move {
-            res?;
+            // Admission can delay the submission for as long as the limiter is in
+            // debt, so bound it by the request deadline. Dropping the submission
+            // releases its admission delay slot and memory quota.
+            match async_timeout(spawn_fut_result?, deadline.remaining_duration()).await {
+                Ok(res) => res?,
+                Err(_) => return Err(Error::DeadlineExceeded),
+            }
             rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+        }
+    }
+
+    /// Test adapter for callers that require a materialized response.
+    #[cfg(test)]
+    fn handle_unary_request(
+        &self,
+        r: ParseCopRequestResult<E::IMSnap>,
+    ) -> impl Future<Output = Result<TracedResponse>> {
+        let future = self.schedule_unary_request(r, UnaryOutputMode::Materialize, true);
+        async move {
+            let HandlerOutput { response, state } = future.await?;
+            match state {
+                HandlerOutputState::Ready => Ok(response),
+                HandlerOutputState::Mergeable(_) => {
+                    unreachable!("materialize mode must return a ready response")
+                }
+            }
         }
     }
 
@@ -635,70 +801,198 @@ impl<E: Engine> Endpoint<E> {
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+    ) -> impl Future<Output = TracedResponse> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
             req.start_ts,
         )));
+        // Registered before the server-busy early return below, which is one of
+        // the paths that never reaches the future holding the removal.
+        let tracker_guard = DeferContext::new(move || {
+            GLOBAL_TRACKERS.remove(tracker);
+        });
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
-            req.get_context().get_busy_threshold_ms() as u64,
-        )) {
+        if let Err(busy_err) = self.read_pool.check_busy_threshold(
+            Duration::from_millis(req.get_context().get_busy_threshold_ms() as u64),
+            req.get_context()
+                .get_resource_control_context()
+                .get_resource_group_name()
+                .as_bytes(),
+        ) {
             let mut pb_error = errorpb::Error::new();
             pb_error.set_server_is_busy(busy_err);
             let resp = make_error_response(Error::Region(pb_error));
             return Either::Left(async move { resp.into() });
         }
 
-        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
+        let has_batch_tasks = !req.get_tasks().is_empty();
+        // Result merging and task scheduling are independent policies. Merging
+        // controls output materialization; serial execution controls how the
+        // top task and batched child tasks are polled.
+        let merge_batch_tasks = req.get_allow_batch_task_data_merge() && has_batch_tasks;
+        let output_mode = if merge_batch_tasks {
+            UnaryOutputMode::PreserveMergeable
+        } else {
+            UnaryOutputMode::Materialize
+        };
+        let execute_batch_tasks_serially =
+            req.get_execute_batch_tasks_serially() && has_batch_tasks;
+        let batch_finalizer_context = merge_batch_tasks.then(|| req.get_context().clone());
+        // Start the shared execution deadline before parsing. Reserve time to
+        // return completed results, but finalization itself has no deadline.
+        let serial_deadline = execute_batch_tasks_serially.then(|| {
+            let request_budget =
+                super::max_execution_duration(req.get_context(), self.max_handle_duration);
+            let budget = serial_batch_task_budget(request_budget, req.get_tasks().len());
+            req.mut_context()
+                .set_max_execution_duration_ms(budget.as_millis() as u64);
+            Deadline::from_now(budget)
+        });
+        // Without merging, the batched response is assembled below and its
+        // egress is charged there, once it is committed (see
+        // `schedule_unary_request`).
+        let batch_egress_limiter = (has_batch_tasks && !merge_batch_tasks)
+            .then(|| {
+                let ctx = req.get_context();
+                self.resource_ctl.as_ref().and_then(|r| {
+                    r.get_resource_limiter(
+                        ctx.get_resource_control_context().get_resource_group_name(),
+                        ctx.get_request_source(),
+                        ctx.get_resource_control_context().get_override_priority(),
+                    )
+                })
+            })
+            .flatten();
+        // Preselect the admission lane so a parse failure still runs batch
+        // finalization under the right semaphore; parse success overwrites it.
+        let mut top_task_semaphore_group = semaphore_group_for_req_tp(req.get_tp());
+        // Boxed so only batched requests carry the per-task machinery.
+        let batch_outputs: Option<BoxStream<'static, BatchTaskOutput>> =
+            has_batch_tasks.then(|| {
+                self.process_batch_tasks(&mut req, &peer, output_mode, serial_deadline)
+                    .boxed()
+            });
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
+        // A parse failure creates no top read-pool ID. The finalizer then uses a
+        // random ID below so unrelated failures do not share Yatp runtime accounting.
+        let mut top_task_id = None;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| self.handle_unary_request(r));
+            .map(|mut r| {
+                if let Some(deadline) = serial_deadline {
+                    Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                }
+                top_task_id = Some(r.req_ctx.build_task_id());
+                top_task_semaphore_group = r.semaphore_group;
+                self.schedule_unary_request(r, output_mode, !has_batch_tasks)
+            });
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
+        let batch_finalizer = batch_finalizer_context.map(|request_context| {
+            self.build_batch_merge_finalizer(
+                request_context,
+                top_task_id.unwrap_or_else(rand::random),
+                top_task_semaphore_group,
+            )
+        });
         let fut = async move {
-            let res = match result_of_future {
-                Err(e) => {
-                    let mut res = make_error_response(e);
-                    let batch_res = result_of_batch.await;
-                    res.set_batch_responses(batch_res.into());
-                    res.into()
-                }
-                Ok(handle_fut) => {
-                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_res.into());
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        let exec_detail_v2 = res.mut_exec_details_v2();
-                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                    });
-                    res
+            // Moving the guard into the future ties removal to the future's
+            // lifetime, so cancellation cleans up as well as completion.
+            let _tracker_guard = tracker_guard;
+            let collect_top_details = result_of_future.is_ok();
+            let top_output = async move {
+                match result_of_future {
+                    Err(e) => HandlerOutput::ready(make_error_response(e)),
+                    Ok(handle_fut) => handle_fut
+                        .await
+                        .unwrap_or_else(|e| HandlerOutput::ready(make_error_response(e))),
                 }
             };
-            GLOBAL_TRACKERS.remove(tracker);
+            let (output, batch_outputs) = match batch_outputs {
+                None => (top_output.await, Vec::new()),
+                // Boxed: the collector holds the top future and the stream
+                // twice over in its layout.
+                Some(batch_outputs) => {
+                    let collect = if let Some(deadline) = serial_deadline {
+                        collect_batch_task_outputs_sequentially(top_output, batch_outputs, deadline)
+                            .boxed()
+                    } else {
+                        collect_batch_task_outputs_concurrently(top_output, batch_outputs).boxed()
+                    };
+                    collect.await
+                }
+            };
+            let mut res = match batch_finalizer {
+                // Boxed like the collector future above.
+                Some(finalizer) => {
+                    finalizer
+                        .finalize(output, batch_outputs, tracker)
+                        .boxed()
+                        .await
+                }
+                // No merging can happen: every outcome was serialized inside
+                // its own read pool task (see `handle_unary_request_impl`),
+                // so the ready responses only need to be attached. A
+                // leftover mergeable result is still resolved defensively.
+                None => {
+                    debug_assert!(matches!(&output.state, HandlerOutputState::Ready));
+                    let batch_responses = batch_outputs
+                        .into_iter()
+                        .map(BatchTaskOutput::into_response)
+                        .collect();
+                    let response = match output.into_response() {
+                        Ok(response) => response,
+                        Err(ResponseMaterializationFailure {
+                            error,
+                            partial_response,
+                        }) => (*partial_response).map(|_| make_error_response(error)),
+                    };
+                    let response = attach_batch_responses(response, batch_responses);
+                    // Charge only the data this response returns, so neither a
+                    // later task of the same request nor a timed-out request
+                    // pays for output that is never sent.
+                    update_background_egress(
+                        &batch_egress_limiter,
+                        returned_response_bytes(&response),
+                        true,
+                    );
+                    response
+                }
+            };
+            if collect_top_details {
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    let exec_detail_v2 = res.mut_exec_details_v2();
+                    tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                    tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                });
+            }
             res
         };
         Either::Right(fut)
     }
 
-    // process_batch_tasks process the input batched coprocessor tasks if any,
-    // prepare all the requests and schedule them into the read pool, then
-    // collect all the responses and convert them into the `StoreBatchResponse`
-    // type.
-    pub fn process_batch_tasks(
+    // All batched coprocessor tasks are prepared up front. Serial execution
+    // runs them one at a time within `serial_deadline`, so
+    // `ReadPoolHandle::spawn` enqueues only one child at a time; otherwise
+    // `FuturesOrdered` preserves the legacy concurrent scheduling behavior.
+    // Output materialization is controlled independently.
+    fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+        output_mode: UnaryOutputMode,
+        serial_deadline: Option<Deadline>,
+    ) -> impl Stream<Item = BatchTaskOutput> {
+        // Without merging, every task serializes its result inside its own
+        // read pool task; with it, results stay unserialized for
+        // `merge_batch_task_responses`.
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -725,47 +1019,85 @@ impl<E: Engine> Endpoint<E> {
             let mut response = coppb::StoreBatchTaskResponse::new();
             response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
-                Ok(r) => {
+                Ok(mut r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+                    let tracker_guard = DeferContext::new(move || {
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                    });
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.handle_unary_request(r);
+                    if let Some(deadline) = serial_deadline {
+                        Arc::make_mut(&mut r.req_ctx.0).deadline = deadline;
+                    }
+                    let fut = self.schedule_unary_request(r, output_mode, false);
                     let fut = async move {
+                        let _tracker_guard = tracker_guard;
                         let res = fut.await;
-                        match res {
-                            Ok(mut resp) => {
-                                response.set_data(resp.take_data());
-                                if let Some(err) = resp.region_error.take() {
-                                    response.set_region_error(err);
-                                }
-                                if let Some(lock_info) = resp.locked.take() {
-                                    response.set_locked(lock_info);
-                                }
-                                response.set_other_error(resp.take_other_error());
-                                // keep the exec details already generated.
-                                response.set_exec_details_v2(resp.take_exec_details_v2());
+                        let mut mergeable_result = None;
+                        let response = match res {
+                            Ok(output) => {
+                                let HandlerOutput {
+                                    response: traced_response,
+                                    state,
+                                } = output;
+                                mergeable_result = match state {
+                                    HandlerOutputState::Ready => None,
+                                    HandlerOutputState::Mergeable(result) => Some(result),
+                                };
+                                // Carry the trace guard along so the moved data
+                                // stays accounted until attachment.
+                                let mut response = traced_response.map(|mut resp| {
+                                    response.set_data(resp.take_data());
+                                    if let Some(err) = resp.region_error.take() {
+                                        response.set_region_error(err);
+                                    }
+                                    if let Some(lock_info) = resp.locked.take() {
+                                        response.set_locked(lock_info);
+                                    }
+                                    response.set_other_error(resp.take_other_error());
+                                    // Keep the execution details the handler
+                                    // collected; the client reads this task's
+                                    // stats from them.
+                                    response.set_exec_details_v2(resp.take_exec_details_v2());
+                                    response
+                                });
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
                                     );
                                 });
+                                response
                             }
                             Err(e) => {
                                 make_error_batch_response(&mut response, e);
+                                response.into()
                             }
+                        };
+                        BatchTaskOutput {
+                            response,
+                            mergeable_result,
                         }
-                        GLOBAL_TRACKERS.remove(cur_tracker);
-                        response
                     };
 
-                    batch_futs.push(future::Either::Left(fut));
+                    batch_futs.push((task_id, future::Either::Left(fut)));
                 }
-                Err(e) => batch_futs.push(future::Either::Right(async move {
-                    make_error_batch_response(&mut response, e);
-                    response
-                })),
+                Err(e) => {
+                    let fut = async move {
+                        make_error_batch_response(&mut response, e);
+                        BatchTaskOutput {
+                            response: response.into(),
+                            mergeable_result: None,
+                        }
+                    };
+                    batch_futs.push((task_id, future::Either::Right(fut)));
+                }
             }
         }
-        stream::FuturesOrdered::from_iter(batch_futs).collect()
+        match serial_deadline {
+            Some(deadline) => Either::Left(serial_batch_task_outputs(batch_futs, deadline)),
+            None => Either::Right(stream::FuturesOrdered::from_iter(
+                batch_futs.into_iter().map(|(_, fut)| fut),
+            )),
+        }
     }
 
     /// The real implementation of handling a stream request.
@@ -778,6 +1110,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -809,7 +1142,11 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request().await;
+                    let result = track(
+                        handler.handle_streaming_request(),
+                        tracker.poll_perf_context_tracker(),
+                    )
+                    .await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -837,6 +1174,13 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        // Streaming responses are not charged to the background egress
+                        // limiter: a stream is admitted once and cannot pay debt between
+                        // chunks without holding its read-pool slot, and TiDB no longer
+                        // sends streaming coprocessor requests. `bg-egress-limit` covers
+                        // unary coprocessor and transactional KV reads only. The bytes are
+                        // still counted, so that the uncovered traffic is visible.
+                        update_background_egress(&resource_limiter, resp_size, false);
                         with_tls_tracker(|tracker| {
                             tracker.metrics.coprocessor_response_bytes = tracker
                                 .metrics
@@ -866,7 +1210,12 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
-        let req_ctx = r.req_ctx;
+        let ParseCopRequestResult {
+            req_tag,
+            req_ctx,
+            semaphore_group,
+            handler_builder,
+        } = r;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
@@ -894,19 +1243,36 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let deadline = req_ctx.deadline;
+        let resource_group = group_label(
+            req_ctx
+                .context
+                .get_resource_control_context()
+                .get_resource_group_name(),
+        )
+        .to_owned();
+        let tracker = Box::new(Tracker::new(
+            req_ctx,
+            req_tag,
+            self.slow_log_threshold,
+            resource_group,
+        ));
         allocated_bytes += tracker.approximate_mem_size();
 
-        let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .then(futures::future::ok::<_, mpsc::SendError>)
-                .forward(tx)
-                .unwrap_or_else(|e| {
-                    warn!("coprocessor stream send error"; "error" => %e);
-                });
+        let future = Self::handle_stream_request_impl(
+            self.request_semaphore(semaphore_group),
+            tracker,
+            handler_builder,
+            resource_limiter.clone(),
+        )
+        .in_resource_metering_tag(resource_tag)
+        .then(futures::future::ok::<_, mpsc::SendError>)
+        .forward(tx)
+        .unwrap_or_else(|e| {
+            warn!("coprocessor stream send error"; "error" => %e);
+        });
 
-        self.read_pool_spawn_with_memory_quota_check(
+        let spawn_fut = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
             priority,
@@ -914,7 +1280,19 @@ impl<E: Engine> Endpoint<E> {
             metadata,
             resource_limiter,
         )?;
-        Ok(rx)
+        // Transparent to caller: embed admission delay into the stream itself.
+        // On first poll, drives spawn_fut (sleep if delayed, then submit to
+        // yatp), bounded by the request deadline as in the unary path. On error
+        // yields one error item. Then chains with rx items.
+        let stream = futures::stream::once(Box::pin(async move {
+            match async_timeout(spawn_fut, deadline.remaining_duration()).await {
+                Ok(res) => res.err().map(Err),
+                Err(_) => Some(Err(Error::DeadlineExceeded)),
+            }
+        }))
+        .filter_map(futures::future::ready)
+        .chain(rx);
+        Ok(stream)
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each
@@ -954,7 +1332,7 @@ impl<E: Engine> Endpoint<E> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Result<()>
+    ) -> Result<BoxFuture<'static, Result<()>>>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -965,9 +1343,36 @@ impl<E: Engine> Endpoint<E> {
             // Release quota after handle completed.
             drop(owned_quota);
         });
-        self.read_pool
+        Ok(self
+            .read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map_err(|_| Error::MaxPendingTasksExceeded)
+            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
+            .boxed())
+    }
+
+    /// Builds a batch merge finalizer using the top request's execution
+    /// context and semaphore group.
+    fn build_batch_merge_finalizer(
+        &self,
+        ctx: kvrpcpb::Context,
+        task_id: u64,
+        semaphore_group: SemaphoreGroup,
+    ) -> BatchMergeFinalizer {
+        BatchMergeFinalizer {
+            read_pool: self.read_pool.clone(),
+            semaphore: self.request_semaphore(semaphore_group),
+            merge_execution_tag: self.resource_tag_factory.new_tag(&ctx),
+            returned_response_tag: self.resource_tag_factory.new_tag(&ctx),
+            resource_control_ctx: ctx.get_resource_control_context().clone(),
+            egress_limiter: self.resource_ctl.as_ref().and_then(|r| {
+                r.get_resource_limiter(
+                    ctx.get_resource_control_context().get_resource_group_name(),
+                    ctx.get_request_source(),
+                    ctx.get_resource_control_context().get_override_priority(),
+                )
+            }),
+            task_id,
+        }
     }
 }
 
@@ -1067,7 +1472,7 @@ macro_rules! make_error_response_common {
     }};
 }
 
-fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
+pub(super) fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
     debug!(
         "batch cop task error-response";
         "err" => %e
@@ -1076,7 +1481,7 @@ fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: 
     make_error_response_common!(batch_resp, tag, e);
 }
 
-fn make_error_response(e: Error) -> coppb::Response {
+pub(super) fn make_error_response(e: Error) -> coppb::Response {
     debug!(
         "error-response";
         "err" => %e
@@ -1218,6 +1623,8 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
                 // supported currently.
                 check_term: None,
             }),
+
+            deadline: Some(self.req_ctx.deadline),
         };
 
         let snap = unsafe {
@@ -1254,18 +1661,22 @@ mod tests {
     use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
     use protobuf::Message;
     use raft::StateRole;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{ReadStats, WriteStats},
+    };
     use tidb_query_common::storage::Storage;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
+    use tikv_util::{deadline::Deadline, yatp_pool::CleanupMethod};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
     use super::*;
     use crate::{
-        config::CoprReadPoolConfig,
-        coprocessor::readpool_impl::build_read_pool_for_test,
-        read_pool::ReadPool,
-        storage::{Store, TestEngineBuilder, kv::RocksEngine},
+        config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
+        coprocessor::{batch::ConcatMergeable, readpool_impl::build_read_pool_for_test},
+        read_pool::{ReadPool, build_yatp_read_pool},
+        storage::{FlowStatsReporter, Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -1309,7 +1720,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
             if self.yieldable {
                 // We split the task into small executions of 100 milliseconds.
                 for _ in 0..self.handle_duration.as_millis() as u64 / 100 {
@@ -1323,7 +1734,70 @@ mod tests {
                 thread::sleep(self.handle_duration);
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result.take().unwrap().map(HandlerOutput::ready)
+        }
+    }
+
+    struct HeavyYieldingUnaryFixture {
+        yields: usize,
+        poll_duration: Duration,
+        result: Option<Result<coppb::Response>>,
+    }
+
+    impl HeavyYieldingUnaryFixture {
+        fn new(result: Result<coppb::Response>, yields: usize, poll_duration: Duration) -> Self {
+            Self {
+                yields,
+                poll_duration,
+                result: Some(result),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RequestHandler for HeavyYieldingUnaryFixture {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
+            for _ in 0..self.yields {
+                let poll_duration = self.poll_duration;
+                let mut first_poll = true;
+                futures::future::poll_fn(move |cx| {
+                    if first_poll {
+                        first_poll = false;
+                        thread::sleep(poll_duration);
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                })
+                .await;
+            }
+
+            self.result.take().unwrap().map(HandlerOutput::ready)
+        }
+    }
+
+    /// A unary handler whose result can be preserved for batch merging.
+    struct MergeableFixture {
+        values: Vec<u8>,
+        fail_serialize: bool,
+    }
+
+    #[async_trait]
+    impl RequestHandler for MergeableFixture {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
+            let values = std::mem::take(&mut self.values);
+            let result = if self.fail_serialize {
+                ConcatMergeable::failing(values)
+            } else {
+                ConcatMergeable::new(values)
+            };
+            let trace = tikv_alloc::mem_trace!(endpoint_mergeable_fixture);
+            Ok(HandlerOutput::mergeable_with_trace(
+                coppb::Response::default(),
+                Box::new(result),
+                &trace,
+            ))
         }
     }
 
@@ -1415,6 +1889,56 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _: ReadStats) {}
+
+        fn report_write_stats(&self, _: WriteStats) {}
+    }
+
+    fn build_yatp_copr(config: Config) -> (Endpoint<RocksEngine>, ReadPool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let endpoint = Endpoint::<RocksEngine>::new(
+            &config,
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        (endpoint, read_pool)
+    }
+
+    fn build_future_pool_copr() -> (Endpoint<RocksEngine>, ReadPool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let endpoint = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        (endpoint, read_pool)
+    }
+
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1458,6 +1982,7 @@ mod tests {
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
             req_tag: ReqTag::test,
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }))
         .unwrap_err();
@@ -1629,6 +2154,167 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_index_ranges_yield_to_short_request() {
+        use futures::task::noop_waker;
+        use tidb_query_datatype::{FieldTypeTp, codec::table};
+
+        struct RecordCompletion {
+            inner: Box<dyn RequestHandler>,
+            name: &'static str,
+            completed: mpsc::Sender<&'static str>,
+        }
+
+        #[async_trait]
+        impl RequestHandler for RecordCompletion {
+            async fn handle_request(&mut self) -> Result<HandlerOutput> {
+                let response = self.inner.handle_request().await;
+                // Record on the worker, not on the threads waiting for responses.
+                self.completed.send(self.name).unwrap();
+                response
+            }
+
+            fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+                self.inner.collect_scan_statistics(dest);
+            }
+
+            fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
+                self.inner.collect_scan_summary(dest);
+            }
+        }
+
+        fn index_request(range_count: usize, start_ts: u64) -> coppb::Request {
+            let mut column = tipb::ColumnInfo::default();
+            column.set_column_id(1);
+            column.set_tp(FieldTypeTp::LongLong as i32);
+            let mut executor = Executor::default();
+            executor.set_tp(ExecType::TypeIndexScan);
+            executor.mut_idx_scan().set_table_id(1);
+            executor.mut_idx_scan().set_index_id(1);
+            executor.mut_idx_scan().mut_columns().push(column);
+            let mut dag = DagRequest::default();
+            dag.mut_executors().push(executor);
+            dag.mut_output_offsets().push(0);
+
+            let mut request = coppb::Request::default();
+            request.set_tp(REQ_TYPE_DAG);
+            request.set_start_ts(start_ts);
+            request.set_data(dag.write_to_bytes().unwrap());
+            for i in 0..range_count {
+                let start = table::encode_index_seek_key(1, 1, &(i as u64).to_be_bytes());
+                let mut end = start.clone();
+                end.push(0);
+                let mut range = coppb::KeyRange::default();
+                range.set_start(start);
+                range.set_end(end);
+                request.mut_ranges().push(range);
+            }
+            request
+        }
+
+        // Both requests use the real DAG/index executor and an empty RocksDB.
+        // One active worker makes a missed cooperative yield observable.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                min_thread_count: 1,
+                max_thread_count: 1,
+                ..Default::default()
+            },
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+
+        let mut large_request = copr
+            .parse_request_and_check_memory_locks(index_request(25_000, 10), None, false)
+            .unwrap();
+        let large_builder = large_request.handler_builder;
+        let completed = completed_tx.clone();
+        large_request.handler_builder = Box::new(move |snap, ctx| {
+            let inner = large_builder(snap, ctx)?;
+            // The actual scanner has been constructed on the worker. Keep it
+            // here until the short request has been queued behind this request.
+            started_tx.send(()).unwrap();
+            resume_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(RecordCompletion {
+                inner,
+                name: "large",
+                completed,
+            }
+            .into_boxed())
+        });
+        let large = copr.handle_unary_request(large_request);
+        futures::pin_mut!(large);
+        let waker = noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        // Submission is lazy: first poll enqueues the request on the worker.
+        assert!(large.as_mut().poll(&mut cx).is_pending());
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let mut small_request = copr
+            .parse_request_and_check_memory_locks(index_request(1, 20), None, false)
+            .unwrap();
+        let small_builder = small_request.handler_builder;
+        small_request.handler_builder = Box::new(move |snap, ctx| {
+            Ok(RecordCompletion {
+                inner: small_builder(snap, ctx)?,
+                name: "small",
+                completed: completed_tx,
+            }
+            .into_boxed())
+        });
+        let small = copr.handle_unary_request(small_request);
+        futures::pin_mut!(small);
+        assert!(small.as_mut().poll(&mut cx).is_pending());
+        // Expire the constructed scanner's 1 ms scheduling budget. Completion
+        // order, rather than a wall-clock latency threshold, is the assertion.
+        thread::sleep(Duration::from_millis(10));
+        resume_tx.send(()).unwrap();
+
+        let (large_response, small_response) = block_on(futures::future::join(large, small));
+        for (range_count, response) in [
+            (25_000, large_response.unwrap()),
+            (1, small_response.unwrap()),
+        ] {
+            assert!(!response.has_region_error(), "{:?}", response);
+            assert!(response.get_other_error().is_empty(), "{:?}", response);
+            let mut result = tipb::SelectResponse::default();
+            result.merge_from_bytes(response.get_data()).unwrap();
+            assert!(!result.has_error(), "{:?}", result);
+            assert!(
+                result
+                    .get_chunks()
+                    .iter()
+                    .all(|c| c.get_rows_data().is_empty())
+            );
+            let scan = response.get_exec_details_v2().get_scan_detail_v2();
+            assert_eq!(scan.get_processed_versions(), 0);
+            assert_eq!(scan.get_total_versions(), range_count);
+        }
+        let first = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let second = completed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            [first, second],
+            ["small", "large"],
+            "the empty multi-range scan blocked the short Coprocessor request"
+        );
+    }
+
+    #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
@@ -1653,6 +2339,405 @@ mod tests {
         .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_preserves_shared_capacity() {
+        let config = Config {
+            end_point_max_concurrency: 8,
+            end_point_max_bg_concurrency: Some(3),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+
+        let shared = copr.shared_semaphore.as_ref().unwrap();
+        let background = copr.background_limited_semaphore.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(shared, background));
+        assert_eq!(shared.available_permits(), 8);
+        assert_eq!(background.available_permits(), 3);
+        assert!(Arc::ptr_eq(
+            shared,
+            copr.request_semaphore(SemaphoreGroup::Shared)
+                .as_ref()
+                .unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            background,
+            copr.request_semaphore(SemaphoreGroup::BackgroundLimited)
+                .as_ref()
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_small_shared_semaphore_keeps_background_limit_independent() {
+        let config = Config {
+            end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(7),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+
+        let shared = copr.shared_semaphore.as_ref().unwrap();
+        let background = copr.background_limited_semaphore.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(shared, background));
+        assert_eq!(shared.available_permits(), 1);
+        assert_eq!(background.available_permits(), 7);
+    }
+
+    #[test]
+    fn test_background_limited_semaphore_disabled_by_default_or_zero() {
+        for background_limited_semaphore in [None, Some(0)] {
+            let config = Config {
+                end_point_max_concurrency: 8,
+                end_point_max_bg_concurrency: background_limited_semaphore,
+                ..Default::default()
+            };
+            let (copr, _read_pool) = build_yatp_copr(config);
+            assert!(Arc::ptr_eq(
+                copr.shared_semaphore.as_ref().unwrap(),
+                copr.background_limited_semaphore.as_ref().unwrap(),
+            ));
+        }
+    }
+
+    #[test]
+    fn test_analyze_request_classification_matches_semaphore_group() {
+        let (copr, _read_pool) = build_yatp_copr(Config::default());
+
+        let mut full_sampling = AnalyzeReq::default();
+        full_sampling.set_tp(AnalyzeType::TypeFullSampling);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(full_sampling.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_full_sampling);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+        assert!(Arc::ptr_eq(
+            copr.background_limited_semaphore.as_ref().unwrap(),
+            copr.request_semaphore(parsed.semaphore_group)
+                .as_ref()
+                .unwrap()
+        ));
+
+        let mut column = AnalyzeReq::default();
+        column.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(column.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_table);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+        assert!(Arc::ptr_eq(
+            copr.background_limited_semaphore.as_ref().unwrap(),
+            copr.request_semaphore(parsed.semaphore_group)
+                .as_ref()
+                .unwrap()
+        ));
+
+        let mut index = AnalyzeReq::default();
+        index.set_tp(AnalyzeType::TypeIndex);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(index.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_index);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
+    }
+
+    #[test]
+    fn test_batch_finalizer_parse_error_uses_analyze_semaphore() {
+        use tikv_util::config::ReadableDuration;
+
+        let config = Config {
+            end_point_max_concurrency: 1,
+            end_point_max_bg_concurrency: Some(1),
+            end_point_request_max_handle_duration: Some(ReadableDuration(Duration::from_secs(1))),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+        let shared = copr.shared_semaphore.as_ref().unwrap().clone();
+        let shared_permit = block_on(shared.acquire_owned()).unwrap();
+
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(vec![0x0a]); // Truncated protobuf field.
+        req.set_allow_batch_task_data_merge(true);
+        let mut child = coppb::StoreBatchTask::default();
+        child.set_task_id(1);
+        req.mut_tasks().push(child);
+
+        let response = block_on(copr.parse_and_handle_unary_request(req, None));
+        drop(shared_permit);
+
+        assert!(!response.get_other_error().is_empty());
+        assert_eq!(response.get_batch_responses().len(), 1);
+        assert!(
+            !response.get_batch_responses()[0]
+                .get_other_error()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_background_limited_requests_progress_when_shared_semaphore_is_full() {
+        let config = Config {
+            end_point_max_concurrency: 4,
+            end_point_max_bg_concurrency: Some(2),
+            ..Default::default()
+        };
+        let (copr, _read_pool) = build_yatp_copr(config);
+        let shared = copr.shared_semaphore.as_ref().unwrap().clone();
+        let shared_permits = block_on(
+            shared
+                .clone()
+                .acquire_many_owned(shared.available_permits() as u32),
+        )
+        .unwrap();
+        let background_semaphore = copr
+            .request_semaphore(SemaphoreGroup::BackgroundLimited)
+            .unwrap();
+        let shared_semaphore = copr.request_semaphore(SemaphoreGroup::Shared).unwrap();
+        let slow_log_threshold = copr.slow_log_threshold;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let background_engine = engine.clone();
+        let shared_engine = engine;
+
+        let (background_tx, background_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            set_tls_engine(background_engine);
+            defer! {
+                unsafe { destroy_tls_engine::<RocksEngine>() }
+            }
+            let background_handler = Box::new(|_, _: &_| {
+                Ok(HeavyYieldingUnaryFixture::new(
+                    Ok(coppb::Response::default()),
+                    2,
+                    Duration::from_millis(20),
+                )
+                .into_boxed())
+            });
+            let background_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
+                Some(background_semaphore),
+                SemaphoreGroup::BackgroundLimited,
+                Box::new(Tracker::new(
+                    ReqContext::default_for_test(),
+                    ReqTag::analyze_full_sampling,
+                    slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+                )),
+                background_handler,
+                UnaryOutputMode::Materialize,
+                None,
+            );
+            background_tx.send(block_on(background_future)).unwrap();
+        });
+        let (shared_tx, shared_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            set_tls_engine(shared_engine);
+            defer! {
+                unsafe { destroy_tls_engine::<RocksEngine>() }
+            }
+            let shared_handler = Box::new(|_, _: &_| {
+                Ok(HeavyYieldingUnaryFixture::new(
+                    Ok(coppb::Response::default()),
+                    2,
+                    Duration::from_millis(20),
+                )
+                .into_boxed())
+            });
+            let shared_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
+                Some(shared_semaphore),
+                SemaphoreGroup::Shared,
+                Box::new(Tracker::new(
+                    ReqContext::default_for_test(),
+                    ReqTag::test,
+                    slow_log_threshold,
+                    tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
+                )),
+                shared_handler,
+                UnaryOutputMode::Materialize,
+                None,
+            );
+            shared_tx.send(block_on(shared_future)).unwrap();
+        });
+
+        background_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shared_rx.recv_timeout(Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(shared_permits);
+        shared_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_dropped_batch_request_trackers() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // `GLOBAL_TRACKERS` is a process-wide slab shared by every test in this
+        // binary, so this test counts only the trackers carrying its own
+        // `start_ts`. The value is arbitrary: `u64::MAX` minus the date this
+        // test was written, chosen so no realistic timestamp collides with it.
+        const DROPPED_START_TS: u64 = u64::MAX - 20260819;
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        req.set_start_ts(DROPPED_START_TS);
+        for task_id in 1..=2 {
+            let mut task = coppb::StoreBatchTask::default();
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+
+        // `parse_and_handle_unary_request` is not an `async fn`: it registers
+        // the top tracker, and `process_batch_tasks` registers one tracker per
+        // batched task, all while building the future rather than while
+        // polling it. Dropping the future therefore exercises the window in
+        // which the trackers are registered but nothing has run.
+        let previous_tracker = ::tracker::get_tls_tracker_token();
+        let future = copr.parse_and_handle_unary_request(req, None);
+        drop(future);
+        // Building the request also overwrote this thread's tracker token.
+        // Restore it so the count below is the only state this test observes.
+        set_tls_tracker_token(previous_tracker);
+
+        let mut remaining = 0;
+        GLOBAL_TRACKERS.for_each(|tracker| {
+            if tracker.req_info.start_ts == DROPPED_START_TS {
+                remaining += 1;
+            }
+        });
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn test_handle_unary_request_materialization_modes() {
+        let (copr, _read_pool) = build_future_pool_copr();
+
+        // Ordinary unary requests materialize mergeable results in their read
+        // pool task.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![3, 1, 2],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+
+        // The batch-merge path preserves the unserialized result.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+            true,
+        ))
+        .unwrap();
+        assert!(matches!(&output.state, HandlerOutputState::Mergeable(_)));
+
+        // Materialization failures follow the ordinary unary error path.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: true,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_merge_path_ready_bytes_committed_once() {
+        let (copr, _read_pool) = build_future_pool_copr();
+        let context = kvrpcpb::Context::default();
+        let previous_tracker = get_tls_tracker_token();
+        let token = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::Unknown,
+            0,
+        )));
+        set_tls_tracker_token(token);
+        let tracked_response_bytes = || {
+            let mut response_bytes = 0;
+            GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+                response_bytes = tracker.metrics.coprocessor_response_bytes;
+            });
+            response_bytes
+        };
+
+        let mut ready = coppb::Response::default();
+        ready.set_data(vec![1, 2, 3]);
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(ready)).into_boxed()));
+        let output = block_on(copr.schedule_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            UnaryOutputMode::PreserveMergeable,
+            true,
+        ))
+        .unwrap();
+
+        // Preserve mode defers accounting even when the handler returns ready data.
+        assert_eq!(tracked_response_bytes(), 0);
+        let finalizer = copr.build_batch_merge_finalizer(context, 0, SemaphoreGroup::Shared);
+        let batch_output = BatchTaskOutput {
+            response: coppb::StoreBatchTaskResponse::default().into(),
+            mergeable_result: Some(Box::new(ConcatMergeable::new(vec![9]))),
+        };
+        let resp = block_on(finalizer.finalize(output, vec![batch_output], token));
+        let tracker = GLOBAL_TRACKERS.remove(token).unwrap();
+        set_tls_tracker_token(previous_tracker);
+
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        assert_eq!(resp.get_batch_responses()[0].get_data(), &[9]);
+        assert_eq!(tracker.metrics.coprocessor_response_bytes, 4);
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_coprocessor_response_bytes(),
+            4
+        );
     }
 
     #[test]
@@ -1789,6 +2874,192 @@ mod tests {
     }
 
     // TODO: Test panic?
+
+    // Background unary responses are charged to the background egress limiter,
+    // streaming responses are not: `bg-egress-limit` does not cover streaming
+    // coprocessor requests.
+    #[test]
+    fn test_background_egress_charged_for_unary_not_streaming() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // `ddl` is a background task type of the default group, with a
+        // background egress limit of 1 KiB/s.
+        let manager = Arc::new(ResourceGroupManager::default());
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        // Each response is much larger than one second of the egress limit.
+        let new_resp = || {
+            let mut resp = coppb::Response::default();
+            resp.set_data(vec![0; 64 * 1024]);
+            resp
+        };
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        fn uncharged_egress_bytes() -> u64 {
+            prometheus::gather()
+                .iter()
+                .find(|f| {
+                    f.get_name() == "tikv_resource_control_background_egress_uncharged_bytes_total"
+                })
+                .map_or(0, |f| f.get_metric()[0].get_counter().get_value() as u64)
+        }
+
+        // A background stream of several chunks builds no egress debt, but its
+        // bytes are counted as uncharged background egress.
+        let uncharged_before = uncharged_egress_bytes();
+        let chunks = vec![Ok(new_resp()), Ok(new_resp()), Ok(new_resp())];
+        let handler_builder = Box::new(move |_, _: &_| Ok(StreamFixture::new(chunks).into_boxed()));
+        let resp_vec = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+        assert_eq!(resp_vec.len(), 3);
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        // Other tests may add to the global counter concurrently, so only a
+        // lower bound can be checked.
+        assert!(uncharged_egress_bytes() - uncharged_before >= 3 * 64 * 1024);
+
+        // The same response sent as a background unary request builds debt.
+        let handler_builder =
+            Box::new(move |_, _: &_| Ok(UnaryFixture::new(Ok(new_resp())).into_boxed()));
+        let resp =
+            block_on(copr.handle_unary_request(background_request(handler_builder))).unwrap();
+        assert_eq!(resp.get_data().len(), 64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
+
+    // A background request whose admission is delayed by egress debt fails
+    // with `DeadlineExceeded` once its deadline passes, instead of waiting out
+    // the debt before entering the read pool, for both unary and streaming
+    // requests.
+    #[test]
+    fn test_background_admission_respects_deadline() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // One delayed request at a time, so a leaked delay slot would make the
+        // next delayed request be rejected instead.
+        let manager = Arc::new(ResourceGroupManager::new(
+            resource_control::config::Config {
+                admission_max_delayed_count: 1,
+                ..Default::default()
+            },
+        ));
+        let mut default_group = ResourceGroup::new();
+        default_group.set_name("default".to_owned());
+        default_group.set_mode(GroupMode::RuMode);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting
+            .mut_r_u()
+            .mut_settings()
+            .set_fill_rate(i32::MAX as u64);
+        default_group.set_r_u_settings(ru_setting);
+        default_group
+            .mut_background_settings()
+            .set_job_types(vec!["ddl".to_owned()].into());
+        manager.add_resource_group(default_group);
+        // About a minute of background egress debt at 1 KiB/s.
+        let bg_limiter = manager.get_background_limiter();
+        bg_limiter.set_egress_limit_for_test(1024.0);
+        bg_limiter.consume_egress(64 * 1024);
+        assert!(bg_limiter.admission_delay(true) > Duration::from_secs(30));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            Some(manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            Some(manager),
+        );
+        fn background_request<Snap>(
+            handler_builder: RequestHandlerBuilder<Snap>,
+        ) -> ParseCopRequestResult<Snap> {
+            let mut req_ctx = crate::coprocessor::ReqContextInner::default_for_test();
+            req_ctx
+                .context
+                .set_request_source("internal_ddl".to_owned());
+            req_ctx.deadline = Deadline::from_now(Duration::from_millis(100));
+            let mut r = ParseCopRequestResult::default_for_test(handler_builder);
+            r.req_ctx = req_ctx.into();
+            r
+        }
+
+        for _ in 0..2 {
+            let started_at = Instant::now();
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+            let res = block_on(copr.handle_unary_request(background_request(handler_builder)));
+            assert!(matches!(res, Err(Error::DeadlineExceeded)), "{res:?}");
+            assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+        }
+
+        let started_at = Instant::now();
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(StreamFixture::new(vec![Ok(coppb::Response::default())]).into_boxed())
+        });
+        let items = block_on_stream(
+            copr.handle_stream_request(background_request(handler_builder))
+                .unwrap(),
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(items[0], Err(Error::DeadlineExceeded)),
+            "{items:?}"
+        );
+        assert!(started_at.saturating_elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn test_special_streaming_handlers() {
@@ -1998,6 +3269,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2015,6 +3287,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2124,6 +3397,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2141,6 +3415,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2207,6 +3482,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2230,6 +3506,7 @@ mod tests {
                 .handle_stream_request(ParseCopRequestResult {
                     req_tag: ReqTag::test,
                     req_ctx: req_with_exec_detail.clone(),
+                    semaphore_group: SemaphoreGroup::Shared,
                     handler_builder,
                 })
                 .unwrap()
@@ -2391,6 +3668,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2418,6 +3696,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2617,6 +3896,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2637,6 +3917,7 @@ mod tests {
             let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }));
             assert!(res.is_err(), "{:?}", res);

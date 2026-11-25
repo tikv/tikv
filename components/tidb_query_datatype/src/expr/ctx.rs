@@ -49,6 +49,10 @@ bitflags! {
         const DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
         /// `IN_LOAD_DATA_STMT` indicates if this is a LOAD DATA statement.
         const IN_LOAD_DATA_STMT = 1 << 10;
+
+        /// `ENABLE_SHORT_CIRCUIT_EXPRESSION` enables short-circuit evaluation for logical
+        /// expressions that benefit from lazy argument evaluation.
+        const ENABLE_SHORT_CIRCUIT_EXPRESSION = 1 << 12;
     }
 }
 
@@ -72,6 +76,7 @@ pub struct EvalConfig {
     pub sql_mode: SqlMode,
 
     pub paging_size: Option<u64>,
+    pub max_keys_read: Option<u64>,
     pub div_precision_increment: u8,
     pub is_test: bool,
 }
@@ -113,6 +118,7 @@ impl EvalConfig {
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
             paging_size: None,
+            max_keys_read: None,
             div_precision_increment: DEFAULT_DIV_FRAC_INCR,
             is_test: false,
         }
@@ -342,6 +348,17 @@ mod tests {
     use std::sync::Arc;
 
     use super::{super::Error, *};
+
+    #[test]
+    fn test_short_circuit_flag_from_dag_request() {
+        assert_eq!(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION.bits(), 1 << 12);
+
+        let mut req = DagRequest::default();
+        req.set_flags(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION.bits());
+
+        let cfg = EvalConfig::from_request(&req).unwrap();
+        assert!(cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION));
+    }
 
     #[test]
     fn test_handle_truncate() {

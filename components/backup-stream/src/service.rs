@@ -141,9 +141,10 @@ impl LogBackup for BackupStreamGrpcService {
     fn subscribe_flush_event(
         &mut self,
         _ctx: RpcContext<'_>,
-        _req: SubscribeFlushEventRequest,
+        req: SubscribeFlushEventRequest,
         #[allow(unused_variables)] sink: grpcio::ServerStreamingSink<SubscribeFlushEventResponse>,
     ) {
+        info!("Received request to subscribe flush event."; "client_id" => req.get_client_id());
         #[cfg(test)]
         panic!("Service should not be used in an unit test");
         #[cfg(not(test))]

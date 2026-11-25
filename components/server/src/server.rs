@@ -162,6 +162,8 @@ use crate::{
     utils,
 };
 
+/// Builds and runs a TiKV server, then blocks until a service event asks it
+/// to exit and stops it.
 #[inline]
 fn run_impl<CER, F>(
     config: TikvConfig,
@@ -198,7 +200,9 @@ fn run_impl<CER, F>(
 
     // Build a background worker for handling signals.
     {
-        let engines = tikv.engines.take().unwrap().engines;
+        // Clone rather than take the engines: `prepare_stop` still needs them
+        // to disable manual compactions before the workers are stopped.
+        let engines = tikv.engines.as_ref().unwrap().engines.clone();
         let kv_statistics = tikv.kv_statistics.clone();
         let raft_statistics = tikv.raft_statistics.clone();
         std::thread::spawn(move || {
@@ -377,10 +381,19 @@ where
         };
 
         if is_recovering_marked {
-            // Run a TiKV server in recovery modeß
+            // Run a TiKV server in recovery mode.
             info!("TiKV running in Snapshot Recovery Mode");
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
-            // connect_to_pd_cluster retreived the cluster id from pd
+        }
+
+        // Initialize and check config
+        let cfg_controller = TikvServerCore::init_config(config);
+        let config = cfg_controller.get_current();
+
+        if is_recovering_marked {
+            // `connect_to_pd_cluster` retrieved the cluster id from PD. Start
+            // recovery only after config initialization has probed the
+            // effective advertised addresses, and before regular engine setup.
             let cluster_id = config.server.cluster_id;
             snap_recovery::init_cluster::start_recovery(
                 config.clone(),
@@ -388,10 +401,6 @@ where
                 pd_client.clone(),
             );
         }
-
-        // Initialize and check config
-        let cfg_controller = TikvServerCore::init_config(config);
-        let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
@@ -410,6 +419,7 @@ where
                 &background_worker,
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
@@ -638,6 +648,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                self.resource_manager.clone(),
                 CleanupMethod::Remote(self.core.background_worker.remote()),
                 true,
             ))
@@ -679,6 +690,10 @@ where
                     .config
                     .resource_metering
                     .enable_network_io_collection,
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_detailed_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
@@ -1661,12 +1676,18 @@ where
         }
     }
 
+    /// Runs before any component is stopped. Disables manual compactions on
+    /// the KV engine so that in-flight ones are cancelled and the workers
+    /// running them can be joined promptly.
     fn prepare_stop(&self) {
         if let Some(engines) = self.engines.as_ref() {
-            // Disable manul compaction jobs before shutting down the engines. And it
+            // Disable manual compaction jobs before shutting down the engines. And it
             // will stop the compaction thread in advance, so it won't block the
             // cleanup thread when exiting.
-            let _ = engines.engines.kv.disable_manual_compaction();
+            match engines.engines.kv.disable_manual_compaction() {
+                Ok(()) => info!("manual compaction disabled before shutdown"),
+                Err(e) => warn!("failed to disable manual compaction"; "err" => ?e),
+            }
         }
     }
 

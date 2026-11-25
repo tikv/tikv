@@ -18,6 +18,8 @@ pub enum Error {
     Grpc(#[from] grpcio::Error),
     #[error("{0}")]
     StreamDisconnect(#[from] SendError),
+    #[error("TSO stream is disconnected")]
+    TsoStreamDisconnected,
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
     #[error("region is not found for key {}", log_wrappers::Value::key(.0))]
@@ -43,6 +45,7 @@ impl Error {
             Error::Grpc(_)
             | Error::ClusterNotBootstrapped(_)
             | Error::StreamDisconnect(_)
+            | Error::TsoStreamDisconnected
             | Error::DataCompacted(_) => true,
             Error::Other(_)
             | Error::RegionNotFound(_)
@@ -62,6 +65,7 @@ impl ErrorCodeExt for Error {
             Error::Incompatible => error_code::pd::INCOMPATIBLE,
             Error::Grpc(_) => error_code::pd::GRPC,
             Error::StreamDisconnect(_) => error_code::pd::STREAM_DISCONNECT,
+            Error::TsoStreamDisconnected => error_code::pd::STREAM_DISCONNECT,
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
             Error::DataCompacted(_) => error_code::pd::DATA_COMPACTED,

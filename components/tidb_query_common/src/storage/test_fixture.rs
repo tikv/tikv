@@ -19,6 +19,7 @@ pub struct FixtureStorage {
     data_view_unsafe: Option<btree_map::Range<'static, Vec<u8>, FixtureValue>>,
     is_backward_scan: bool,
     is_key_only: bool,
+    scanned_bytes: usize,
 }
 
 impl FixtureStorage {
@@ -28,6 +29,7 @@ impl FixtureStorage {
             data_view_unsafe: None,
             is_backward_scan: false,
             is_key_only: false,
+            scanned_bytes: 0,
         }
     }
 }
@@ -85,12 +87,14 @@ impl super::Storage for FixtureStorage {
             None => Ok(None),
             Some((k, Ok(v))) => {
                 if !self.is_key_only {
+                    self.scanned_bytes += k.len() + v.len();
                     Ok(Some(OwnedKvPairEntry {
                         key: k.clone(),
                         value: v.clone(),
                         commit_ts: None,
                     }))
                 } else {
+                    self.scanned_bytes += k.len();
                     Ok(Some(OwnedKvPairEntry {
                         key: k.clone(),
                         value: Vec::new(),
@@ -113,12 +117,14 @@ impl super::Storage for FixtureStorage {
             None => Ok(None),
             Some(Ok(v)) => {
                 if !is_key_only {
+                    self.scanned_bytes += range.0.len() + v.len();
                     Ok(Some(OwnedKvPairEntry {
                         key: range.0,
                         value: v.clone(),
                         commit_ts: None,
                     }))
                 } else {
+                    self.scanned_bytes += range.0.len();
                     Ok(Some(OwnedKvPairEntry {
                         key: range.0,
                         value: Vec::new(),
@@ -134,6 +140,10 @@ impl super::Storage for FixtureStorage {
 
     fn met_uncacheable_data(&self) -> Option<bool> {
         None
+    }
+
+    fn scanned_bytes(&self) -> usize {
+        self.scanned_bytes
     }
 }
 

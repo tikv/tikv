@@ -22,6 +22,8 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
+
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
@@ -41,7 +43,67 @@ const DEFAULT_SNAP_WAIT_SPLIT_DURATION: ReadableDuration =
     ReadableDuration::secs(RAFTSTORE_V2_SPLIT_SIZE.0 / DEFAULT_SNAP_MAX_BYTES_PER_SEC / 3);
 
 with_prefix!(prefix_apply "apply-");
-with_prefix!(prefix_store "store-");
+with_prefix!(prefix_store_keys "store-");
+
+/// Reads the `store-` batch-system keys. The store and apply sections share
+/// `BatchSystemConfig`, whose serde default gives one low-priority poller, but
+/// the store pool must stay at zero unless asked for, so a missing
+/// `store-low-priority-pool-size` is filled in here instead.
+mod prefix_store {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use tikv_util::config::ReadableDuration;
+
+    use super::{BatchSystemConfig, prefix_store_keys};
+
+    // Every field of `BatchSystemConfig`, so a new one fails to compile here
+    // rather than being dropped on the store section.
+    #[derive(Deserialize)]
+    #[serde(default, rename_all = "kebab-case")]
+    struct StoreSection {
+        max_batch_size: Option<usize>,
+        pool_size: usize,
+        reschedule_duration: ReadableDuration,
+        low_priority_pool_size: usize,
+    }
+
+    impl Default for StoreSection {
+        fn default() -> Self {
+            let BatchSystemConfig {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: _,
+            } = BatchSystemConfig::default();
+            StoreSection {
+                max_batch_size,
+                pool_size,
+                reschedule_duration,
+                low_priority_pool_size: 0,
+            }
+        }
+    }
+
+    // Generic: the `OnlineConfig` derive serializes its own encoder type
+    // through this module too.
+    pub fn serialize<T: Serialize, S: Serializer>(cfg: &T, s: S) -> Result<S::Ok, S::Error> {
+        prefix_store_keys::serialize(cfg, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BatchSystemConfig, D::Error> {
+        let StoreSection {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        } = prefix_store_keys::deserialize(d)?;
+        Ok(BatchSystemConfig {
+            max_batch_size,
+            pool_size,
+            reschedule_duration,
+            low_priority_pool_size,
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -62,6 +124,25 @@ pub struct Config {
     pub raft_base_tick_interval: ReadableDuration,
     #[online_config(hidden)]
     pub raft_heartbeat_ticks: usize,
+    /// Broadcast the commit index to followers as soon as an entry is
+    /// committed, instead of piggybacking it on the next append or heartbeat.
+    ///
+    /// When disabled, a follower of a region that received one
+    /// write and then went quiet does not learn the commit index until the
+    /// next heartbeat, up to `raft-base-tick-interval * raft-heartbeat-ticks`
+    /// (2s by default). Until then it cannot apply the entry, and because the
+    /// leader's resolved-ts is tagged with the leader's applied index, the
+    /// follower's stale-read safe-ts is stuck one entry behind as well. On a
+    /// store with thousands of follower regions the worst follower safe-ts is
+    /// therefore always ~2s old, regardless of
+    /// `resolved-ts.advance-ts-interval`.
+    ///
+    /// Enabling this sends one extra small MsgAppend per follower per commit
+    /// when no further write is pending, roughly doubling Raft message count
+    /// on a write-heavy store, in exchange for follower safe-ts tracking the
+    /// leader within one round trip. Disabled by default. Hot-reloadable; a
+    /// leader applies the new value with its next batch of committed entries.
+    pub raft_bcast_commit: bool,
     #[online_config(hidden)]
     pub raft_election_timeout_ticks: usize,
     #[online_config(hidden)]
@@ -104,6 +185,13 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    /// If set, TiKV exits when a disk probe cannot complete for this long.
+    ///
+    /// This applies to both raft and kv disks (depending on whether they are
+    /// deployed on different mount points). The default is 1 minute. Set it
+    /// to `0s` to disable fail-fast disk hang detection explicitly. Any
+    /// non-zero value must be at least 30 seconds.
+    pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -297,6 +385,21 @@ pub struct Config {
     #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
+
+    /// Moves a noisy tenant's regions to the low-priority store pollers.
+    /// Does not affect resource control's other throttling.
+    ///
+    /// Requires `store-low-priority-pool-size` > 0. That pool is 0 by default
+    /// and is sized at startup, so set it explicitly on stores where this may
+    /// be turned on, including online.
+    ///
+    /// Scope: a table is attributed from the proposals this store sees, so a
+    /// leader whose only traffic for a table is `MsgReadIndex` forwarded by
+    /// followers does not demote that region; the follower store does.
+    /// Table ids are decoded from API v1 keys, so API v2 keyspaces are not
+    /// covered. Not supported with raftstore-v2 (`storage.engine =
+    /// "raft-kv2"`), which `validate` rejects.
+    pub enable_noisy_tenant_demotion: bool,
 
     /// If it is 0, it means io tasks are handled in store threads.
     pub store_io_pool_size: usize,
@@ -529,6 +632,7 @@ impl Default for Config {
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
+            raft_bcast_commit: false,
             raft_election_timeout_ticks: 10,
             raft_min_election_timeout_ticks: 0,
             raft_max_election_timeout_ticks: 0,
@@ -546,6 +650,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            disk_hang_timeout: Some(ReadableDuration::minutes(1)),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -600,7 +705,14 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
-            store_batch_system: BatchSystemConfig::default(),
+            // Unlike the apply pool, the store low pool only exists when asked
+            // for: it is only used by `enable_noisy_tenant_demotion`. The
+            // `prefix_store` serde module keeps a config file in step.
+            store_batch_system: BatchSystemConfig {
+                low_priority_pool_size: 0,
+                ..BatchSystemConfig::default()
+            },
+            enable_noisy_tenant_demotion: false,
             store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
@@ -687,7 +799,7 @@ impl Config {
             max_inflight_msgs: self.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
-            skip_bcast_commit: true,
+            skip_bcast_commit: !self.raft_bcast_commit,
             pre_vote: self.prevote,
             max_committed_size_per_ready: ReadableSize::mb(16).0,
             ..Default::default()
@@ -877,6 +989,15 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
+        if let Some(timeout) = self.disk_hang_timeout {
+            if !timeout.is_zero() && timeout < DISK_HANG_TIMEOUT_MIN {
+                return Err(box_err!(
+                    "raftstore.disk-hang-timeout must be at least {} ms",
+                    DISK_HANG_TIMEOUT_MIN.as_millis()
+                ));
+            }
+        }
+
         let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
@@ -960,9 +1081,26 @@ impl Config {
                 limit
             ));
         }
-        if self.store_batch_system.low_priority_pool_size > 0 {
-            // The store thread pool doesn't need a low-priority thread currently.
-            self.store_batch_system.low_priority_pool_size = 0;
+        let store_low_priority_pool_size = self.store_batch_system.low_priority_pool_size;
+        // raftstore-v2 has neither the attribution nor the priority routing, so
+        // the flag would silently do nothing there.
+        if self.enable_noisy_tenant_demotion && raft_kv_v2 {
+            return Err(box_err!(
+                "enable-noisy-tenant-demotion is not supported with storage.engine = \"raft-kv2\""
+            ));
+        }
+        // With no low poller, demoted regions would never be polled again.
+        if self.enable_noisy_tenant_demotion && store_low_priority_pool_size == 0 {
+            return Err(box_err!(
+                "enable-noisy-tenant-demotion needs store-low-priority-pool-size set greater \
+                 than 0, or demoted regions stop being polled"
+            ));
+        }
+        if store_low_priority_pool_size > limit {
+            return Err(box_err!(
+                "store-low-priority-pool-size should be less than or equal to: {}",
+                limit
+            ));
         }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 || size > 10240 {
@@ -1361,21 +1499,35 @@ impl Config {
 
     fn write_change_into_metrics(change: ConfigChange) {
         for (name, value) in change {
-            if let Ok(v) = match value {
-                ConfigValue::F64(v) => Ok(v),
-                ConfigValue::U64(v) => Ok(v as f64),
-                ConfigValue::Size(v) => Ok(v as f64),
-                ConfigValue::Usize(v) => Ok(v as f64),
-                ConfigValue::Bool(v) => Ok((v as i32).into()),
-                ConfigValue::Duration(v) => Ok((v / 1000) as f64), // millis -> secs
-                _ => Err(()),
-            } {
-                CONFIG_RAFTSTORE_GAUGE
-                    .with_label_values(&[name.as_str()])
-                    .set(v);
+            if let Some((name, v)) = metric_value(&name, value) {
+                CONFIG_RAFTSTORE_GAUGE.with_label_values(&[name]).set(v);
             }
         }
     }
+}
+
+fn metric_value(name: &str, value: ConfigValue) -> Option<(&str, f64)> {
+    let value = match value {
+        ConfigValue::F64(v) => v,
+        ConfigValue::U64(v) => v as f64,
+        ConfigValue::Size(v) => v as f64,
+        ConfigValue::Usize(v) => v as f64,
+        ConfigValue::Bool(v) => (v as i32).into(),
+        ConfigValue::Duration(v) if name == "raft_write_wait_duration" => v.as_micros() as f64,
+        ConfigValue::Duration(v) => v.as_secs_f64(),
+        ConfigValue::I32(_)
+        | ConfigValue::U32(_)
+        | ConfigValue::String(_)
+        | ConfigValue::Module(_)
+        | ConfigValue::Schedule(_)
+        | ConfigValue::Skip
+        | ConfigValue::None => return None,
+    };
+    let name = match name {
+        "consistency_check_interval" => "consistency_check_interval_seconds",
+        name => name,
+    };
+    Some((name, value))
 }
 
 pub struct RaftstoreConfigManager {
@@ -1431,6 +1583,18 @@ impl ConfigManager for RaftstoreConfigManager {
                     } else if cfg.store_io_pool_size > 0 && *resized_io_size == 0 {
                         return Err(
                             "ASYNC mode, not allowed to be set to SYNC mode by resizing store-io-pool-size to 0"
+                                .into(),
+                        );
+                    }
+                }
+                // The pools are sized at startup, so an online enable must find
+                // the low store pool already there.
+                if let Some(ConfigValue::Bool(true)) = change.get("enable_noisy_tenant_demotion")
+                {
+                    if cfg.store_batch_system.low_priority_pool_size == 0 {
+                        return Err(
+                            "enable-noisy-tenant-demotion needs store-low-priority-pool-size > 0, \
+                             which is sized at startup; set it and restart"
                                 .into(),
                         );
                     }
@@ -1570,6 +1734,30 @@ mod tests {
             .unwrap_err();
 
         cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::millis(999));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(0));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(29));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(30));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+
+        cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.peer_stale_state_check_interval = ReadableDuration::secs(5);
@@ -1620,6 +1808,60 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        // By default the store low pool has no threads; apply keeps the
+        // shared default. The same holds for a file that leaves them out.
+        cfg = Config::new();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
+        let from_file: Config = toml::from_str("").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 0);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
+        let from_file: Config = toml::from_str("store-low-priority-pool-size = 2").unwrap();
+        assert_eq!(from_file.store_batch_system.low_priority_pool_size, 2);
+        assert_eq!(from_file.apply_batch_system.low_priority_pool_size, 1);
+        assert_eq!(
+            cfg.apply_batch_system.low_priority_pool_size, 1,
+            "the apply pool keeps the shared default"
+        );
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
+
+        cfg = Config::new();
+        cfg.store_batch_system.low_priority_pool_size = 4;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(
+            cfg.store_batch_system.low_priority_pool_size, 4,
+            "a configured size is kept, not clamped"
+        );
+
+        // A zero pool would strand demoted regions.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = 0;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        // raftstore-v2 has no demotion path.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = true;
+        cfg.store_batch_system.low_priority_pool_size = 1;
+        cfg.optimize_for(true);
+        cfg.validate(split_size, false, ReadableSize(0), true)
+            .unwrap_err();
+
+        // ...unless demotion is off.
+        cfg = Config::new();
+        cfg.enable_noisy_tenant_demotion = false;
+        cfg.store_batch_system.low_priority_pool_size = 0;
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+        assert_eq!(cfg.store_batch_system.low_priority_pool_size, 0);
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(10241);
@@ -1783,5 +2025,30 @@ mod tests {
         cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
         cfg.tune_inspector_configs(true, ReadableDuration::millis(100));
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::millis(1));
+    }
+
+    #[test]
+    fn test_write_change_into_metrics_preserves_duration_units_and_labels() {
+        assert_eq!(
+            metric_value(
+                "raft_write_wait_duration",
+                ConfigValue::from(ReadableDuration::micros(200)),
+            ),
+            Some(("raft_write_wait_duration", 200.0))
+        );
+        assert_eq!(
+            metric_value(
+                "inspect_interval",
+                ConfigValue::from(ReadableDuration::millis(1)),
+            ),
+            Some(("inspect_interval", 0.001))
+        );
+        assert_eq!(
+            metric_value(
+                "consistency_check_interval",
+                ConfigValue::from(ReadableDuration::secs(9)),
+            ),
+            Some(("consistency_check_interval_seconds", 9.0))
+        );
     }
 }

@@ -182,6 +182,7 @@ mod tests {
             ApiVersion::V1 => unreachable!(),
             ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, Some(1)),
             ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
+            ApiVersion::V3 => unreachable!("API V3 is not supported by this TiKV build"),
         }
 
         let case2 = [("zr\0a", 0)];
@@ -189,6 +190,7 @@ mod tests {
             ApiVersion::V1 => unreachable!(),
             ApiVersion::V1ttl => assert!(get_properties(&case2).is_none()),
             ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
+            ApiVersion::V3 => unreachable!("API V3 is not supported by this TiKV build"),
         }
 
         let case3 = [];

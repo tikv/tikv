@@ -5,7 +5,10 @@ use std::{
     thread,
 };
 
-use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
+use batch_system::{
+    BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority,
+    set_poller_thread_priority,
+};
 use file_system::{IoType, set_io_type};
 use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
@@ -71,6 +74,7 @@ where
                 reschedule_duration: self.state.reschedule_duration,
                 joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
             };
+            let thread_priority = self.state.thread_priority;
             let props = tikv_util::thread_group::current_properties();
             let t = thread::Builder::new()
                 .name(thd_name!(format!(
@@ -80,6 +84,7 @@ where
                 )))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
+                    set_poller_thread_priority(thread_priority);
                     set_io_type(IoType::ForegroundWrite);
                     poller.poll();
                 })

@@ -17,6 +17,8 @@ openssl-vendored = [
   "encryption_export/sm4",
 ]
 backup-stream-debug = []
+# Forwards FIPS to gcp_v2 via external_storage / encryption_export.
+fips = ["external_storage/fips", "encryption_export/fips"]
 
 [[test]]
 name = "integration"

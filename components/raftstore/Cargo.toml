@@ -66,7 +66,7 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
-serde_with = "1.4"
+serde_with = "3.21"
 service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
@@ -92,4 +92,6 @@ engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 file_system = { workspace = true, features = ["testexport"] }
 panic_hook = { workspace = true }
+resource_control = { workspace = true, features = ["testexport"] }
 test_sst_importer = { workspace = true }
+toml = "0.5"
