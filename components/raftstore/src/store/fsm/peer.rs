@@ -1463,6 +1463,7 @@ where
                 region_epoch,
                 start_key,
                 end_key,
+                tied_key_ranges,
                 policy,
                 source,
                 cb,
@@ -1471,6 +1472,7 @@ where
                     &region_epoch,
                     start_key,
                     end_key,
+                    tied_key_ranges,
                     policy,
                     source,
                     cb,
@@ -7112,6 +7114,7 @@ where
         region_epoch: &metapb::RegionEpoch,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
+        tied_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
         policy: CheckPolicy,
         source: &str,
         _cb: Callback<EK::Snapshot>,
@@ -7174,10 +7177,11 @@ where
         } else {
             SplitReason::Admin
         };
-        let task = SplitCheckTask::split_check_key_range(
+        let task = SplitCheckTask::split_check_tied_key_ranges(
             region.clone(),
             start_key,
             end_key,
+            tied_key_ranges,
             reason,
             policy,
             split_check_bucket_ranges,

@@ -647,6 +647,10 @@ pub enum CasualMessage<EK: KvEngine> {
         region_epoch: RegionEpoch,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
+        /// The other key ranges that are as hot as the given one, the largest
+        /// one of them all is used. It's only used when the key range is
+        /// provided.
+        tied_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
         policy: CheckPolicy,
         source: &'static str,
         cb: Callback<EK::Snapshot>,
