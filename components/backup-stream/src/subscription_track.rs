@@ -278,6 +278,11 @@ impl SubscriptionTracer {
                 let region_id = *s.key();
                 match s.value_mut() {
                 SubscribeState::Running(sub) => {
+                    // A subscription covering no keys (see `EMPTY_RANGE_SENTINEL`) has nothing
+                    // to report; don't emit a zero-width range downstream.
+                    if (sub.meta.get_start_key(), sub.meta.get_end_key()) == EMPTY_RANGE_SENTINEL {
+                        return None;
+                    }
                     let contains = rs.contains(&region_id);
                     if !contains {
                         crate::metrics::MISC_EVENTS.skip_resolve_non_leader.inc();
@@ -406,8 +411,8 @@ impl SubscriptionTracer {
     /// particular a merge followed by a split before the refresh is handled
     /// (`[a, b)` -> merge `[a, d)` -> split `[x, d)`) still sheds `[a, x)`,
     /// even though neither `new_region` is enclosed by the recorded range.
-    /// If the intersection is empty the recorded range collapses to an empty
-    /// one so nothing can be resolved through it.
+    /// If the intersection is empty the recorded range becomes
+    /// [`EMPTY_RANGE_SENTINEL`], and `resolve_with` skips the subscription.
     ///
     /// Returns whether the range was narrowed.
     pub fn narrow_range_on_version_change(&self, new_region: &Region) -> bool {
@@ -696,21 +701,37 @@ impl std::fmt::Debug for TwoPhaseResolver {
     }
 }
 
+/// The range recorded for a subscription whose region currently covers no keys
+/// (e.g. after a merge followed by a split, the region no longer overlaps what
+/// was subscribed). Downstream consumers of flush events cannot handle
+/// zero-width ranges, so every empty range is normalized to this one (by
+/// `intersect_ranges`, the only place a range is shrunk) and `resolve_with`
+/// skips subscriptions holding exactly this value.
+///
+/// It is itself zero-width (`start >= end`, non-empty `end`), so it can never be
+/// confused with a real region, and intersecting it with anything yields it again.
+pub(crate) const EMPTY_RANGE_SENTINEL: (&[u8], &[u8]) = (&[0], &[0]);
+
+/// Whether `[start, end)` covers no keys. An empty end key means +inf.
+fn is_empty_range(start: &[u8], end: &[u8]) -> bool {
+    !end.is_empty() && start >= end
+}
+
 /// Intersect two key ranges `[start, end)`; an empty end key means +inf.
 ///
-/// Disjoint ranges collapse to the empty range `[start, start)`. `start` is
-/// non-empty then, because a non-empty `end` that is `<= start` implies it.
+/// An empty intersection is reported as [`EMPTY_RANGE_SENTINEL`].
 fn intersect_ranges(a: (&[u8], &[u8]), b: (&[u8], &[u8])) -> (Vec<u8>, Vec<u8>) {
-    let start = std::cmp::max(a.0, b.0).to_vec();
-    let mut end = match (a.1.is_empty(), b.1.is_empty()) {
-        (true, _) => b.1.to_vec(),
-        (_, true) => a.1.to_vec(),
-        _ => std::cmp::min(a.1, b.1).to_vec(),
+    let start = std::cmp::max(a.0, b.0);
+    let end = match (a.1.is_empty(), b.1.is_empty()) {
+        (true, _) => b.1,
+        (_, true) => a.1,
+        _ => std::cmp::min(a.1, b.1),
     };
-    if !end.is_empty() && start >= end {
-        end = start.clone();
+    if is_empty_range(start, end) {
+        let (s, e) = EMPTY_RANGE_SENTINEL;
+        return (s.to_vec(), e.to_vec());
     }
-    (start, end)
+    (start.to_vec(), end.to_vec())
 }
 
 #[cfg(test)]
@@ -774,6 +795,7 @@ mod test {
 
     #[test]
     fn test_narrow_range_merge_then_split() {
+        let sentinel = || (vec![0u8], vec![0u8]);
         let subs = SubscriptionTracer(
             Arc::new(DashMap::new()),
             Arc::new(TxnStatusCache::new_for_test()),
@@ -794,9 +816,11 @@ mod test {
         // Open-ended new region intersects correctly too.
         assert!(subs.narrow_range_on_version_change(&region_of(1, 4, b"bb", b"")));
         assert_eq!(range(&subs), (b"bb".to_vec(), b"c".to_vec()));
-        // Disjoint: collapses to an empty range.
+        // Disjoint: becomes the empty-range sentinel, and stays so.
         assert!(subs.narrow_range_on_version_change(&region_of(1, 5, b"d", b"f")));
-        assert_eq!(range(&subs), (b"d".to_vec(), b"d".to_vec()));
+        assert_eq!(range(&subs), sentinel());
+        assert!(!subs.narrow_range_on_version_change(&region_of(1, 6, b"", b"")));
+        assert_eq!(range(&subs), sentinel());
     }
 
     #[test]
@@ -826,6 +850,7 @@ mod test {
 
     #[test]
     fn test_stale_same_version_refresh_never_widens_overlapping() {
+        let sentinel = || (vec![0u8], vec![0u8]);
         let subs = SubscriptionTracer(
             Arc::new(DashMap::new()),
             Arc::new(TxnStatusCache::new_for_test()),
@@ -846,9 +871,33 @@ mod test {
         assert!(subs.try_update_region(&region_of(1, 1, b"a", b"bb")));
         assert_eq!(range(&subs), (b"b".to_vec(), b"bb".to_vec()));
 
-        // Non-intersecting stale event: collapses instead of adopting [x, z).
+        // Non-intersecting stale event: sentinel instead of adopting [x, z).
         assert!(subs.try_update_region(&region_of(1, 1, b"x", b"z")));
-        assert_eq!(range(&subs), (b"x".to_vec(), b"x".to_vec()));
+        assert_eq!(range(&subs), sentinel());
+    }
+
+    #[test]
+    fn test_resolve_with_skips_empty_range() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+        subs.register_region(&region_of(2, 1, b"c", b"e"), ObserveHandle::new(), None);
+        let ids = |subs: &SubscriptionTracer| {
+            let mut ids = subs
+                .resolve_with(TimeStamp::new(100), vec![1, 2])
+                .into_iter()
+                .map(|r| r.region.get_id())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(&subs), vec![1, 2]);
+
+        // Region 1 no longer overlaps what it subscribed: it must not be reported.
+        subs.narrow_range_on_version_change(&region_of(1, 2, b"x", b"z"));
+        assert_eq!(ids(&subs), vec![2]);
     }
 
     #[test]
