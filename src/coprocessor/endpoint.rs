@@ -21,7 +21,9 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceGroupManager, ResourceLimiter, TaskMetadata, update_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -652,6 +654,7 @@ impl<E: Engine> Endpoint<E> {
                     .get_override_priority(),
             )
         });
+        let deadline = req_ctx.deadline;
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
@@ -676,7 +679,10 @@ impl<E: Engine> Endpoint<E> {
             resource_limiter,
         );
         async move {
-            spawn_fut_result?.await?;
+            match async_timeout(spawn_fut_result?, deadline.remaining_duration()).await {
+                Ok(res) => res?,
+                Err(_) => return Err(Error::DeadlineExceeded),
+            }
             rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
         }
     }
@@ -693,15 +699,30 @@ impl<E: Engine> Endpoint<E> {
         let now = Instant::now();
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
-            req.get_context().get_busy_threshold_ms() as u64,
-        )) {
+        if let Err(busy_err) = self.read_pool.check_busy_threshold(
+            Duration::from_millis(req.get_context().get_busy_threshold_ms() as u64),
+            req.get_context()
+                .get_resource_control_context()
+                .get_resource_group_name()
+                .as_bytes(),
+        ) {
             let mut pb_error = errorpb::Error::new();
             pb_error.set_server_is_busy(busy_err);
             let resp = make_error_response(Error::Region(pb_error));
             return Either::Left(async move { resp.into() });
         }
 
+        // Every child inherits the parent resource group and request source.
+        // Charge the assembled response once, after all children have completed,
+        // so one child never pays for another child's buffered output.
+        let egress_limiter = self.resource_ctl.as_ref().and_then(|manager| {
+            manager.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -738,6 +759,15 @@ impl<E: Engine> Endpoint<E> {
                     res
                 }
             };
+            if egress_limiter.is_some() {
+                let bytes = res.get_data().len() as u64
+                    + res
+                        .get_batch_responses()
+                        .iter()
+                        .map(|response| response.get_data().len() as u64)
+                        .sum::<u64>();
+                update_background_egress(&egress_limiter, bytes, true);
+            }
             GLOBAL_TRACKERS.remove(tracker);
             res
         };
@@ -832,6 +862,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -891,6 +922,8 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        // Streams are admitted once, so only report their uncharged egress.
+                        update_background_egress(&resource_limiter, resp_size, false);
                         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
@@ -946,6 +979,7 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
+        let deadline = req_ctx.deadline;
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
@@ -953,6 +987,7 @@ impl<E: Engine> Endpoint<E> {
             self.request_semaphore(semaphore_group),
             tracker,
             handler_builder,
+            resource_limiter.clone(),
         )
         .in_resource_metering_tag(resource_tag)
         .then(futures::future::ok::<_, mpsc::SendError>)
@@ -973,10 +1008,10 @@ impl<E: Engine> Endpoint<E> {
         // On first poll, drives spawn_fut (sleep if delayed, then submit to
         // yatp). On error yields one error item. Then chains with rx items.
         let stream = futures::stream::once(Box::pin(async move {
-            spawn_fut
-                .await
-                .err()
-                .map(|_| Err(Error::MaxPendingTasksExceeded))
+            match async_timeout(spawn_fut, deadline.remaining_duration()).await {
+                Ok(res) => res.err().map(|_| Err(Error::MaxPendingTasksExceeded)),
+                Err(_) => Some(Err(Error::DeadlineExceeded)),
+            }
         }))
         .filter_map(futures::future::ready)
         .chain(rx);
