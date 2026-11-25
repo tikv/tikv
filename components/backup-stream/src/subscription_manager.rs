@@ -624,11 +624,11 @@ where
                         .with_label_values(&["region-changed"])
                         .inc();
                     let r = async {
+                        self.subs.add_pending_region(region);
                         let tso = match tso {
                             Some(tso) => tso,
                             None => self.get_last_checkpoint_of(&for_task, region).await?,
                         };
-                        self.subs.add_pending_region(region);
                         self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             tso,
