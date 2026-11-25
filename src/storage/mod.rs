@@ -92,7 +92,10 @@ use pd_client::FeatureGate;
 use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
-use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata,
+    update_background_egress,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -103,6 +106,7 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
+    resource_control::group_label,
     time::{Instant, ThreadReadId, duration_to_ms, duration_to_sec},
 };
 use tracker::{
@@ -128,7 +132,7 @@ pub use self::{
     },
 };
 use crate::{
-    read_pool::{ReadPool, ReadPoolHandle},
+    read_pool::{ReadPool, ReadPoolError, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
@@ -657,6 +661,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 stage_begin_ts.saturating_elapsed().as_nanos() as u64;
         });
 
+        let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -751,6 +756,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .as_ref()
                         .map_or(0, |v| v.value.len());
                     record_network_out_bytes(result_len as u64);
+                    update_background_egress(&egress_limiter, result_len as u64, true);
                     let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
                     let quota_delay = quota_limiter.consume_sample(sample, true).await;
@@ -794,6 +800,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
 
@@ -826,6 +833,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -850,6 +859,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
+        // The gets of a merged batch are admitted together, so bound admission by
+        // the latest of their deadlines; each get still checks its own deadline.
+        let admission_deadline = requests
+            .iter()
+            .map(|req| Self::get_deadline(req.get_context()))
+            .max_by_key(|deadline| deadline.remaining_duration());
+        let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -909,7 +925,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                             continue;
                         }
                     };
@@ -956,6 +979,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             begin_instant,
                             source,
                             resource_priority,
+                            resource_group.clone(),
                         );
                         continue;
                     }
@@ -986,6 +1010,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         v.as_ref().map_or(0, |v1| v1.value.len()) as u64
                                     });
                                     record_network_out_bytes(value_size);
+                                    update_background_egress(&egress_limiter, value_size, true);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
                                         id,
@@ -994,6 +1019,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                                 Err(e) => {
@@ -1003,12 +1029,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         source,
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                source,
+                                resource_priority,
+                                resource_group.clone(),
+                            );
                         }
                     }
                 }
@@ -1024,6 +1058,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            admission_deadline,
         )
     }
 
@@ -1064,6 +1099,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             tracker.metrics.grpc_process_nanos =
                 stage_begin_ts.saturating_elapsed().as_nanos() as u64;
         });
+        let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1167,11 +1203,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 pair.map(|r| r.map_err(|e| Error::from(TxnError::from(e))))
                             })
                             .collect();
-                        record_network_out_bytes(
-                            result.iter().fold(0u64, |acc, r| {
-                                acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
-                            })
-                        );
+                        let out_bytes = result.iter().fold(0u64, |acc, r| {
+                            acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                        });
+                        record_network_out_bytes(out_bytes);
+                        update_background_egress(&egress_limiter, out_bytes, true);
                         record_logical_read_bytes(reader.statistics.processed_size as u64);
                         (result, reader.statistics)
                     });
@@ -1230,6 +1266,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
     /// Get values of a set of keys in a batch from the snapshot.
@@ -1271,6 +1308,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             tracker.metrics.grpc_process_nanos =
                 stage_begin_ts.saturating_elapsed().as_nanos() as u64;
         });
+        let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1366,10 +1404,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
-                                record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
+                                let out_bytes = kv_pairs.iter().fold(0u64, |acc, r| {
                                     acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
                                         as u64
-                                }));
+                                });
+                                record_network_out_bytes(out_bytes);
+                                update_background_egress(&egress_limiter, out_bytes, true);
                                 kv_pairs
                             });
                         (result, stats)
@@ -1430,6 +1470,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(deadline),
         )
     }
 
@@ -1475,6 +1516,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
+        let admission_deadline = Self::get_deadline(&ctx);
+        let egress_limiter = resource_limiter.clone();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1615,9 +1658,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                             .get(CMD)
                             .observe(results.len() as f64);
-                        record_network_out_bytes(results.iter().fold(0u64, |acc, r| {
+                        let out_bytes = results.iter().fold(0u64, |acc, r| {
                             acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
-                        }));
+                        });
+                        record_network_out_bytes(out_bytes);
+                        update_background_egress(&egress_limiter, out_bytes, true);
                         record_logical_read_bytes(statistics.processed_size as u64);
                         results
                             .into_iter()
@@ -1631,6 +1676,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(admission_deadline),
         )
     }
 
@@ -1670,6 +1716,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
+        let admission_deadline = Self::get_deadline(&ctx);
+        let egress_limiter = resource_limiter.clone();
         let res = self.read_pool.spawn_handle(
             async move {
                 if let Some(start_key) = &start_key {
@@ -1792,9 +1840,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
                         now.saturating_duration_since(command_duration),
                     ));
-                    record_network_out_bytes(
-                        locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64
-                    );
+                    let out_bytes = locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64;
+                    record_network_out_bytes(out_bytes);
+                    update_background_egress(&egress_limiter, out_bytes, true);
                     record_logical_read_bytes(statistics.processed_size as u64);
                     Ok(locks)
                 })
@@ -1804,11 +1852,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            Some(admission_deadline),
         );
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     // The entry point of the storage scheduler. Not only transaction commands need
@@ -2068,6 +2114,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2091,6 +2138,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_resource_control_context()
             .get_override_priority();
         let resource_priority = ResourcePriority::from(group_priority);
+        // The whole batch shares a group, which the consumer uses as a label.
+        let resource_group = group_label(resource_group_name).to_owned();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
@@ -2179,6 +2228,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -2195,6 +2245,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         begin_instant,
                                         ctx.take_request_source(),
                                         resource_priority,
+                                        resource_group.clone(),
                                     );
                                 }
                             }
@@ -2206,6 +2257,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 begin_instant,
                                 ctx.take_request_source(),
                                 resource_priority,
+                                resource_group.clone(),
                             );
                         }
                     }
@@ -2227,6 +2279,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2334,6 +2387,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -2868,6 +2922,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3034,6 +3089,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3123,6 +3179,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         )
     }
 
@@ -3315,12 +3372,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             thread_rng().next_u64(),
             metadata,
             resource_limiter,
+            None,
         );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+        async move { res.map_err(read_pool_spawn_error).await? }
     }
 
     fn read_pool_spawn_with_busy_check<Fut, T>(
@@ -3331,12 +3386,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
+        admission_deadline: Option<Deadline>,
     ) -> impl Future<Output = Result<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
+        if let Err(busy_err) = self
+            .read_pool
+            .check_busy_threshold(busy_threshold, metadata.group_name())
+        {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
             return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
@@ -3346,8 +3405,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let read_pool = self.read_pool.clone();
         FuturesEither::Right(async move {
             read_pool
-                .spawn_handle(future, priority, task_id, metadata, resource_limiter)
-                .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .spawn_handle(
+                    future,
+                    priority,
+                    task_id,
+                    metadata,
+                    resource_limiter,
+                    admission_deadline,
+                )
+                .map_err(read_pool_spawn_error)
                 .await?
         })
     }
@@ -3433,6 +3499,16 @@ pub struct DynamicConfigs {
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
     pub in_memory_peer_size_limit: Arc<AtomicU64>,
     pub in_memory_instance_size_limit: Arc<AtomicU64>,
+}
+
+/// Converts a failure to run a read in the read pool into a storage error.
+/// A read whose deadline passes while it waits for admission reports
+/// `DeadlineExceeded`; every other spawn failure is the scheduler being busy.
+fn read_pool_spawn_error(err: ReadPoolError) -> Error {
+    match err {
+        ReadPoolError::DeadlineExceeded => Error::from(ErrorInner::DeadlineExceeded),
+        _ => Error::from(ErrorInner::SchedTooBusy),
+    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -3853,6 +3929,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
+        resource_group: String,
     );
 }
 
@@ -4282,6 +4359,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -4298,6 +4376,7 @@ pub mod test_util {
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
+            _resource_group: String,
         ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
@@ -4417,6 +4496,179 @@ mod tests {
             types::{PessimisticLockKeyResult, PessimisticLockResults},
         },
     };
+
+    #[test]
+    fn test_read_pool_spawn_error_reports_only_the_deadline_distinctly() {
+        for err in [
+            ReadPoolError::UnifiedReadPoolFull,
+            ReadPoolError::Rejected,
+            ReadPoolError::Canceled(futures::channel::oneshot::Canceled),
+        ] {
+            assert!(matches!(
+                read_pool_spawn_error(err),
+                Error(box ErrorInner::SchedTooBusy)
+            ));
+        }
+
+        // A read that misses its deadline while waiting for admission is not
+        // load shedding; it reports the deadline.
+        assert!(matches!(
+            read_pool_spawn_error(ReadPoolError::DeadlineExceeded),
+            Error(box ErrorInner::DeadlineExceeded)
+        ));
+    }
+
+    // Background KV reads charge their response bytes to the background egress
+    // limiter, the same bytes they report through `record_network_out_bytes`, so
+    // that the next background read pays the debt at admission. Foreground reads
+    // are not charged.
+    #[test]
+    fn test_background_kv_read_charges_egress() {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+
+        // A storage whose default resource group treats `ddl` as a background
+        // task type, with a background egress limit of 1 KiB/s.
+        let new_storage = || {
+            let manager = Arc::new(ResourceGroupManager::default());
+            let mut default_group = ResourceGroup::new();
+            default_group.set_name("default".to_owned());
+            default_group.set_mode(GroupMode::RuMode);
+            let mut ru_setting = GroupRequestUnitSettings::new();
+            ru_setting
+                .mut_r_u()
+                .mut_settings()
+                .set_fill_rate(i32::MAX as u64);
+            default_group.set_r_u_settings(ru_setting);
+            default_group
+                .mut_background_settings()
+                .set_job_types(vec!["ddl".to_owned()].into());
+            manager.add_resource_group(default_group);
+            let bg_limiter = manager.get_background_limiter();
+            bg_limiter.set_egress_limit_for_test(1024.0);
+
+            let controller = manager.derive_controller("test".to_owned(), true);
+            let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+                .build_for_resource_controller(manager, controller)
+                .unwrap();
+            // A value much larger than one second of the egress limit.
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![Mutation::make_put(
+                            Key::from_raw(b"x"),
+                            vec![b'v'; 64 * 1024],
+                        )],
+                        b"x".to_vec(),
+                        100.into(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![Key::from_raw(b"x")],
+                        100.into(),
+                        101.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx, 1),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            (storage, bg_limiter)
+        };
+        let ctx_with_source = |source: &str| {
+            let mut ctx = Context::default();
+            ctx.set_request_source(source.to_owned());
+            ctx
+        };
+        let scan = |storage: &Storage<_, _, _>, ctx| {
+            block_on(storage.scan(
+                ctx,
+                Key::from_raw(b"x"),
+                None,
+                10,
+                0,
+                200.into(),
+                false,
+                false,
+            ))
+            .unwrap()
+        };
+
+        // Get: foreground reads leave no debt, a background read builds it.
+        let (storage, bg_limiter) = new_storage();
+        block_on(storage.get(ctx_with_source(""), Key::from_raw(b"x"), 200.into())).unwrap();
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        block_on(storage.get(
+            ctx_with_source("internal_ddl"),
+            Key::from_raw(b"x"),
+            200.into(),
+        ))
+        .unwrap();
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+
+        // Scan: same, on a fresh limiter.
+        let (storage, bg_limiter) = new_storage();
+        assert_eq!(scan(&storage, ctx_with_source("")).len(), 1);
+        assert_eq!(bg_limiter.admission_delay(true), Duration::ZERO);
+        assert_eq!(scan(&storage, ctx_with_source("internal_ddl")).len(), 1);
+        assert!(bg_limiter.admission_delay(true) > Duration::ZERO);
+    }
+
+    /// A write whose admission wait would outlast its deadline is not
+    /// scheduled: it waits out the deadline, then fails as timed out and
+    /// takes no latch.
+    #[test]
+    fn test_write_admission_delay_past_deadline_is_not_scheduled() {
+        let rm = Arc::new(resource_control::ResourceGroupManager::new(
+            resource_control::config::Config {
+                enable_write_admission_control: true,
+                ..Default::default()
+            },
+        ));
+        rm.refresh_cached_config();
+        let ctl = rm.derive_controller("test".into(), false);
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build_for_resource_controller(rm.clone(), ctl)
+            .unwrap();
+        // Deep in debt: the group's next write would wait for seconds.
+        let limiter = rm.get_resource_limiter("default", "", 0).unwrap();
+        limiter.set_cpu_rate_limit_for_test(1000.0);
+        limiter.consume(
+            Duration::from_secs(10),
+            file_system::IoBytes::default(),
+            true,
+            false,
+        );
+        assert!(limiter.admission_delay(false) > Duration::from_secs(1));
+
+        let mut ctx = Context::default();
+        ctx.max_execution_duration_ms = 50;
+        let started = std::time::Instant::now();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_context(
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"v".to_vec())],
+                    b"x".to_vec(),
+                    10.into(),
+                    ctx,
+                ),
+                expect_fail_callback(tx, 0, |e| match e {
+                    Error(box ErrorInner::DeadlineExceeded) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Not failed early: the error arrives at the deadline, not before.
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        must_unlocked(&mut storage.engine, b"x");
+    }
 
     #[test]
     fn test_prewrite_blocks_read() {

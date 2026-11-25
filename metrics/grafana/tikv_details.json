@@ -81918,139 +81918,6 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": null,
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 598,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Background Task Total Wait Duration",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "\u00b5s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The memory usage of the resource control module.",
           "editable": true,
           "error": false,
@@ -82072,13 +81939,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
+            "w": 24,
+            "x": 0,
             "y": 0
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 599,
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82211,7 +82078,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 600,
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82374,7 +82241,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 601,
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82510,7 +82377,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 602,
+      "id": 601,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82543,13 +82410,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 6,
             "x": 0,
             "y": 0
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 603,
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82670,7 +82537,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Total resource utilization percentage of background tasks.",
+          "description": "Total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -82691,13 +82558,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
+            "w": 6,
+            "x": 6,
             "y": 0
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 604,
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82776,7 +82643,273 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "percent",
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in centi-cores (cores * 100).",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 604,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_read_pool_cpu_percent\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_read_pool_cpu_percent\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Unified Read Pool CPU",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 605,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_resource_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_resource_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Resource Pressure Scores",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -82830,7 +82963,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 605,
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82936,7 +83069,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Current quota limit for background resource groups.",
+          "description": "Current quota limit for background resource groups, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -82963,7 +83096,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 606,
+          "id": 607,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83096,7 +83229,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 607,
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83154,30 +83287,30 @@
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_admission_delayed_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, is_background)  > 0",
+              "expr": "sum(rate(\n    tikv_resource_control_admission_delayed_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "delayed-{{resource_group}}-{{is_background}}",
+              "legendFormat": "delayed-{{resource_group}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_admission_delayed_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, is_background)  > 0",
+              "query": "sum(rate(\n    tikv_resource_control_admission_delayed_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_admission_rejected_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, is_background)  > 0",
+              "expr": "sum(rate(\n    tikv_resource_control_admission_rejected_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "rejected-{{resource_group}}-{{is_background}}",
+              "legendFormat": "rejected-{{resource_group}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_admission_rejected_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, is_background)  > 0",
+              "query": "sum(rate(\n    tikv_resource_control_admission_rejected_requests_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
               "refId": "",
               "step": 10,
               "target": ""
@@ -83259,7 +83392,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 608,
+          "id": 609,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83392,7 +83525,508 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 609,
+          "id": 610,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%-{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%-{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg-{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Admission Delay Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Read pool admission outcomes. `busy-threshold` is the client's own gate, sent as `busy_threshold_ms` from TiDB's `tidb_load_based_replica_read_threshold`: TiKV answers ServerIsBusy with its estimated wait and the client retries the read on an idle follower, so a high rate here is a redirect signal, not an error rate. `pool-full` is the queue capacity gate and has no such fallback -- the client sees a retry against the same leader. `busy-threshold-skipped` is neither: it counts requests that bypassed the estimated-wait gate because resource control owns the read queue for them, so it should rise as the other two fall.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 21
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 611,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_unified_read_pool_busy_threshold_rejected_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "busy-threshold-{{resource_group}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_unified_read_pool_busy_threshold_rejected_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_unified_read_pool_full_rejected_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "pool-full-{{resource_group}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_unified_read_pool_full_rejected_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_unified_read_pool_busy_threshold_skipped_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "busy-threshold-skipped-{{resource_group}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_unified_read_pool_busy_threshold_skipped_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Read Pool Rejections",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Load Shedding",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 612,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The QPS of different resource groups of gRPC request. Grouped by `resource_group` rather than the `name` label, which carries the same value and is marked for deprecation. Note this is the one per-group series whose label is not passed through `ResourceGroupManager::bounded_group_name`, so an unconfigured name reaching it appears verbatim rather than collapsing to \"default\".",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 613,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_grpc_resource_group_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "gRPC resource group QPS",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "End-to-end duration of gRPC requests, attributed to the resource group named on the request. Carries no `type` breakdown on purpose: crossing 72 request types with an unbounded group name would cost ~1.1M series for no diagnostic gain, so use the per-type panels in the gRPC row to identify a slow request kind and this one to find out whose it was.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 614,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83458,7 +84092,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -83466,14 +84100,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%-{{resource_group}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -83481,37 +84115,37 @@
               "intervalFactor": 1,
               "legendFormat": "99%-{{resource_group}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
+              "expr": "(sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
               "format": "time_series",
-              "hide": false,
+              "hide": true,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "avg-{{resource_group}} {{$additional_groupby}}",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
+              "query": "(sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby)  / sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
+              "expr": "sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
               "format": "time_series",
-              "hide": false,
+              "hide": true,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "count-{{resource_group}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_admission_delay_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",is_background=\"false\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
+              "query": "sum(rate(\n    tikv_grpc_msg_duration_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -83520,7 +84154,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Admission Delay Duration",
+          "title": "gRPC Message Duration by Resource Group",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -83566,7 +84200,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Total wait duration of background tasks per resource group.",
+          "description": "Time a coprocessor request spent waiting rather than running, split by what it waited on: `all` is read pool scheduling, `snapshot` is snapshot acquisition. Throttling a noisy group shows up here first, and separating the two is the reason this metric keeps its `type` label.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -83587,13 +84221,13 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 21
+            "w": 24,
+            "x": 0,
+            "y": 7
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 610,
+          "id": 615,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83629,22 +84263,90 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "/^count/",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "/^avg/",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
           "span": null,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{resource_group}}",
+              "legendFormat": "99.99%-{{resource_group}}-{{type}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group)  > 0",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%-{{resource_group}}-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby)  / sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby) )",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg-{{resource_group}}-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby)  / sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count-{{resource_group}}-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_coprocessor_request_wait_seconds_by_group_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group, type, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -83653,7 +84355,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Background Task Wait Duration",
+          "title": "Coprocessor Request Wait Duration by Resource Group",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -83672,7 +84374,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "\u00b5s",
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -83701,7 +84403,7 @@
       "targets": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Load Shedding",
+      "title": "Resource Groups",
       "transformations": [],
       "transparent": false,
       "type": "row"
@@ -83729,7 +84431,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 611,
+      "id": 616,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83768,7 +84470,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 612,
+          "id": 617,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83969,7 +84671,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 613,
+          "id": 618,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84105,7 +84807,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 614,
+      "id": 619,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -84144,7 +84846,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 615,
+          "id": 620,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84277,7 +84979,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 616,
+          "id": 621,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84410,7 +85112,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 617,
+          "id": 622,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84543,7 +85245,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 618,
+          "id": 623,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84676,7 +85378,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 619,
+          "id": 624,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84824,7 +85526,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 620,
+          "id": 625,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85028,7 +85730,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 621,
+      "id": 626,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -85067,7 +85769,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 622,
+          "id": 627,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85200,7 +85902,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 623,
+          "id": 628,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85333,7 +86035,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 624,
+          "id": 629,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85466,7 +86168,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 625,
+          "id": 630,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85599,7 +86301,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 626,
+          "id": 631,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85796,7 +86498,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 627,
+          "id": 632,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
