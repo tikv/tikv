@@ -767,6 +767,102 @@ mod tests {
         assert_ask_split_in_range(&rx, &region, &start_key, &end_key);
     }
 
+    // The split check picks the largest one of the key ranges that are equally
+    // hot, and only that one is checked.
+    #[test]
+    fn test_split_check_tied_key_ranges() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
+            ..Default::default()
+        };
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg),
+            None,
+        );
+
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+        // The first key range is the given one, the others are as hot as it.
+        let mut check = |key_ranges: Vec<(&[u8], &[u8])>| {
+            let mut key_ranges = key_ranges
+                .into_iter()
+                .map(|(start_key, end_key)| (start_key.to_vec(), end_key.to_vec()));
+            let (start_key, end_key) = key_ranges.next().unwrap();
+            runnable.run(SplitCheckTask::split_check_tied_key_ranges(
+                region.clone(),
+                Some(start_key),
+                Some(end_key),
+                key_ranges.collect(),
+                SplitReason::Load,
+                CheckPolicy::Scan,
+                None,
+            ));
+        };
+        // Without any other key range, the given one is checked. There is only
+        // one key in [0009, 0010), so it can not be split.
+        check(vec![(b"0009", b"0010")]);
+        assert_no_ask_split(&rx);
+        check(vec![(b"0000", b"0004")]);
+        assert_ask_split_in_range(&rx, &region, b"0000", b"0004");
+
+        // The largest one is checked, no matter which one is the given key
+        // range.
+        check(vec![(b"0009", b"0010"), (b"0000", b"0004")]);
+        assert_ask_split_in_range(&rx, &region, b"0000", b"0004");
+        check(vec![(b"0000", b"0004"), (b"0004", b"0010")]);
+        assert_ask_split_in_range(&rx, &region, b"0004", b"0010");
+        check(vec![(b"0004", b"0010"), (b"0000", b"0004")]);
+        assert_ask_split_in_range(&rx, &region, b"0004", b"0010");
+        check(vec![
+            (b"0000", b"0002"),
+            (b"0002", b"0005"),
+            (b"0005", b"0011"),
+            (b"0003", b"0004"),
+        ]);
+        assert_ask_split_in_range(&rx, &region, b"0005", b"0011");
+
+        // The first one is checked among the key ranges of the same size.
+        check(vec![(b"0000", b"0004"), (b"0004", b"0008")]);
+        assert_ask_split_in_range(&rx, &region, b"0000", b"0004");
+        check(vec![(b"0004", b"0008"), (b"0000", b"0004")]);
+        assert_ask_split_in_range(&rx, &region, b"0004", b"0008");
+
+        // A point and a reversed key range are the smallest ones.
+        check(vec![
+            (b"0003", b"0003"),
+            (b"0008", b"0002"),
+            (b"0004", b"0010"),
+        ]);
+        assert_ask_split_in_range(&rx, &region, b"0004", b"0010");
+
+        // An empty end key means unbounded.
+        check(vec![(b"0000", b"0004"), (b"0004", b"")]);
+        assert_ask_split_in_range(&rx, &region, b"0004", b"");
+
+        // Only the largest one is checked, the others are not tried even if it
+        // can not be split. [0020, 0030) is empty.
+        check(vec![(b"0009", b"0010"), (b"0020", b"0030")]);
+        assert_no_ask_split(&rx);
+    }
+
     fn test_generate_region_bucket_impl(mvcc: bool) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();

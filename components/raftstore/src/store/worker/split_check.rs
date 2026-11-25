@@ -9,7 +9,7 @@ use std::{
 };
 
 use engine_traits::{
-    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
+    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS, Range,
     TabletRegistry,
 };
 use file_system::{IoType, WithIoType};
@@ -384,6 +384,9 @@ where
         region: Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
+        // The other key ranges that are as hot as the one given by `start_key`
+        // and `end_key`. The largest one of them all is checked.
+        tied_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
         split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
@@ -413,6 +416,7 @@ where
             region,
             start_key: None,
             end_key: None,
+            tied_key_ranges: vec![],
             split_reason: if auto_split {
                 SplitReason::Size
             } else {
@@ -431,10 +435,33 @@ where
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Self {
+        Self::split_check_tied_key_ranges(
+            region,
+            start_key,
+            end_key,
+            vec![],
+            split_reason,
+            policy,
+            bucket_ranges,
+        )
+    }
+
+    /// Checks the largest one of the given key range and `tied_key_ranges`,
+    /// which are the key ranges as hot as the given one.
+    pub fn split_check_tied_key_ranges(
+        region: Region,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
+        tied_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+        split_reason: SplitReason,
+        policy: CheckPolicy,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) -> Self {
         Task::SplitCheckTask {
             region,
             start_key,
             end_key,
+            tied_key_ranges,
             split_reason,
             policy,
             bucket_ranges,
@@ -480,6 +507,42 @@ pub struct Runner<EK: KvEngine, S> {
     router: S,
     coprocessor: CoprocessorHost<EK>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+}
+
+/// Encodes a requested key range to the data keys and clamps it to the Region
+/// bounds. An empty start or end key means unbounded. The result can be empty
+/// or inverted if the key range does not overlap with the Region.
+fn requested_key_range_in_region(
+    region: &Region,
+    start_key: &[u8],
+    end_key: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    let region_start_key = keys::enc_start_key(region);
+    let region_end_key = keys::enc_end_key(region);
+
+    let start_key = if start_key.is_empty() {
+        region_start_key.clone()
+    } else {
+        keys::data_key(Key::from_raw(start_key).as_encoded())
+    };
+
+    let end_key = if end_key.is_empty() {
+        region_end_key.clone()
+    } else {
+        keys::data_end_key(Key::from_raw(end_key).as_encoded())
+    };
+
+    // Clamp the requested range to the current Region bounds. A
+    // CPU-top range is sampled asynchronously and can outlive a
+    // Region split, so it may describe sibling-Region keyspace.
+    // Classic raftstore shares one engine, so those sibling keys
+    // remain visible; scanning them would let out-of-Region keys
+    // produce invalid split points or exhaust the fallback scan
+    // budget before an in-Region key is reached.
+    (
+        max(start_key, region_start_key),
+        min(end_key, region_end_key),
+    )
 }
 
 /// Normalizes an origin-encoded candidate the same way `SplitObserver` does
@@ -688,13 +751,50 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         size
     }
 
+    /// Picks the largest one of the key ranges that are equally hot. There is
+    /// no way to tell which one the load is on by the CPU time, so the one with
+    /// the most data in the Region is picked, since scanning it costs the most.
+    /// The first one is picked among the key ranges of the same size.
+    fn largest_key_range(
+        tablet: &EK,
+        region: &Region,
+        key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        let approximate_size = |key_range: &(Vec<u8>, Vec<u8>)| {
+            let (start_key, end_key) =
+                requested_key_range_in_region(region, &key_range.0, &key_range.1);
+            // Nothing can be read from such a key range, e.g. a point get, and
+            // the size of it must not be asked for.
+            if start_key >= end_key {
+                return 0;
+            }
+            tablet
+                .get_range_approximate_size(Range::new(&start_key, &end_key), 0)
+                .unwrap_or_else(|e| {
+                    warn!(
+                        "failed to get the approximate size of a key range";
+                        "region_id" => region.get_id(),
+                        "err" => %e,
+                    );
+                    0
+                })
+        };
+        // `max_by_key` returns the last one of the largest key ranges, reverse
+        // the key ranges to get the first one.
+        key_ranges.into_iter().rev().max_by_key(approximate_size)
+    }
+
     /// Checks a Region with split and bucket checkers to produce split keys and
     /// buckets keys and generates split admin command.
+    ///
+    /// `tied_key_ranges` are the other key ranges that are as hot as the given
+    /// one, the largest one of them all is checked.
     fn check_split_and_bucket(
         &mut self,
         region: &Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
+        tied_key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
         reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
@@ -714,39 +814,20 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             },
         };
         let region_id = region.get_id();
-        let requested_range = start_key.as_deref().zip(end_key.as_deref());
+        let requested_range = start_key.zip(end_key).map(|key_range| {
+            if tied_key_ranges.is_empty() {
+                return key_range;
+            }
+            let mut key_ranges = Vec::with_capacity(tied_key_ranges.len() + 1);
+            key_ranges.push(key_range);
+            key_ranges.extend(tied_key_ranges);
+            Self::largest_key_range(tablet, region, key_ranges).unwrap()
+        });
         let is_key_range = requested_range.is_some();
 
-        let region_start_key = keys::enc_start_key(region);
-        let region_end_key = keys::enc_end_key(region);
-
-        let (start_key, end_key) = match requested_range {
-            Some((start_key, end_key)) => {
-                let start_key = if start_key.is_empty() {
-                    region_start_key.clone()
-                } else {
-                    keys::data_key(Key::from_raw(start_key).as_encoded())
-                };
-
-                let end_key = if end_key.is_empty() {
-                    region_end_key.clone()
-                } else {
-                    keys::data_end_key(Key::from_raw(end_key).as_encoded())
-                };
-
-                // Clamp the requested range to the current Region bounds. A
-                // CPU-top range is sampled asynchronously and can outlive a
-                // Region split, so it may describe sibling-Region keyspace.
-                // Classic raftstore shares one engine, so those sibling keys
-                // remain visible; scanning them would let out-of-Region keys
-                // produce invalid split points or exhaust the fallback scan
-                // budget before an in-Region key is reached.
-                let start_key = max(start_key, region_start_key);
-                let end_key = min(end_key, region_end_key);
-
-                (start_key, end_key)
-            }
-            None => (region_start_key, region_end_key),
+        let (start_key, end_key) = match &requested_range {
+            Some((start_key, end_key)) => requested_key_range_in_region(region, start_key, end_key),
+            None => (keys::enc_start_key(region), keys::enc_end_key(region)),
         };
 
         // The clamped range can be empty or inverted when a stale range no
@@ -1358,6 +1439,7 @@ where
                 region,
                 start_key,
                 end_key,
+                tied_key_ranges,
                 split_reason,
                 policy,
                 bucket_ranges,
@@ -1365,6 +1447,7 @@ where
                 &region,
                 start_key,
                 end_key,
+                tied_key_ranges,
                 split_reason,
                 policy,
                 bucket_ranges,

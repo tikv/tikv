@@ -40,6 +40,9 @@ use crate::store::{
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
+// The max number of the key ranges of a Region that are equally the hottest
+// kept for the CPU-based split.
+const CPU_TOP_TIED_KEY_RANGE_LIMIT: usize = 8;
 
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
@@ -274,6 +277,8 @@ pub struct Recorder {
     pub create_time: SystemTime,
     pub cpu_usage: f64,
     pub hottest_key_range: Option<KeyRange>,
+    // The other key ranges that are as hot as `hottest_key_range`.
+    pub tied_key_ranges: Vec<KeyRange>,
 }
 
 impl Recorder {
@@ -285,6 +290,7 @@ impl Recorder {
             create_time: SystemTime::now(),
             cpu_usage: 0.0,
             hottest_key_range: None,
+            tied_key_ranges: vec![],
         }
     }
 
@@ -302,8 +308,10 @@ impl Recorder {
         self.cpu_usage = cpu_usage;
     }
 
-    fn update_hottest_key_range(&mut self, key_range: KeyRange) {
+    fn update_hottest_key_range(&mut self, key_range: KeyRange, tied_key_ranges: &[KeyRange]) {
         self.hottest_key_range = Some(key_range);
+        self.tied_key_ranges.clear();
+        self.tied_key_ranges.extend_from_slice(tied_key_ranges);
     }
 
     fn is_ready(&self) -> bool {
@@ -525,6 +533,10 @@ pub struct SplitInfo {
     pub split_key: Option<Vec<u8>>,
     pub start_key: Option<Vec<u8>>,
     pub end_key: Option<Vec<u8>>,
+    // The other key ranges that are as hot as the one given by `start_key`
+    // and `end_key`. The Region is split on half within the largest one of them
+    // all.
+    pub tied_key_ranges: Vec<KeyRange>,
 }
 
 impl SplitInfo {
@@ -537,6 +549,7 @@ impl SplitInfo {
             split_key: Some(split_key),
             start_key: None,
             end_key: None,
+            tied_key_ranges: vec![],
         }
     }
 
@@ -555,8 +568,62 @@ impl SplitInfo {
             split_key: None,
             start_key: Some(start_key),
             end_key: Some(end_key),
+            tied_key_ranges: vec![],
         }
     }
+}
+
+// The CPU time of a key range, which is a (start key, end key) pair.
+type KeyRangeCpuTime<'a> = (u32, &'a (Vec<u8>, Vec<u8>));
+
+// Cut the key ranges into disjoint ones at each of their start and end keys,
+// the CPU time of a disjoint key range is the sum of the CPU time of all the
+// key ranges covering it. The requests reading the same data do not always
+// have the same key range, e.g. the end key of `ts <= now()` moves forward with
+// every request, so the CPU time has to be counted for the data rather than
+// for each distinct key range.
+//
+// A key range whose start key is not less than its end key, e.g. a point get,
+// covers no other key and is kept as it is.
+fn cut_into_disjoint_key_ranges(
+    key_ranges: Vec<KeyRangeCpuTime<'_>>,
+) -> Vec<(u32, Vec<u8>, Vec<u8>)> {
+    let to_u32 = |cpu_time: u64| cpu_time.min(u32::MAX as u64) as u32;
+    let mut disjoint = Vec::new();
+    // (key, whether a key range starts or ends at it, CPU time), an empty end
+    // key means the key range is unbounded.
+    let mut bounds: Vec<(&[u8], bool, u64)> = Vec::with_capacity(key_ranges.len() * 2);
+    let mut unbounded_cpu_time = 0;
+    for (cpu_time, (start_key, end_key)) in key_ranges {
+        if end_key.is_empty() {
+            bounds.push((start_key, true, cpu_time as u64));
+            unbounded_cpu_time += cpu_time as u64;
+        } else if start_key < end_key {
+            bounds.push((start_key, true, cpu_time as u64));
+            bounds.push((end_key, false, cpu_time as u64));
+        } else {
+            disjoint.push((cpu_time, start_key.clone(), end_key.clone()));
+        }
+    }
+    bounds.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    // The CPU time of the key ranges covering the keys after `last_key`.
+    let mut covering_cpu_time = 0;
+    let mut last_key: &[u8] = &[];
+    for (key, is_start, cpu_time) in bounds {
+        if covering_cpu_time > 0 && last_key < key {
+            disjoint.push((to_u32(covering_cpu_time), last_key.to_vec(), key.to_vec()));
+        }
+        if is_start {
+            covering_cpu_time += cpu_time;
+        } else {
+            covering_cpu_time -= cpu_time;
+        }
+        last_key = key;
+    }
+    if unbounded_cpu_time > 0 {
+        disjoint.push((to_u32(unbounded_cpu_time), last_key.to_vec(), vec![]));
+    }
+    disjoint
 }
 
 #[derive(PartialEq, Debug)]
@@ -767,11 +834,11 @@ impl AutoSplitController {
         &mut self,
         ctx: &'c mut AutoSplitControllerContext,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
-    ) -> &'c HashMap<u64, (f64, Option<KeyRange>)> {
+    ) -> &'c CpuStatsCache {
         // RegionID -> (CPU usage, Hottest Key Range), calculate the CPU usage and its
         // hottest key range.
         if !self.should_check_region_cpu() {
-            return ctx.empty_region_cpu_map();
+            return ctx.empty_cpu_stats_cache();
         }
 
         let (
@@ -779,6 +846,7 @@ impl AutoSplitController {
             CpuStatsCache {
                 region_cpu_map,
                 hottest_key_range_cpu_time_map,
+                region_tied_key_ranges,
             },
         ) = ctx.batch_recv_cpu_stats(cpu_stats_receiver);
         // Calculate the Region CPU usage.
@@ -809,24 +877,46 @@ impl AutoSplitController {
                 *cpu_time /= collect_interval_ms as f64;
             }
         });
-        // Choose the hottest key range for each Region.
+        // Choose the hottest key range for each Region. The key ranges of a
+        // Region are cut into disjoint ones first to count the CPU time for the
+        // data rather than for each distinct key range.
+        let mut region_key_ranges: HashMap<u64, Vec<KeyRangeCpuTime<'_>>> = HashMap::default();
         region_key_range_cpu_time_map
             .iter()
+            .filter(|(_, cpu_time)| **cpu_time > 0)
             .for_each(|((region_id, key_range), cpu_time)| {
-                let hottest_key_range_cpu_time = hottest_key_range_cpu_time_map
+                region_key_ranges
                     .entry(*region_id)
-                    .or_insert_with(|| 0);
-                if cpu_time > hottest_key_range_cpu_time {
-                    region_cpu_map
-                        .entry(*region_id)
-                        .and_modify(|(_, old_key_range)| {
-                            *old_key_range =
-                                Some(build_key_range(&key_range.0, &key_range.1, false));
-                        });
-                    *hottest_key_range_cpu_time = *cpu_time;
-                }
+                    .or_default()
+                    .push((*cpu_time, *key_range));
             });
-        region_cpu_map
+        for (region_id, key_ranges) in region_key_ranges {
+            let mut key_ranges = cut_into_disjoint_key_ranges(key_ranges);
+            let Some(hottest_cpu_time) = key_ranges.iter().map(|(cpu_time, ..)| *cpu_time).max()
+            else {
+                continue;
+            };
+            // The CPU time of a request is counted for each of its key ranges,
+            // so there could be several key ranges that are equally the
+            // hottest. All of them are kept for the split checker to pick the
+            // largest one, in the order of the keys to make the result stable.
+            key_ranges.retain(|(cpu_time, ..)| *cpu_time == hottest_cpu_time);
+            key_ranges.sort_unstable_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
+            key_ranges.truncate(CPU_TOP_TIED_KEY_RANGE_LIMIT);
+            let mut key_ranges = key_ranges
+                .iter()
+                .map(|(_, start_key, end_key)| build_key_range(start_key, end_key, false));
+            let hottest_key_range = key_ranges.next();
+            region_cpu_map
+                .entry(region_id)
+                .and_modify(|(_, old_key_range)| *old_key_range = hottest_key_range);
+            hottest_key_range_cpu_time_map.insert(region_id, hottest_cpu_time);
+            let tied_key_ranges: Vec<KeyRange> = key_ranges.collect();
+            if !tied_key_ranges.is_empty() {
+                region_tied_key_ranges.insert(region_id, tied_key_ranges);
+            }
+        }
+        &ctx.cpu_stats_cache
     }
 
     fn collect_thread_usage(thread_stats: &ThreadInfoStatistics, name: &str) -> f64 {
@@ -854,7 +944,7 @@ impl AutoSplitController {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
         let region_infos_map = Self::collect_read_stats(ctx, read_stats_receiver);
-        let region_cpu_map = self.collect_cpu_stats(ctx, cpu_stats_receiver);
+        let cpu_stats_cache = self.collect_cpu_stats(ctx, cpu_stats_receiver);
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
@@ -897,13 +987,14 @@ impl AutoSplitController {
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
             region_qps_histogram.observe(qps as f64);
             region_bytes_histogram.observe(byte as f64 / 1024.0);
-            let (cpu_usage, hottest_key_range) =
-                if let Some((cpu_usage, key_range)) = region_cpu_map.get(&region_id) {
-                    region_cpu_histogram.observe(cpu_usage * 1000.0);
-                    (*cpu_usage, key_range.clone())
-                } else {
-                    (0.0, None)
-                };
+            let (cpu_usage, hottest_key_range) = if let Some((cpu_usage, key_range)) =
+                cpu_stats_cache.region_cpu_map.get(&region_id)
+            {
+                region_cpu_histogram.observe(cpu_usage * 1000.0);
+                (*cpu_usage, key_range.clone())
+            } else {
+                (0.0, None)
+            };
             let is_region_busy = self.is_region_busy(unified_read_pool_thread_usage, cpu_usage);
             debug!("load base split params";
                 "region_id" => region_id,
@@ -940,7 +1031,11 @@ impl AutoSplitController {
             recorder.update_peer(&region_infos[0].peer);
             recorder.update_cpu_usage(cpu_usage);
             if let Some(hottest_key_range) = hottest_key_range {
-                recorder.update_hottest_key_range(hottest_key_range);
+                let tied_key_ranges = cpu_stats_cache
+                    .region_tied_key_ranges
+                    .get(&region_id)
+                    .map_or(&[][..], |key_ranges| key_ranges.as_slice());
+                recorder.update_hottest_key_range(hottest_key_range, tied_key_ranges);
             }
 
             let key_ranges = sample(
@@ -1005,12 +1100,13 @@ impl AutoSplitController {
                     cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
                 });
                 let region_id = top_cpu_usage[0];
-                if let Some((peer, cpu_usage, hottest_key_range)) =
+                if let Some((peer, cpu_usage, hottest_key_range, tied_key_ranges)) =
                     self.recorders.get(&region_id).map(|recorder| {
                         (
                             recorder.peer.clone(),
                             recorder.cpu_usage,
                             recorder.hottest_key_range.clone(),
+                            recorder.tied_key_ranges.clone(),
                         )
                     })
                 {
@@ -1029,12 +1125,17 @@ impl AutoSplitController {
                                 "cpu_usage" => cpu_usage,
                             );
                         } else {
-                            split_infos.push(SplitInfo::with_start_end_key(
+                            let tied_key_range_count = tied_key_ranges.len();
+                            let mut split_info = SplitInfo::with_start_end_key(
                                 region_id,
                                 peer,
                                 hottest_key_range.start_key.clone(),
                                 hottest_key_range.end_key.clone(),
-                            ));
+                            );
+                            // The split checker picks the largest one of the
+                            // key ranges that are equally the hottest.
+                            split_info.tied_key_ranges = tied_key_ranges;
+                            split_infos.push(split_info);
                             // Record this emitted auto-split attempt for
                             // cooldown-based duplicate suppression. This state
                             // reflects emission only; the controller does not
@@ -1048,6 +1149,7 @@ impl AutoSplitController {
                                 "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
                                 "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
                                 "cpu_usage" => cpu_usage,
+                                "tied_key_range_count" => tied_key_range_count,
                             );
                         }
                     } else {
@@ -1108,6 +1210,8 @@ impl AutoSplitController {
 pub struct CpuStatsCache {
     region_cpu_map: HashMap<u64, (f64, Option<KeyRange>)>,
     hottest_key_range_cpu_time_map: HashMap<u64, u32>,
+    // RegionID -> the other key ranges that are as hot as the hottest one.
+    region_tied_key_ranges: HashMap<u64, Vec<KeyRange>>,
 }
 
 pub struct AutoSplitControllerContext {
@@ -1156,6 +1260,7 @@ impl AutoSplitControllerContext {
         self.cpu_stats_vec.clear();
         self.cpu_stats_cache.region_cpu_map.clear();
         self.cpu_stats_cache.hottest_key_range_cpu_time_map.clear();
+        self.cpu_stats_cache.region_tied_key_ranges.clear();
 
         while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
             self.cpu_stats_vec.push(cpu_stats);
@@ -1167,8 +1272,13 @@ impl AutoSplitControllerContext {
     }
 
     pub fn empty_region_cpu_map(&mut self) -> &HashMap<u64, (f64, Option<KeyRange>)> {
+        &self.empty_cpu_stats_cache().region_cpu_map
+    }
+
+    fn empty_cpu_stats_cache(&mut self) -> &CpuStatsCache {
         self.cpu_stats_cache.region_cpu_map.clear();
-        &self.cpu_stats_cache.region_cpu_map
+        self.cpu_stats_cache.region_tied_key_ranges.clear();
+        &self.cpu_stats_cache
     }
 
     pub fn maybe_gc(&mut self) {
@@ -1401,8 +1511,9 @@ mod tests {
                 b"right-angle trapezoid with high CPU usage",
                 vec![gen_read_stats(1, key_ranges.clone())],
                 vec![gen_cpu_stats(1, key_ranges.clone(), vec![100, 200])],
+                // [a, l) is read by both key ranges.
                 b"a",
-                b"m",
+                b"l",
             );
             check_split_key_range(
                 b"right-angle trapezoid with high CPU usage",
@@ -1427,10 +1538,12 @@ mod tests {
                 b"right-angle trapezoid with high CPU usage",
                 vec![gen_read_stats(1, key_ranges.clone())],
                 vec![gen_cpu_stats(1, key_ranges, vec![200, 100])],
-                b"a",
+                // [b, l) is read by both key ranges.
+                b"b",
                 b"l",
             );
         }
+        check_cpu_top_tied_key_ranges_with_flush();
         fail::remove("mock_grpc_poll_is_not_busy");
         fail::remove("mock_unified_read_pool_is_busy");
         fail::remove("mock_region_is_busy");
@@ -2074,7 +2187,9 @@ mod tests {
         let mut auto_split_controller = AutoSplitController::default();
 
         let (mut ctx, _, cpu_stats_receiver) = new_auto_split_controller_ctx(vec![], vec![]);
-        let region_cpu_map = auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
+        let region_cpu_map = &auto_split_controller
+            .collect_cpu_stats(&mut ctx, &cpu_stats_receiver)
+            .region_cpu_map;
         assert!(region_cpu_map.is_empty());
 
         let ab_key_range_tag = Arc::new(TagInfos {
@@ -2185,8 +2300,9 @@ mod tests {
 
             let (mut ctx, _, cpu_stats_receiver) =
                 new_auto_split_controller_ctx(vec![], vec![Arc::new(raw_records)]);
-            let region_cpu_map =
-                auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
+            let region_cpu_map = &auto_split_controller
+                .collect_cpu_stats(&mut ctx, &cpu_stats_receiver)
+                .region_cpu_map;
             assert_eq!(
                 region_cpu_map.len(),
                 1,
@@ -2204,6 +2320,259 @@ mod tests {
                 test_case.4,
                 "test_collect_cpu_stats case: {}",
                 i
+            );
+        }
+    }
+
+    // Generate the CPU stats of the requests scanning two key ranges of the same
+    // Region each:
+    //   1. a "work" key range whose end key moves forward with every request, so
+    //      the exact key range differs on every request;
+    //   2. a small "tail" key range which is clipped by the Region boundary, so it
+    //      is identical on every request.
+    // This is what a queue-style index sees, e.g. `status IN (a, b) AND ts <=
+    // now()`, when the Region boundary is located inside the second key range.
+    fn gen_moving_end_key_cpu_stats(
+        region_id: u64,
+        requests: u32,
+        cpu_time_per_request: u32,
+    ) -> Arc<RawRecords> {
+        let mut raw_records = RawRecords::default();
+        raw_records.duration = Duration::from_millis(100);
+        for i in 0..requests {
+            let work_end = format!("pending_{:03}", i + 1).into_bytes();
+            let tag = Arc::new(TagInfos {
+                store_id: 0,
+                region_id,
+                peer_id: 0,
+                key_ranges: vec![
+                    (b"pending_000".to_vec(), work_end),
+                    (b"running_000".to_vec(), b"running_001".to_vec()),
+                ],
+                extra_attachment: Arc::new(vec![]),
+            });
+            raw_records.records.insert(
+                tag,
+                RawRecord {
+                    cpu_time: cpu_time_per_request,
+                    ..Default::default()
+                },
+            );
+        }
+        Arc::new(raw_records)
+    }
+
+    // The CPU time of a request is counted for each of its key ranges. The key
+    // ranges doing the real work are different on every request, the CPU time
+    // must be counted for the data they cover, otherwise the key range shared
+    // by all the requests is the only hot one no matter where the CPU time is
+    // spent.
+    #[test]
+    fn test_collect_cpu_stats_multi_range_with_moving_end_key() {
+        const REQUESTS: u32 = 100;
+        const CPU_TIME_PER_REQUEST: u32 = 10;
+        const CPU_TIME: u32 = REQUESTS * CPU_TIME_PER_REQUEST;
+
+        let cpu_stats = gen_moving_end_key_cpu_stats(1, REQUESTS, CPU_TIME_PER_REQUEST);
+        let mut auto_split_controller = AutoSplitController::default();
+        let (mut ctx, _, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(vec![], vec![cpu_stats]);
+        let cache = auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
+
+        // The data read by all the requests is as hot as the key range shared
+        // by all the requests.
+        let (cpu_usage, hottest_key_range) = cache.region_cpu_map.get(&1).unwrap();
+        assert_eq!(*cpu_usage, CPU_TIME as f64 / 100.0);
+        assert_eq!(
+            hottest_key_range.as_ref(),
+            Some(&build_key_range(b"pending_000", b"pending_001", false))
+        );
+        assert_eq!(
+            cache.region_tied_key_ranges.get(&1).unwrap(),
+            &vec![build_key_range(b"running_000", b"running_001", false)]
+        );
+        assert_eq!(
+            *cache.hottest_key_range_cpu_time_map.get(&1).unwrap(),
+            CPU_TIME
+        );
+    }
+
+    #[test]
+    fn test_cut_into_disjoint_key_ranges() {
+        let check = |key_ranges: Vec<(u32, &[u8], &[u8])>, expected: Vec<(u32, &[u8], &[u8])>| {
+            let key_ranges: Vec<(u32, (Vec<u8>, Vec<u8>))> = key_ranges
+                .into_iter()
+                .map(|(cpu_time, start, end)| (cpu_time, (start.to_vec(), end.to_vec())))
+                .collect();
+            let mut disjoint = cut_into_disjoint_key_ranges(
+                key_ranges
+                    .iter()
+                    .map(|(cpu_time, key_range)| (*cpu_time, key_range))
+                    .collect(),
+            );
+            disjoint.sort_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
+            let expected: Vec<(u32, Vec<u8>, Vec<u8>)> = expected
+                .into_iter()
+                .map(|(cpu_time, start, end)| (cpu_time, start.to_vec(), end.to_vec()))
+                .collect();
+            assert_eq!(disjoint, expected);
+        };
+
+        check(vec![], vec![]);
+        // The key ranges not overlapping are kept as they are.
+        check(
+            vec![(2, b"b", b"c"), (1, b"a", b"b"), (3, b"d", b"e")],
+            vec![(1, b"a", b"b"), (2, b"b", b"c"), (3, b"d", b"e")],
+        );
+        // The same start key with different end keys.
+        check(
+            vec![(1, b"a", b"c"), (2, b"a", b"b"), (4, b"a", b"d")],
+            vec![(7, b"a", b"b"), (5, b"b", b"c"), (4, b"c", b"d")],
+        );
+        // The same end key with different start keys.
+        check(
+            vec![(1, b"a", b"d"), (2, b"b", b"d"), (4, b"c", b"d")],
+            vec![(1, b"a", b"b"), (3, b"b", b"c"), (7, b"c", b"d")],
+        );
+        // A wide key range does not hide the hot one inside it.
+        check(
+            vec![(1, b"a", b"z"), (100, b"m", b"n")],
+            vec![(1, b"a", b"m"), (101, b"m", b"n"), (1, b"n", b"z")],
+        );
+        // Partially overlapped.
+        check(
+            vec![(1, b"a", b"c"), (2, b"b", b"d")],
+            vec![(1, b"a", b"b"), (3, b"b", b"c"), (2, b"c", b"d")],
+        );
+        // An empty end key means unbounded.
+        check(
+            vec![
+                (1, b"a", b"b"),
+                (2, b"c", b""),
+                (4, b"d", b"e"),
+                (8, b"x", b""),
+            ],
+            vec![
+                (1, b"a", b"b"),
+                (2, b"c", b"d"),
+                (6, b"d", b"e"),
+                (2, b"e", b"x"),
+                (10, b"x", b""),
+            ],
+        );
+        // A point is kept as it is and does not cut the others.
+        check(
+            vec![(1, b"a", b"c"), (2, b"b", b"b"), (4, b"a", b"a")],
+            vec![(4, b"a", b"a"), (1, b"a", b"c"), (2, b"b", b"b")],
+        );
+        // The CPU time does not overflow.
+        check(
+            vec![(u32::MAX, b"a", b"c"), (1, b"b", b"d")],
+            vec![
+                (u32::MAX, b"a", b"b"),
+                (u32::MAX, b"b", b"c"),
+                (1, b"c", b"d"),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_collect_cpu_stats_tied_key_ranges() {
+        // The key ranges of Region 1 are not as hot as each other, 12 key
+        // ranges of Region 2 are equally the hottest, and the key range of
+        // Region 3 has no CPU time.
+        let region_1_key_ranges = vec![
+            build_key_range(b"a", b"b", false),
+            build_key_range(b"b", b"c", false),
+            build_key_range(b"c", b"d", false),
+        ];
+        let mut region_2_key_ranges: Vec<KeyRange> = (0..12u8)
+            .map(|i| build_key_range(&[b'a' + i], &[b'a' + i, b'x'], false))
+            .collect();
+        region_2_key_ranges.push(build_key_range(b"y", b"z", false));
+        let mut region_2_cpu_times = vec![7; 12];
+        region_2_cpu_times.push(6);
+        let mut auto_split_controller = AutoSplitController::default();
+        let (mut ctx, _, cpu_stats_receiver) = new_auto_split_controller_ctx(
+            vec![],
+            vec![
+                gen_cpu_stats(1, region_1_key_ranges.clone(), vec![5, 9, 8]),
+                gen_cpu_stats(2, region_2_key_ranges.clone(), region_2_cpu_times),
+                gen_cpu_stats(3, vec![build_key_range(b"a", b"b", false)], vec![0]),
+            ],
+        );
+        let cache = auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
+
+        assert_eq!(
+            cache.region_cpu_map.get(&1).unwrap().1,
+            Some(region_1_key_ranges[1].clone())
+        );
+        assert!(!cache.region_tied_key_ranges.contains_key(&1));
+
+        // The key ranges that are equally the hottest are kept in the order of
+        // the keys, and the number of them is limited.
+        assert_eq!(
+            cache.region_cpu_map.get(&2).unwrap().1,
+            Some(region_2_key_ranges[0].clone())
+        );
+        assert_eq!(
+            cache.region_tied_key_ranges.get(&2).unwrap().as_slice(),
+            &region_2_key_ranges[1..CPU_TOP_TIED_KEY_RANGE_LIMIT]
+        );
+
+        assert_eq!(cache.region_cpu_map.get(&3).unwrap().1, None);
+        assert!(!cache.region_tied_key_ranges.contains_key(&3));
+
+        // No key range is left behind after the stats are collected again.
+        let (mut ctx, _, cpu_stats_receiver) = new_auto_split_controller_ctx(vec![], vec![]);
+        ctx.cpu_stats_cache
+            .region_tied_key_ranges
+            .insert(1, vec![build_key_range(b"a", b"b", false)]);
+        let cache = auto_split_controller.collect_cpu_stats(&mut ctx, &cpu_stats_receiver);
+        assert!(cache.region_tied_key_ranges.is_empty());
+    }
+
+    // Run the whole flush with the requests of a queue-style index: the same
+    // Region is the top hot CPU one, and the key-based split could never find a
+    // split key since all the requests cover the same span.
+    // NOTICE: the caller should have the CPU-related fail points enabled.
+    fn check_cpu_top_tied_key_ranges_with_flush() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.qps_threshold = Some(1);
+        hub.cfg.sample_threshold = 0;
+        let detect_times = hub.cfg.detect_times;
+
+        for i in 0..detect_times {
+            // The read stats only keep the span of a request.
+            let read_stats = gen_read_stats(
+                1,
+                vec![build_key_range(b"pending_000", b"running_001", false)],
+            );
+            let cpu_stats = gen_moving_end_key_cpu_stats(1, 20, 10);
+            let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+                new_auto_split_controller_ctx(vec![read_stats], vec![cpu_stats]);
+            let (_, split_infos) = hub.flush(
+                &mut ctx,
+                &read_stats_receiver,
+                &cpu_stats_receiver,
+                &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
+            );
+            if i + 1 != detect_times {
+                assert!(split_infos.is_empty(), "flush: {}", i);
+                continue;
+            }
+            // The data read by all the requests is sent with the key range
+            // shared by all the requests, which is as hot as it.
+            assert_eq!(split_infos.len(), 1);
+            let split_info = &split_infos[0];
+            assert_eq!(split_info.region_id, 1);
+            assert!(split_info.split_key.is_none());
+            assert_eq!(split_info.start_key.as_deref(), Some(&b"pending_000"[..]));
+            assert_eq!(split_info.end_key.as_deref(), Some(&b"pending_001"[..]));
+            assert_eq!(
+                split_info.tied_key_ranges,
+                vec![build_key_range(b"running_000", b"running_001", false)]
             );
         }
     }

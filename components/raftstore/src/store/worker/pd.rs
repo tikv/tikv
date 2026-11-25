@@ -2054,6 +2054,7 @@ where
                             region_epoch: epoch,
                             start_key: None,
                             end_key: None,
+                            tied_key_ranges: vec![],
                             policy: split_region.get_policy(),
                             source: "pd",
                             cb: Callback::None,
@@ -2657,6 +2658,11 @@ where
                                 region_epoch: region.get_region_epoch().clone(),
                                 start_key: Some(start_key.clone()),
                                 end_key: Some(end_key.clone()),
+                                tied_key_ranges: split_info
+                                    .tied_key_ranges
+                                    .into_iter()
+                                    .map(|mut r| (r.take_start_key(), r.take_end_key()))
+                                    .collect(),
                                 policy: pdpb::CheckPolicy::Scan,
                                 source: AUTO_SPLIT_SOURCE,
                                 cb: Callback::None,
@@ -3126,6 +3132,7 @@ mod tests {
             split_key: Some(b"k".to_vec()),
             start_key: None,
             end_key: None,
+            tied_key_ranges: vec![],
         };
         let msg = take_auto_split_message::<KvTestEngine>(epoch.clone(), &mut split_info).unwrap();
 

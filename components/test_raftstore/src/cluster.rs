@@ -2054,6 +2054,7 @@ impl<T: Simulator> Cluster<T> {
                 region_epoch: region.get_region_epoch().clone(),
                 start_key: None,
                 end_key: None,
+                tied_key_ranges: vec![],
                 policy: CheckPolicy::Scan,
                 source: "bucket",
                 cb,
