@@ -373,13 +373,17 @@ impl SubscriptionTracer {
         if old_epoch.version == new_epoch.version {
             let mut meta = new_region.clone();
             // The event may be stale: `narrow_range_on_version_change` can have shrunk the
-            // range after it was queued (e.g. a conf change followed by a split, both
-            // handled before this refresh runs). At the same version the narrowed range is
-            // the truth, so never widen it back.
-            if utils::region_encloses(&meta, &subscription.meta) {
-                meta.set_start_key(subscription.meta.get_start_key().to_vec());
-                meta.set_end_key(subscription.meta.get_end_key().to_vec());
-            }
+            // range after it was queued (e.g. a conf change followed by a split, or a
+            // merge followed by a split, all handled before this refresh runs). Within
+            // one version the range can only have shrunk, so the recorded range is the
+            // truth: intersect rather than adopt the event's range, which could be wider
+            // or merely overlapping.
+            let (start, end) = intersect_ranges(
+                (subscription.meta.get_start_key(), subscription.meta.get_end_key()),
+                (new_region.get_start_key(), new_region.get_end_key()),
+            );
+            meta.set_start_key(start);
+            meta.set_end_key(end);
             subscription.meta = meta;
             return true;
         }
@@ -415,20 +419,10 @@ impl SubscriptionTracer {
         if new_region.get_region_epoch().version <= meta.get_region_epoch().version {
             return false;
         }
-        // Intersect `[meta.start, meta.end)` with `[new.start, new.end)`; an empty end
-        // key means +inf.
-        let start = std::cmp::max(meta.get_start_key(), new_region.get_start_key()).to_vec();
-        let (m_end, n_end) = (meta.get_end_key(), new_region.get_end_key());
-        let mut end = match (m_end.is_empty(), n_end.is_empty()) {
-            (true, _) => n_end.to_vec(),
-            (_, true) => m_end.to_vec(),
-            _ => std::cmp::min(m_end, n_end).to_vec(),
-        };
-        // Disjoint ranges: collapse to the empty range `[start, start)`. `start` is
-        // non-empty here because `end` is non-empty and `start >= end`.
-        if !end.is_empty() && start >= end {
-            end = start.clone();
-        }
+        let (start, end) = intersect_ranges(
+            (meta.get_start_key(), meta.get_end_key()),
+            (new_region.get_start_key(), new_region.get_end_key()),
+        );
         if start == meta.get_start_key() && end == meta.get_end_key() {
             return false;
         }
@@ -702,6 +696,23 @@ impl std::fmt::Debug for TwoPhaseResolver {
     }
 }
 
+/// Intersect two key ranges `[start, end)`; an empty end key means +inf.
+///
+/// Disjoint ranges collapse to the empty range `[start, start)`. `start` is
+/// non-empty then, because a non-empty `end` that is `<= start` implies it.
+fn intersect_ranges(a: (&[u8], &[u8]), b: (&[u8], &[u8])) -> (Vec<u8>, Vec<u8>) {
+    let start = std::cmp::max(a.0, b.0).to_vec();
+    let mut end = match (a.1.is_empty(), b.1.is_empty()) {
+        (true, _) => b.1.to_vec(),
+        (_, true) => a.1.to_vec(),
+        _ => std::cmp::min(a.1, b.1).to_vec(),
+    };
+    if !end.is_empty() && start >= end {
+        end = start.clone();
+    }
+    (start, end)
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
@@ -811,6 +822,33 @@ mod test {
         // Other fields are still taken from the event.
         let sub = subs.get_subscription_of(1).unwrap();
         assert_eq!(sub.value().meta.get_region_epoch().conf_ver, 7);
+    }
+
+    #[test]
+    fn test_stale_same_version_refresh_never_widens_overlapping() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        let range = |subs: &SubscriptionTracer| {
+            let sub = subs.get_subscription_of(1).unwrap();
+            let m = &sub.value().meta;
+            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
+        };
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+        // Merge to [a, f), then a split leaves [b, f): recorded range is [b, c).
+        subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"f"));
+        subs.narrow_range_on_version_change(&region_of(1, 3, b"b", b"f"));
+        assert_eq!(range(&subs), (b"b".to_vec(), b"c".to_vec()));
+
+        // Stale event at the subscription's version (v1) that overlaps but doesn't
+        // enclose the recorded range: [a, bb) must not pull the start back to `a`.
+        assert!(subs.try_update_region(&region_of(1, 1, b"a", b"bb")));
+        assert_eq!(range(&subs), (b"b".to_vec(), b"bb".to_vec()));
+
+        // Non-intersecting stale event: collapses instead of adopting [x, z).
+        assert!(subs.try_update_region(&region_of(1, 1, b"x", b"z")));
+        assert_eq!(range(&subs), (b"x".to_vec(), b"x".to_vec()));
     }
 
     #[test]
