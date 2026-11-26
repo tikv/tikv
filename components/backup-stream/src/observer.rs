@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
@@ -11,6 +11,7 @@ use tikv_util::{HandyRwLock, worker::Scheduler};
 use crate::{
     debug,
     endpoint::{ObserveOp, Task},
+    subscription_track::SubscriptionTracer,
     try_send,
     utils::SegmentSet,
 };
@@ -24,6 +25,11 @@ pub struct BackupStreamObserver {
     scheduler: Scheduler<Task>,
     // Note: maybe wrap those fields to methods?
     pub ranges: Arc<RwLock<SegmentSet<Vec<u8>>>>,
+    // Set once by the endpoint after it creates the tracer. It is behind an `Arc` because the
+    // observer is cloned into the coprocessor host before the endpoint exists, and every clone
+    // must see the tracer. Used to pause a subscription synchronously when a region's epoch
+    // version changes, instead of waiting for the async `RefreshResolver`.
+    subs: Arc<OnceLock<SubscriptionTracer>>,
 }
 
 impl BackupStreamObserver {
@@ -35,7 +41,14 @@ impl BackupStreamObserver {
         BackupStreamObserver {
             scheduler,
             ranges: Default::default(),
+            subs: Default::default(),
         }
+    }
+
+    /// Give the observer access to the subscription tracer. Only the first call
+    /// takes effect.
+    pub fn set_subscriptions(&self, subs: SubscriptionTracer) {
+        let _ = self.subs.set(subs);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -167,6 +180,13 @@ impl RegionChangeObserver for BackupStreamObserver {
                 );
             }
             RegionChangeEvent::Update(_) => {
+                // Runs on the peer thread, after the split (or merge) applied but before the
+                // new child peers exist (so before any child write). Pause the subscription
+                // now so a resolve running before `RefreshResolver` is handled doesn't report
+                // a resolved ts for a range or epoch this region no longer matches.
+                if let Some(subs) = self.subs.get() {
+                    subs.pause_region(ctx.region());
+                }
                 try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::RefreshResolver {
@@ -198,11 +218,12 @@ mod tests {
     };
     use tikv::storage::txn::txn_status_cache::TxnStatusCache;
     use tikv_util::{HandyRwLock, worker::dummy_scheduler};
+    use txn_types::TimeStamp;
 
     use super::BackupStreamObserver;
     use crate::{
         endpoint::{ObserveOp, Task},
-        subscription_track::SubscriptionTracer,
+        subscription_track::{EMPTY_RANGE_SENTINEL, Ref, SubscriptionTracer},
     };
 
     fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
@@ -314,6 +335,53 @@ mod tests {
             task,
             Ok(Some(Task::ModifyObserve(ObserveOp::Stop { region, .. }))) if region.id == 42
         ));
+    }
+
+    #[test]
+    fn test_split_pauses_subscription_synchronously() {
+        let (sched, mut rx) = dummy_scheduler();
+        let o = BackupStreamObserver::new(sched);
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        o.set_subscriptions(subs.clone());
+        assert!(o.ranges.wl().add((b"0001".to_vec(), b"0010".to_vec())));
+
+        let mut parent = fake_region(42, b"0001", b"0009");
+        parent.mut_region_epoch().set_version(1);
+        subs.register_region(&parent, ObserveHandle::new(), None);
+
+        let mut after_split = fake_region(42, b"0001", b"0005");
+        after_split.mut_region_epoch().set_version(2);
+        let mut ctx = ObserverContext::new(&after_split);
+        o.on_region_changed(
+            &mut ctx,
+            RegionChangeEvent::Update(RegionChangeReason::Split),
+            StateRole::Leader,
+        );
+
+        // The subscription is paused without the refresh op having been handled...
+        let sub = subs.get_subscription_of(42).unwrap();
+        assert_eq!(
+            (
+                sub.value().meta.get_start_key(),
+                sub.value().meta.get_end_key()
+            ),
+            EMPTY_RANGE_SENTINEL
+        );
+        drop(sub);
+        assert!(subs.resolve_with(TimeStamp::new(10), vec![42]).is_empty());
+        // ...and the refresh op is still sent.
+        let task = rx.recv_timeout(Duration::from_millis(20));
+        assert!(
+            matches!(
+                &task,
+                Ok(Some(Task::ModifyObserve(ObserveOp::RefreshResolver { region }))) if region.id == 42
+            ),
+            "it is {:?}",
+            task
+        );
     }
 
     #[test]

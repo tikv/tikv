@@ -812,6 +812,14 @@ impl std::fmt::Debug for DebugKeyRange<'_, '_> {
     }
 }
 
+/// Whether the key range of `outer` fully covers that of `inner`. An empty
+/// `end_key` means +inf.
+pub fn region_encloses(outer: &Region, inner: &Region) -> bool {
+    outer.get_start_key() <= inner.get_start_key()
+        && (outer.get_end_key().is_empty()
+            || (!inner.get_end_key().is_empty() && inner.get_end_key() <= outer.get_end_key()))
+}
+
 /// make a [`Region`](kvproto::metapb::Region) implements [`slog::KV`], which
 /// prints its fields like `[r.id=xxx] [r.ver=xxx] ...`
 pub fn slog_region(r: &Region) -> impl slog::KV + '_ {
@@ -916,9 +924,8 @@ mod test {
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{
-        BACKUP_META_FLAG_PREFIX, BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX,
-        BACKUP_META_MIN_TS_PREFIX, FutureWaitGroup, SegmentMap, is_in_range,
-        parse_backupmeta_filename,
+        is_in_range, parse_backupmeta_filename, region_encloses, FutureWaitGroup, SegmentMap,
+        BACKUP_META_FLAG_PREFIX, BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
     };
 
     #[test]
@@ -943,6 +950,112 @@ mod test {
 
         let range = super::debug_key_range(b"alpha", b"omega");
         assert_eq!("[?,?)", format!("{:?}", range));
+    }
+
+    #[test]
+    fn test_region_encloses() {
+        fn range(start_key: &[u8], end_key: &[u8]) -> Region {
+            let mut region = Region::default();
+            region.set_start_key(start_key.to_vec());
+            region.set_end_key(end_key.to_vec());
+            region
+        }
+
+        #[derive(Debug)]
+        struct EnclosesCase<'a> {
+            outer: (&'a [u8], &'a [u8]),
+            inner: (&'a [u8], &'a [u8]),
+            expected: bool,
+        }
+
+        let cases = [
+            // A region encloses itself.
+            EnclosesCase {
+                outer: (b"a", b"c"),
+                inner: (b"a", b"c"),
+                expected: true,
+            },
+            // Both halves of a split are enclosed by the parent.
+            EnclosesCase {
+                outer: (b"a", b"c"),
+                inner: (b"a", b"b"),
+                expected: true,
+            },
+            EnclosesCase {
+                outer: (b"a", b"c"),
+                inner: (b"b", b"c"),
+                expected: true,
+            },
+            // So is the middle of a three-way split.
+            EnclosesCase {
+                outer: (b"a", b"d"),
+                inner: (b"b", b"c"),
+                expected: true,
+            },
+            // Partial overlaps are not enclosures.
+            EnclosesCase {
+                outer: (b"a", b"c"),
+                inner: (b"b", b"d"),
+                expected: false,
+            },
+            EnclosesCase {
+                outer: (b"b", b"d"),
+                inner: (b"a", b"c"),
+                expected: false,
+            },
+            // Neither are disjoint ranges.
+            EnclosesCase {
+                outer: (b"a", b"b"),
+                inner: (b"c", b"d"),
+                expected: false,
+            },
+            // The relation is directed: the result of a merge does not get
+            // enclosed by the regions it was merged from.
+            EnclosesCase {
+                outer: (b"a", b"b"),
+                inner: (b"a", b"c"),
+                expected: false,
+            },
+            // An empty `end_key` on the outer region means +inf.
+            EnclosesCase {
+                outer: (b"a", b""),
+                inner: (b"b", b"c"),
+                expected: true,
+            },
+            EnclosesCase {
+                outer: (b"a", b""),
+                inner: (b"b", b""),
+                expected: true,
+            },
+            EnclosesCase {
+                outer: (b"", b""),
+                inner: (b"a", b"b"),
+                expected: true,
+            },
+            // An inner region reaching +inf is only enclosed by another one that reaches it too.
+            EnclosesCase {
+                outer: (b"a", b"c"),
+                inner: (b"b", b""),
+                expected: false,
+            },
+            EnclosesCase {
+                outer: (b"b", b""),
+                inner: (b"a", b""),
+                expected: false,
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                region_encloses(
+                    &range(case.outer.0, case.outer.1),
+                    &range(case.inner.0, case.inner.1)
+                ),
+                case.expected,
+                "case = {:?}",
+                case
+            );
+        }
     }
 
     #[test]
