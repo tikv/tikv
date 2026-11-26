@@ -574,14 +574,51 @@ where
         tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
     }
 
-    /// The max resolved ts among tracked regions that fully enclose `region`.
-    fn enclosing_resolved_ts(&self, region: &Region) -> Option<TimeStamp> {
+    /// Registers `region` with the max resolved ts among tracked regions that
+    /// fully enclose it (it was split from them, so it has no checkpoint of its
+    /// own), and returns that ts. Returns `None`, registering nothing, if no
+    /// tracked region encloses it.
+    ///
+    /// The lookup and the registration happen under the `resolved_ts` lock on
+    /// purpose. Unloading clears `resolved_ts` (`reset_for_unload`) and only
+    /// then clears `subs`, so either:
+    /// - we run first: our subscription is registered before the unload's
+    ///   `subs.clear()`, which removes it; or
+    /// - the unload runs first: the map is already empty and we get `None`, so
+    ///   the caller falls back to the persisted checkpoint.
+    ///
+    /// Reading the ts and registering separately would let an unload and a
+    /// same-name reload slip in between, leaving a scan that starts from a ts
+    /// whose temporary data was discarded.
+    fn register_inheriting(&self, region: &Region, handle: &ObserveHandle) -> Option<TimeStamp> {
         let resolved_ts = self.resolved_ts.lock().unwrap();
-        resolved_ts
+        let tso = resolved_ts
             .values()
             .filter(|cp| utils::region_encloses(&cp.region, region))
             .map(|cp| cp.checkpoint)
-            .max()
+            .max()?;
+        self.subs.register_region(region, handle.clone(), Some(tso));
+        Some(tso)
+    }
+
+    /// Registers `region` and starts its initial scan, from the resolved ts of
+    /// an enclosing tracked region if there is one, or else from the task's
+    /// persisted checkpoint.
+    async fn observe_inheriting_or_from_checkpoint(
+        &self,
+        task: &str,
+        region: &Region,
+        handle: &ObserveHandle,
+    ) -> Result<()> {
+        match self.register_inheriting(region, handle) {
+            Some(tso) => self.scan_registered(region, tso, handle.clone()).await,
+            None => {
+                let tso = self.get_last_checkpoint_of(task, region).await?;
+                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
+                    .await
+            }
+        }
+        Ok(())
     }
 
     /// Returns whether the task of `region` has been unloaded, dropping the
@@ -614,8 +651,6 @@ where
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
-            let tso = self.enclosing_resolved_ts(region);
-
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
@@ -625,16 +660,8 @@ where
                         .inc();
                     let r = async {
                         self.subs.add_pending_region(region);
-                        let tso = match tso {
-                            Some(tso) => tso,
-                            None => self.get_last_checkpoint_of(&for_task, region).await?,
-                        };
-                        self.observe_over_with_initial_data_from_checkpoint(
-                            region,
-                            tso,
-                            handle.clone(),
-                        )
-                        .await;
+                        self.observe_inheriting_or_from_checkpoint(&for_task, region, &handle)
+                            .await?;
                         Result::Ok(())
                     }
                     .await;
@@ -677,14 +704,8 @@ where
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
-                // If a tracked region fully encloses this one (it was split from it), start
-                // from the parent's resolved ts: this region has no checkpoint of its own.
-                let tso = match self.enclosing_resolved_ts(region) {
-                    Some(tso) => tso,
-                    None => self.get_last_checkpoint_of(&for_task, region).await?,
-                };
-                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
-                    .await;
+                self.observe_inheriting_or_from_checkpoint(&for_task, region, &handle)
+                    .await?;
             }
         }
         Ok(())
@@ -854,6 +875,17 @@ where
     ) {
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+        self.scan_registered(region, last_checkpoint, handle).await
+    }
+
+    /// Starts the initial scan of an already registered subscription.
+    #[instrument(skip_all)]
+    async fn scan_registered(
+        &self,
+        region: &Region,
+        last_checkpoint: TimeStamp,
+        handle: ObserveHandle,
+    ) {
         // The task may have been unloaded since the caller checked it, so don't scan
         // for it.
         if self.drop_subscription_if_task_unloaded(region, &handle) {
