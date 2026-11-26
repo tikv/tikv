@@ -27,8 +27,8 @@ pub struct BackupStreamObserver {
     pub ranges: Arc<RwLock<SegmentSet<Vec<u8>>>>,
     // Set once by the endpoint after it creates the tracer. It is behind an `Arc` because the
     // observer is cloned into the coprocessor host before the endpoint exists, and every clone
-    // must see the tracer. Used to narrow a subscription's range synchronously when a region
-    // shrinks, instead of waiting for the async `RefreshResolver`.
+    // must see the tracer. Used to pause a subscription synchronously when a region's epoch
+    // version changes, instead of waiting for the async `RefreshResolver`.
     subs: Arc<OnceLock<SubscriptionTracer>>,
 }
 
@@ -180,12 +180,12 @@ impl RegionChangeObserver for BackupStreamObserver {
                 );
             }
             RegionChangeEvent::Update(_) => {
-                // Runs on the peer thread, after the split applied but before the new child
-                // peers exist (so before any child write). Narrow the subscription's range now
-                // so a resolve running before `RefreshResolver` is handled doesn't claim the
-                // range this region just gave up.
+                // Runs on the peer thread, after the split (or merge) applied but before the
+                // new child peers exist (so before any child write). Pause the subscription
+                // now so a resolve running before `RefreshResolver` is handled doesn't report
+                // a resolved ts for a range or epoch this region no longer matches.
                 if let Some(subs) = self.subs.get() {
-                    subs.narrow_range_on_version_change(ctx.region());
+                    subs.pause_region(ctx.region());
                 }
                 try_send!(
                     self.scheduler,
@@ -218,11 +218,12 @@ mod tests {
     };
     use tikv::storage::txn::txn_status_cache::TxnStatusCache;
     use tikv_util::{HandyRwLock, worker::dummy_scheduler};
+    use txn_types::TimeStamp;
 
     use super::BackupStreamObserver;
     use crate::{
         endpoint::{ObserveOp, Task},
-        subscription_track::{Ref, SubscriptionTracer},
+        subscription_track::{EMPTY_RANGE_SENTINEL, Ref, SubscriptionTracer},
     };
 
     fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
@@ -337,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_split_narrows_subscription_synchronously() {
+    fn test_split_pauses_subscription_synchronously() {
         let (sched, mut rx) = dummy_scheduler();
         let o = BackupStreamObserver::new(sched);
         let subs = SubscriptionTracer(
@@ -360,9 +361,17 @@ mod tests {
             StateRole::Leader,
         );
 
-        // The range is narrowed without the refresh op having been handled...
+        // The subscription is paused without the refresh op having been handled...
         let sub = subs.get_subscription_of(42).unwrap();
-        assert_eq!(sub.value().meta.get_end_key(), b"0005");
+        assert_eq!(
+            (
+                sub.value().meta.get_start_key(),
+                sub.value().meta.get_end_key()
+            ),
+            EMPTY_RANGE_SENTINEL
+        );
+        drop(sub);
+        assert!(subs.resolve_with(TimeStamp::new(10), vec![42]).is_empty());
         // ...and the refresh op is still sent.
         let task = rx.recv_timeout(Duration::from_millis(20));
         assert!(

@@ -377,14 +377,17 @@ impl SubscriptionTracer {
         let new_epoch = new_region.get_region_epoch();
         if old_epoch.version == new_epoch.version {
             let mut meta = new_region.clone();
-            // The event may be stale: `narrow_range_on_version_change` can have shrunk the
-            // range after it was queued (e.g. a conf change followed by a split, or a
-            // merge followed by a split, all handled before this refresh runs). Within
-            // one version the range can only have shrunk, so the recorded range is the
-            // truth: intersect rather than adopt the event's range, which could be wider
-            // or merely overlapping.
+            // The event may be stale: `pause_region` can have paused the subscription
+            // after it was queued (e.g. a conf change followed by a split, handled before
+            // this refresh runs). Within one version the range can only have shrunk, so
+            // the recorded range is the truth: intersect rather than adopt the event's
+            // range, which could be wider or merely overlapping. In particular a paused
+            // subscription stays paused.
             let (start, end) = intersect_ranges(
-                (subscription.meta.get_start_key(), subscription.meta.get_end_key()),
+                (
+                    subscription.meta.get_start_key(),
+                    subscription.meta.get_end_key(),
+                ),
                 (new_region.get_start_key(), new_region.get_end_key()),
             );
             meta.set_start_key(start);
@@ -396,26 +399,32 @@ impl SubscriptionTracer {
         false
     }
 
-    /// Synchronously narrow the key range recorded in the subscription's meta
-    /// after the region shrank (e.g. a split), without touching its epoch.
+    /// Synchronously pause a subscription once its region's epoch version has
+    /// advanced (e.g. a split or a merge), without touching its epoch.
     ///
-    /// The observer learns about a split on the peer FSM thread, while the
+    /// The observer learns about the change on the peer FSM thread, while the
     /// subscription manager only learns it later via `RefreshResolver`. Until
-    /// then `meta` would keep claiming the pre-split range, and a resolve in
-    /// that window would report a resolved ts for keys this region no longer
-    /// applies (and so no longer observes). Narrowing the range here closes
-    /// the window. The epoch is deliberately kept so that the later
-    /// `try_update_region` still sees the version bump and refreshes.
+    /// then `meta` would keep claiming the old range, and a resolve in that
+    /// window could report a resolved ts for keys this region no longer
+    /// applies, or label a different range with the old epoch (a merge
+    /// followed by a split can even make the recorded range disjoint from the
+    /// new one). We cannot tell from here which part of the old range is still
+    /// valid, so the subscription is paused: its range becomes
+    /// [`EMPTY_RANGE_SENTINEL`] and `resolve_with` skips it, so nothing is
+    /// reported for the region until `RefreshResolver` runs on the new epoch.
     ///
-    /// The recorded range becomes `meta ∩ new_region`, so it never grows. In
-    /// particular a merge followed by a split before the refresh is handled
-    /// (`[a, b)` -> merge `[a, d)` -> split `[x, d)`) still sheds `[a, x)`,
-    /// even though neither `new_region` is enclosed by the recorded range.
-    /// If the intersection is empty the recorded range becomes
-    /// [`EMPTY_RANGE_SENTINEL`], and `resolve_with` skips the subscription.
+    /// This only withholds the region from the resolved ts and the flush
+    /// events; the checkpoint of the task isn't advanced past a region that
+    /// isn't reported. The epoch is deliberately kept so that the later
+    /// `try_update_region` still sees the version bump and refreshes (which
+    /// re-registers the subscription with the real range). Pausing is
+    /// idempotent, and a stale same-version `try_update_region` can't unpause
+    /// the subscription.
     ///
-    /// Returns whether the range was narrowed.
-    pub fn narrow_range_on_version_change(&self, new_region: &Region) -> bool {
+    /// Returns whether the subscription was newly paused. It is `false` for an
+    /// unknown region, for an event that doesn't bump the version (e.g. a conf
+    /// change), and for a subscription already paused.
+    pub fn pause_region(&self, new_region: &Region) -> bool {
         let mut sub = match self.get_subscription_of(new_region.get_id()) {
             Some(sub) => sub,
             None => return false,
@@ -424,15 +433,12 @@ impl SubscriptionTracer {
         if new_region.get_region_epoch().version <= meta.get_region_epoch().version {
             return false;
         }
-        let (start, end) = intersect_ranges(
-            (meta.get_start_key(), meta.get_end_key()),
-            (new_region.get_start_key(), new_region.get_end_key()),
-        );
-        if start == meta.get_start_key() && end == meta.get_end_key() {
+        let (start, end) = EMPTY_RANGE_SENTINEL;
+        if meta.get_start_key() == start && meta.get_end_key() == end {
             return false;
         }
-        meta.set_start_key(start);
-        meta.set_end_key(end);
+        meta.set_start_key(start.to_vec());
+        meta.set_end_key(end.to_vec());
         true
     }
 
@@ -701,15 +707,16 @@ impl std::fmt::Debug for TwoPhaseResolver {
     }
 }
 
-/// The range recorded for a subscription whose region currently covers no keys
-/// (e.g. after a merge followed by a split, the region no longer overlaps what
-/// was subscribed). Downstream consumers of flush events cannot handle
+/// The range recorded for a paused subscription (see
+/// `SubscriptionTracer::pause_region`), or one whose region no longer overlaps
+/// what was subscribed. Downstream consumers of flush events cannot handle
 /// zero-width ranges, so every empty range is normalized to this one (by
-/// `intersect_ranges`, the only place a range is shrunk) and `resolve_with`
-/// skips subscriptions holding exactly this value.
+/// `pause_region` and `intersect_ranges`) and `resolve_with` skips
+/// subscriptions holding exactly this value.
 ///
-/// It is itself zero-width (`start >= end`, non-empty `end`), so it can never be
-/// confused with a real region, and intersecting it with anything yields it again.
+/// It is itself zero-width (`start >= end`, non-empty `end`), so it can never
+/// be confused with a real region, and intersecting it with anything yields it
+/// again.
 pub(crate) const EMPTY_RANGE_SENTINEL: (&[u8], &[u8]) = (&[0], &[0]);
 
 /// Whether `[start, end)` covers no keys. An empty end key means +inf.
@@ -745,7 +752,7 @@ mod test {
     use tikv::storage::txn::txn_status_cache::TxnStatusCache;
     use txn_types::TimeStamp;
 
-    use super::{SubscriptionTracer, TwoPhaseResolver};
+    use super::{EMPTY_RANGE_SENTINEL, SubscriptionTracer, TwoPhaseResolver};
     use crate::subscription_track::{Ref, RefMut};
 
     fn region_of(id: u64, version: u64, start: &[u8], end: &[u8]) -> Region {
@@ -757,123 +764,123 @@ mod test {
         r
     }
 
+    fn sentinel() -> (Vec<u8>, Vec<u8>) {
+        let (start, end) = EMPTY_RANGE_SENTINEL;
+        (start.to_vec(), end.to_vec())
+    }
+
+    fn range_of(subs: &SubscriptionTracer, id: u64) -> (Vec<u8>, Vec<u8>) {
+        let sub = subs.get_subscription_of(id).unwrap();
+        let m = &sub.value().meta;
+        (m.get_start_key().to_vec(), m.get_end_key().to_vec())
+    }
+
     #[test]
-    fn test_narrow_range_on_version_change() {
+    fn test_pause_region() {
         let subs = SubscriptionTracer(
             Arc::new(DashMap::new()),
             Arc::new(TxnStatusCache::new_for_test()),
         );
         subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
-        let meta = |subs: &SubscriptionTracer| {
-            let sub = subs.get_subscription_of(1).unwrap();
-            let m = &sub.value().meta;
-            (
-                m.get_start_key().to_vec(),
-                m.get_end_key().to_vec(),
-                m.get_region_epoch().version,
-            )
+        let version = |subs: &SubscriptionTracer| {
+            subs.get_subscription_of(1)
+                .unwrap()
+                .value()
+                .meta
+                .get_region_epoch()
+                .version
         };
 
         // Same version (e.g. conf change): untouched.
-        assert!(!subs.narrow_range_on_version_change(&region_of(1, 1, b"a", b"b")));
-        assert_eq!(meta(&subs), (b"a".to_vec(), b"c".to_vec(), 1));
+        assert!(!subs.pause_region(&region_of(1, 1, b"a", b"b")));
+        assert_eq!(range_of(&subs, 1), (b"a".to_vec(), b"c".to_vec()));
 
         // Unknown region: untouched.
-        assert!(!subs.narrow_range_on_version_change(&region_of(9, 2, b"a", b"b")));
+        assert!(!subs.pause_region(&region_of(9, 2, b"a", b"b")));
 
-        // Wider range (e.g. merge): untouched.
-        assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"d")));
-        assert_eq!(meta(&subs), (b"a".to_vec(), b"c".to_vec(), 1));
-        assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"", b"")));
-        assert_eq!(meta(&subs), (b"a".to_vec(), b"c".to_vec(), 1));
+        // Any version bump pauses, whatever the new range is (split, merge, ...);
+        // the epoch is kept so the refresh still triggers.
+        assert!(subs.pause_region(&region_of(1, 2, b"a", b"d")));
+        assert_eq!(range_of(&subs, 1), sentinel());
+        assert_eq!(version(&subs), 1);
+        assert!(!subs.try_update_region(&region_of(1, 2, b"a", b"d")));
 
-        // Split: range is narrowed, the epoch is kept so the refresh still triggers.
-        assert!(subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"b")));
-        assert_eq!(meta(&subs), (b"a".to_vec(), b"b".to_vec(), 1));
-        assert!(!subs.try_update_region(&region_of(1, 2, b"a", b"b")));
+        // Pausing again is a no-op.
+        assert!(!subs.pause_region(&region_of(1, 3, b"b", b"d")));
+        assert_eq!(range_of(&subs, 1), sentinel());
+        assert_eq!(version(&subs), 1);
     }
 
     #[test]
-    fn test_narrow_range_merge_then_split() {
-        let sentinel = || (vec![0u8], vec![0u8]);
-        let subs = SubscriptionTracer(
-            Arc::new(DashMap::new()),
-            Arc::new(TxnStatusCache::new_for_test()),
-        );
-        let range = |subs: &SubscriptionTracer| {
-            let sub = subs.get_subscription_of(1).unwrap();
-            let m = &sub.value().meta;
-            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
-        };
-        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
-        // Merge with the right neighbour: [a, c) -> (v2, [a, f)); not narrowed.
-        assert!(!subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"f")));
-        assert_eq!(range(&subs), (b"a".to_vec(), b"c".to_vec()));
-        // Split before the refresh runs sheds [a, b): (v3, [b, f)). The subscription
-        // must shrink to [b, c) rather than keep claiming [a, b).
-        assert!(subs.narrow_range_on_version_change(&region_of(1, 3, b"b", b"f")));
-        assert_eq!(range(&subs), (b"b".to_vec(), b"c".to_vec()));
-        // Open-ended new region intersects correctly too.
-        assert!(subs.narrow_range_on_version_change(&region_of(1, 4, b"bb", b"")));
-        assert_eq!(range(&subs), (b"bb".to_vec(), b"c".to_vec()));
-        // Disjoint: becomes the empty-range sentinel, and stays so.
-        assert!(subs.narrow_range_on_version_change(&region_of(1, 5, b"d", b"f")));
-        assert_eq!(range(&subs), sentinel());
-        assert!(!subs.narrow_range_on_version_change(&region_of(1, 6, b"", b"")));
-        assert_eq!(range(&subs), sentinel());
-    }
-
-    #[test]
-    fn test_stale_same_version_refresh_does_not_widen() {
+    fn test_pause_region_on_split() {
         let subs = SubscriptionTracer(
             Arc::new(DashMap::new()),
             Arc::new(TxnStatusCache::new_for_test()),
         );
         subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
-        let range = |subs: &SubscriptionTracer| {
-            let sub = subs.get_subscription_of(1).unwrap();
-            let m = &sub.value().meta;
-            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
-        };
+        // The region keeps part of its range, but we pause it anyway: the refresh
+        // decides what is valid.
+        assert!(subs.pause_region(&region_of(1, 2, b"a", b"b")));
+        assert_eq!(range_of(&subs, 1), sentinel());
+    }
 
-        // A split narrows the range, then a stale conf-change refresh (same version as
+    #[test]
+    fn test_pause_region_merge_then_split() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+        // Merge with the right neighbour: [a, c) -> (v2, [a, f)).
+        assert!(subs.pause_region(&region_of(1, 2, b"a", b"f")));
+        // A right-derive split before the refresh runs leaves a range disjoint from the
+        // recorded one: (v3, [d, f)). It must not claim anything.
+        assert!(!subs.pause_region(&region_of(1, 3, b"d", b"f")));
+        assert_eq!(range_of(&subs, 1), sentinel());
+        // The queued refreshes see a version bump and re-register.
+        assert!(!subs.try_update_region(&region_of(1, 2, b"a", b"f")));
+        assert!(!subs.try_update_region(&region_of(1, 3, b"d", b"f")));
+    }
+
+    #[test]
+    fn test_stale_same_version_refresh_stays_paused() {
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
+        subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
+
+        // A split pauses the region, then a stale conf-change refresh (same version as
         // the subscription, queued before the split) is handled.
-        assert!(subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"b")));
+        assert!(subs.pause_region(&region_of(1, 2, b"a", b"b")));
         let mut stale = region_of(1, 1, b"a", b"c");
         stale.mut_region_epoch().set_conf_ver(7);
         assert!(subs.try_update_region(&stale));
-        assert_eq!(range(&subs), (b"a".to_vec(), b"b".to_vec()));
+        assert_eq!(range_of(&subs, 1), sentinel());
         // Other fields are still taken from the event.
         let sub = subs.get_subscription_of(1).unwrap();
         assert_eq!(sub.value().meta.get_region_epoch().conf_ver, 7);
+        drop(sub);
+
+        // Stale events with other ranges (overlapping or disjoint) can't unpause
+        // either.
+        assert!(subs.try_update_region(&region_of(1, 1, b"a", b"bb")));
+        assert_eq!(range_of(&subs, 1), sentinel());
+        assert!(subs.try_update_region(&region_of(1, 1, b"x", b"z")));
+        assert_eq!(range_of(&subs, 1), sentinel());
     }
 
     #[test]
-    fn test_stale_same_version_refresh_never_widens_overlapping() {
-        let sentinel = || (vec![0u8], vec![0u8]);
+    fn test_same_version_refresh_without_pause_keeps_range() {
         let subs = SubscriptionTracer(
             Arc::new(DashMap::new()),
             Arc::new(TxnStatusCache::new_for_test()),
         );
-        let range = |subs: &SubscriptionTracer| {
-            let sub = subs.get_subscription_of(1).unwrap();
-            let m = &sub.value().meta;
-            (m.get_start_key().to_vec(), m.get_end_key().to_vec())
-        };
         subs.register_region(&region_of(1, 1, b"a", b"c"), ObserveHandle::new(), None);
-        // Merge to [a, f), then a split leaves [b, f): recorded range is [b, c).
-        subs.narrow_range_on_version_change(&region_of(1, 2, b"a", b"f"));
-        subs.narrow_range_on_version_change(&region_of(1, 3, b"b", b"f"));
-        assert_eq!(range(&subs), (b"b".to_vec(), b"c".to_vec()));
-
-        // Stale event at the subscription's version (v1) that overlaps but doesn't
-        // enclose the recorded range: [a, bb) must not pull the start back to `a`.
-        assert!(subs.try_update_region(&region_of(1, 1, b"a", b"bb")));
-        assert_eq!(range(&subs), (b"b".to_vec(), b"bb".to_vec()));
-
-        // Non-intersecting stale event: sentinel instead of adopting [x, z).
-        assert!(subs.try_update_region(&region_of(1, 1, b"x", b"z")));
-        assert_eq!(range(&subs), sentinel());
+        let mut conf_change = region_of(1, 1, b"a", b"c");
+        conf_change.mut_region_epoch().set_conf_ver(3);
+        assert!(subs.try_update_region(&conf_change));
+        assert_eq!(range_of(&subs, 1), (b"a".to_vec(), b"c".to_vec()));
     }
 
     #[test]
@@ -895,8 +902,8 @@ mod test {
         };
         assert_eq!(ids(&subs), vec![1, 2]);
 
-        // Region 1 no longer overlaps what it subscribed: it must not be reported.
-        subs.narrow_range_on_version_change(&region_of(1, 2, b"x", b"z"));
+        // A paused region must not be reported until the refresh runs.
+        subs.pause_region(&region_of(1, 2, b"a", b"b"));
         assert_eq!(ids(&subs), vec![2]);
     }
 
