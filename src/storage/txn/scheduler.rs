@@ -1664,17 +1664,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return None;
         }
 
-        // When xlock encounters slock without shrink-only flag, slock will be marked as
-        // shrink-only and written back to storage, in which case we can not use in-mem
-        // pessimistic lock.
-        let update_shared_lock = matches!(pr.get_key_lock_info(), Some(l) if l.is_shared_lock());
-
+        // Only pure pessimistic-lock writes can enter the in-memory table.
+        // An ordinary re-lock can also need to persist an earlier upgrade.
         if matches!(
             tag,
             CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
         ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
             && !is_shared_lock_cmd
-            && !update_shared_lock
+            && matches!(response_policy, ResponsePolicy::OnProposed)
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,

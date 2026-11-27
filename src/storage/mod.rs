@@ -12310,6 +12310,37 @@ mod tests {
     }
 
     #[test]
+    fn test_exclusive_refresh_after_upgrade_bypasses_memory() {
+        let ext = Arc::new(TxnExt::default());
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true)
+            .build_for_txn(ext.clone())
+            .unwrap();
+        let key = Key::from_raw(b"upgraded");
+        for (ts, shared, upgrade) in [(20, true, false), (30, false, true), (40, false, false)] {
+            let mut request = new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                vec![(key.clone(), false, shared)],
+                None,
+                10,
+                ts,
+                false,
+                false,
+            );
+            let Command::AcquirePessimisticLock(cmd) = &mut request.cmd else {
+                unreachable!()
+            };
+            cmd.is_shared_lock_upgrade = upgrade;
+            let (cb, f) = paired_future_callback();
+            storage.sched_txn_command(request, cb).unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+        }
+        assert!(ext.pessimistic_locks.read().get(&key).is_none());
+        let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, b"upgraded", 10, 40);
+        assert_eq!(lock.shared_lock_upgrade_ts, 30.into());
+    }
+
+    #[test]
     fn test_write_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
         let lock_mgr = MockLockManager::new();

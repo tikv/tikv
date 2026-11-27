@@ -214,9 +214,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         record_network_out_bytes(res.as_ref().map_or(0, |v| v.estimate_resp_size()));
         let pr = ProcessResult::PessimisticLockRes { res };
 
-        let writes_wrapper = modifies
-            .iter()
-            .any(|modify| matches!(modify, tikv_kv::Modify::Put(engine_traits::CF_LOCK, ..)));
+        let response_policy = pessimistic_lock_response_policy(&modifies);
         let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
@@ -229,13 +227,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             new_acquired_locks,
             shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
-            response_policy: if writes_wrapper {
-                ResponsePolicy::OnApplied
-            } else {
-                ResponsePolicy::OnProposed
-            },
+            response_policy,
             known_txn_status: vec![],
         })
+    }
+}
+
+pub(super) fn pessimistic_lock_response_policy(modifies: &[Modify]) -> ResponsePolicy {
+    if modifies
+        .iter()
+        .all(|m| matches!(m, Modify::PessimisticLock(..)))
+    {
+        ResponsePolicy::OnProposed
+    } else {
+        ResponsePolicy::OnApplied
     }
 }
 

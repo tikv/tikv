@@ -1426,6 +1426,23 @@ mod tests {
                 segments
             })),
         ];
+        // An older lock without the optional field decodes with no upgrade
+        // timestamp. Both the converted lock and its prewrite retain the field.
+        for lock_type in [LockType::Pessimistic, LockType::Put] {
+            let mut lock = Lock::new(
+                lock_type,
+                b"pk".to_vec(),
+                1.into(),
+                10,
+                None,
+                6.into(),
+                0,
+                8.into(),
+                false,
+            );
+            lock.shared_lock_upgrade_ts = 5.into();
+            locks.push(Either::Left(lock));
+        }
         for (i, lock) in locks.drain(..).enumerate() {
             let v = match &lock {
                 Either::Left(lock) => lock.to_bytes(),

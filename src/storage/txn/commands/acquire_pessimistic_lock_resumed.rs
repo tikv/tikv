@@ -22,9 +22,9 @@ use crate::storage::{
     txn::{
         Error, Result, acquire_pessimistic_lock,
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult, WriteResultLockInfo,
-            acquire_pessimistic_lock::make_write_data,
+            Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext,
+            WriteResult, WriteResultLockInfo,
+            acquire_pessimistic_lock::{make_write_data, pessimistic_lock_response_policy},
         },
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
@@ -228,6 +228,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
         }
 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
+        let response_policy = pessimistic_lock_response_policy(&modifies);
         let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
@@ -240,7 +241,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             new_acquired_locks,
             shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
-            response_policy: ResponsePolicy::OnProposed,
+            response_policy,
             known_txn_status: vec![],
         })
     }
