@@ -102,6 +102,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         for (k, should_not_exist, is_shared_lock) in keys {
+            let has_pending_upgrader = is_shared_lock
+                && context
+                    .lock_wait_queues
+                    .is_some_and(|queues| queues.has_pending_upgrader(&k));
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -118,10 +122,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.allow_lock_with_conflict,
                 is_shared_lock,
                 self.is_shared_lock_upgrade,
-                is_shared_lock
-                    && context
-                        .lock_wait_queues
-                        .is_some_and(|queues| queues.has_pending_upgrader(&k)),
+                has_pending_upgrader,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -144,13 +145,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         allow_lock_with_conflict: self.allow_lock_with_conflict,
                         is_shared_lock_upgrade: self.is_shared_lock_upgrade,
                     };
-                    let lock_info = WriteResultLockInfo::new(
+                    let blocked_by_upgrader =
+                        has_pending_upgrader && !lock_info.get_shared_lock_infos().is_empty();
+                    let mut lock_info = WriteResultLockInfo::new(
                         lock_info,
                         request_parameters,
                         k,
                         should_not_exist,
                         is_shared_lock,
                     );
+                    lock_info.blocked_by_upgrader = blocked_by_upgrader;
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.
                     txn.clear();

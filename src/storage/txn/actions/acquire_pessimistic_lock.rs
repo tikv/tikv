@@ -180,14 +180,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
                 if !is_shared_lock_req || lock.ts == reader.start_ts {
                     // An S request on our own X retains X.
-                    let (lock_ttl, min_commit_ts) = if is_shared_lock_req {
-                        (
-                            lock_ttl.max(lock.ttl),
-                            min_commit_ts.max(lock.min_commit_ts),
-                        )
-                    } else {
-                        (lock_ttl, min_commit_ts)
-                    };
                     return handle_existing_exclusive_lock(
                         txn,
                         reader,
@@ -232,11 +224,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             key,
                             primary,
                             should_not_exist,
-                            lock_ttl.max(member.ttl),
+                            lock_ttl,
                             for_update_ts,
                             need_value,
                             need_check_existence,
-                            min_commit_ts.max(member.min_commit_ts),
+                            min_commit_ts,
                             need_old_value,
                             allow_lock_with_conflict,
                             member,
@@ -547,6 +539,30 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
     let mut val = None;
     let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
+    if matches!(request, ExistingLockRequest::SharedRead) && for_update_ts < lock.for_update_ts {
+        let mut ts = TimeStamp::max();
+        while let Some((commit_ts, write)) = reader.seek_write(&key, ts)? {
+            if commit_ts <= for_update_ts {
+                break;
+            }
+            if write.write_type == WriteType::Rollback {
+                ts = commit_ts.prev();
+                continue;
+            }
+            MVCC_CONFLICT_COUNTER
+                .acquire_pessimistic_lock_conflict
+                .inc();
+            return Err(ConflictInfo {
+                conflict_start_ts: write.start_ts,
+                conflict_commit_ts: commit_ts,
+            }
+            .into_write_conflict_error(
+                reader.start_ts,
+                primary.to_vec(),
+                key.into_raw()?,
+            ));
+        }
+    }
     let requested_for_update_ts = for_update_ts;
     let locked_with_conflict_ts = if allow_lock_with_conflict && for_update_ts < lock.for_update_ts
     {
@@ -596,26 +612,22 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
         None,
     )?;
 
+    lock.ttl = lock.ttl.max(lock_ttl);
+    lock.min_commit_ts = lock.min_commit_ts.max(min_commit_ts);
     let advanced = for_update_ts > lock.for_update_ts;
     if advanced {
         primary.clone_into(&mut lock.primary);
         lock.for_update_ts = for_update_ts;
-        lock.ttl = lock_ttl;
-        lock.min_commit_ts = min_commit_ts;
     }
     match request {
         ExistingLockRequest::Upgrade { only_if_exists } => {
             if !only_if_exists || val.is_some() {
-                lock.ttl = lock_ttl;
-                lock.min_commit_ts = min_commit_ts;
                 lock.shared_lock_upgrade_ts = for_update_ts;
                 txn.put_lock(key, &lock, true);
             }
         }
         ExistingLockRequest::SharedRead => {
             // A CF_LOCK Put also evicts any in-memory X when Raft applies it.
-            lock.ttl = lock.ttl.max(lock_ttl);
-            lock.min_commit_ts = lock.min_commit_ts.max(min_commit_ts);
             txn.put_lock(key, &lock, false);
         }
         ExistingLockRequest::Exclusive if advanced && !lock.shared_lock_upgrade_ts.is_zero() => {
@@ -626,7 +638,7 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
                 start_ts: lock.ts,
                 ttl: lock.ttl,
                 for_update_ts,
-                min_commit_ts,
+                min_commit_ts: lock.min_commit_ts,
                 is_locked_with_conflict: lock.is_pessimistic_lock_with_conflict(),
                 last_change: lock.last_change,
                 primary: lock.primary.into(),
@@ -3093,7 +3105,8 @@ pub mod tests {
 
         must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 30, 2000);
         request_exclusive_lock(&mut engine, key, key, 10, 40, true, false).unwrap();
-        let lock = must_pessimistic_locked(&mut engine, key, 10, 40);
+        request_exclusive_lock(&mut engine, key, key, 10, 50, false, false).unwrap();
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 50);
         assert_eq!(lock.ttl, 8000);
         assert_eq!(lock.min_commit_ts, 200.into());
     }
@@ -3470,6 +3483,49 @@ pub mod tests {
         assert!(txn.into_modifies().is_empty());
         assert_eq!(load_shared_locks(&mut engine, key).to_bytes(), before);
         must_shared_prewrite_lock(&mut engine, key, key, 10, 30);
+    }
+
+    #[test]
+    fn test_shared_read_on_force_locked_exclusive_rechecks_conflict() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"force-locked";
+        for (ts, commit, value) in [(5, 10, b"v1"), (15, 30, b"v2")] {
+            must_prewrite_put(&mut engine, key, value, key, ts);
+            must_commit(&mut engine, key, ts, commit);
+        }
+        must_succeed_allow_lock_with_conflict(&mut engine, key, key, 19, 20, true, false, 3000)
+            .assert_locked_with_conflict(Some(b"v2"), 30);
+        // A later rollback is not the committed version that caused the conflict.
+        put_raw_write(&mut engine, key, 35, 35, WriteType::Rollback);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(19.into(), snapshot, true);
+        let mut txn = MvccTxn::new(19.into(), ConcurrencyManager::new_for_test(0.into()));
+        let mut read = |ts: u64| {
+            acquire_pessimistic_lock(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(key),
+                key,
+                false,
+                3000,
+                ts.into(),
+                true,
+                false,
+                0.into(),
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+            )
+        };
+        assert!(
+            matches!(read(25), Err(MvccError(box ErrorInner::WriteConflict {
+            conflict_start_ts, conflict_commit_ts, ..
+        })) if conflict_start_ts == 15.into() && conflict_commit_ts == 30.into())
+        );
+        read(30).unwrap().0.assert_value(Some(b"v2"));
     }
 
     #[test]

@@ -64,6 +64,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashSet;
 use dashmap::{self, mapref::entry::Entry as DashMapEntry};
 use futures_util::compat::Future01CompatExt;
 use keyed_priority_queue::KeyedPriorityQueue;
@@ -208,6 +209,7 @@ pub struct KeyLockWaitState {
     /// `(id, start_time, delay_duration)`
     delayed_notify_all_state: Option<(u64, Instant, Arc<AtomicU64>)>,
     pending_upgrader: Option<PendingUpgrader>,
+    upgrader_blocked_readers: HashSet<LockWaitToken>,
 }
 
 impl KeyLockWaitState {
@@ -220,13 +222,14 @@ impl KeyLockWaitState {
             last_conflict_commit_ts: TimeStamp::zero(),
             delayed_notify_all_state: None,
             pending_upgrader: None,
+            upgrader_blocked_readers: HashSet::default(),
         }
     }
 }
 
 pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
 
-enum PendingUpgraderWakeupKind {
+enum SharedWaitWakeupKind {
     Retry,
     SharedLockLost,
 }
@@ -348,36 +351,58 @@ impl<L: LockManager> LockWaitQueues<L> {
         true
     }
 
-    fn clear_pending_upgrader_if_matches(
+    // Register after LockManager::wait_for so a retry also removes its wait graph
+    // entry. The upgrader can disappear between the MVCC check and registration.
+    pub fn register_upgrader_blocked_reader(&self, key: &Key, token: LockWaitToken) {
+        if let Some(mut state) = self.inner.queue_map.get_mut(key) {
+            if state.pending_upgrader.is_some() && state.queue.get_priority(&token).is_some() {
+                state.upgrader_blocked_readers.insert(token);
+                return;
+            }
+        }
+        self.retry_shared_readers(key, std::iter::once(token));
+    }
+
+    fn retry_shared_readers(&self, key: &Key, tokens: impl IntoIterator<Item = LockWaitToken>) {
+        for token in tokens {
+            if let Some(entry) = self.remove_by_token(key, token) {
+                Self::finish_shared_wait(entry, SharedWaitWakeupKind::Retry);
+            }
+        }
+    }
+
+    fn on_dequeue(
         key_state: &mut KeyLockWaitState,
         lock_wait_token: LockWaitToken,
+        readers: &mut Vec<LockWaitToken>,
     ) {
+        key_state.upgrader_blocked_readers.remove(&lock_wait_token);
         if key_state
             .pending_upgrader
             .as_ref()
             .is_some_and(|pending| pending.token == lock_wait_token)
         {
             key_state.pending_upgrader = None;
+            if !key_state.current_lock.get_shared_lock_infos().is_empty() {
+                readers.extend(key_state.upgrader_blocked_readers.drain());
+            }
         }
     }
 
-    fn finish_pending_upgrader(
-        lock_wait_entry: Box<LockWaitEntry>,
-        wakeup_kind: PendingUpgraderWakeupKind,
-    ) {
+    fn finish_shared_wait(lock_wait_entry: Box<LockWaitEntry>, wakeup_kind: SharedWaitWakeupKind) {
         let cb = lock_wait_entry.key_cb.unwrap().into_inner();
         let err = match wakeup_kind {
-            PendingUpgraderWakeupKind::Retry => StorageError::from(TxnError::from(
-                MvccError::from(MvccErrorInner::WriteConflict {
+            SharedWaitWakeupKind::Retry => StorageError::from(TxnError::from(MvccError::from(
+                MvccErrorInner::WriteConflict {
                     start_ts: lock_wait_entry.parameters.start_ts,
                     conflict_start_ts: TimeStamp::zero(),
                     conflict_commit_ts: TimeStamp::zero(),
                     key: lock_wait_entry.key.into_raw().unwrap(),
                     primary: lock_wait_entry.parameters.primary,
                     reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
-                }),
-            )),
-            PendingUpgraderWakeupKind::SharedLockLost => StorageError::from(TxnError::from(
+                },
+            ))),
+            SharedWaitWakeupKind::SharedLockLost => StorageError::from(TxnError::from(
                 MvccError::from(MvccErrorInner::SharedLockLost {
                     start_ts: lock_wait_entry.parameters.start_ts,
                     key: lock_wait_entry.key.into_raw().unwrap(),
@@ -459,6 +484,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut popped_future: Option<DelayedNotifyAllFuture> = None;
         // For statistics.
         let mut removed_waiters = 0usize;
+        let mut readers = Vec::new();
 
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
@@ -470,7 +496,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
             if let Some((_, lock_wait_entry)) = v.queue.pop() {
                 removed_waiters += 1;
-                Self::clear_pending_upgrader_if_matches(v, lock_wait_entry.lock_wait_token);
+                Self::on_dequeue(v, lock_wait_entry.lock_wait_token, &mut readers);
 
                 let mut group_entries = Vec::with_capacity(4);
                 let mut schedule_delayed_wake_up = false;
@@ -490,7 +516,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                         }
                         let (_, shared_entry) = v.queue.pop().unwrap();
                         removed_waiters += 1;
-                        Self::clear_pending_upgrader_if_matches(v, shared_entry.lock_wait_token);
+                        Self::on_dequeue(v, shared_entry.lock_wait_token, &mut readers);
                         if !shared_entry.parameters.allow_lock_with_conflict {
                             v.legacy_wake_up_index += 1;
                             schedule_delayed_wake_up = true;
@@ -531,6 +557,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
 
+        self.retry_shared_readers(key, readers);
         (popped_entries, popped_future)
     }
 
@@ -623,6 +650,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut conflicting_commit_ts = TimeStamp::zero();
 
         let mut removed_waiters = 0usize;
+        let mut readers = Vec::new();
 
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
@@ -657,7 +685,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     break;
                 }
                 let (_, lock_wait_entry) = v.queue.pop().unwrap();
-                Self::clear_pending_upgrader_if_matches(v, lock_wait_entry.lock_wait_token);
+                Self::on_dequeue(v, lock_wait_entry.lock_wait_token, &mut readers);
                 removed_waiters += 1;
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
@@ -682,6 +710,8 @@ impl<L: LockManager> LockWaitQueues<L> {
         if removed_key.is_some() {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
+
+        self.retry_shared_readers(key, readers);
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'd better make it concurrent with scheduling the new command
@@ -716,7 +746,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         lock_wait_token: LockWaitToken,
     ) -> Option<Box<LockWaitEntry>> {
         let mut result = None;
-
+        let mut readers = Vec::new();
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
@@ -725,7 +755,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             if let Some(res) = v.queue.remove(&lock_wait_token) {
                 self.inner.entries_count.fetch_sub(1, Ordering::SeqCst);
                 LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
-                Self::clear_pending_upgrader_if_matches(v, lock_wait_token);
+                Self::on_dequeue(v, lock_wait_token, &mut readers);
                 result = Some(res);
             }
             v.queue.is_empty()
@@ -735,6 +765,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
 
+        self.retry_shared_readers(key, readers);
         result
     }
 
@@ -764,7 +795,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if let Some(entry) =
                     stale.and_then(|pending| self.remove_by_token(&key, pending.token))
                 {
-                    Self::finish_pending_upgrader(entry, PendingUpgraderWakeupKind::SharedLockLost);
+                    Self::finish_shared_wait(entry, SharedWaitWakeupKind::SharedLockLost);
                 }
             }
             if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
@@ -810,13 +841,13 @@ impl<L: LockManager> LockWaitQueues<L> {
                 continue;
             };
             let wakeup_kind = if pending.start_ts == hint.sole_holder_start_ts {
-                PendingUpgraderWakeupKind::Retry
+                SharedWaitWakeupKind::Retry
             } else {
-                PendingUpgraderWakeupKind::SharedLockLost
+                SharedWaitWakeupKind::SharedLockLost
             };
 
             if let Some(entry) = self.remove_by_token(&hint.key, pending.token) {
-                Self::finish_pending_upgrader(entry, wakeup_kind);
+                Self::finish_shared_wait(entry, wakeup_kind);
             }
         }
     }
@@ -1816,6 +1847,18 @@ mod tests {
         expect_write_conflict(&err.0, 0, 0);
         assert!(queues.pending_upgrader(b"k-matching-hint").is_none());
         assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_reader_registers_after_pending_upgrader_was_canceled() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"late-reader";
+        let upgrade = queues.mock_upgrade_wait(key, 10, 20);
+        let reader = queues.mock_lock_wait_with_shared(key, 30, 10, false, true);
+        upgrade.cancel();
+        queues.register_upgrader_blocked_reader(&Key::from_raw(key), reader.token);
+        expect_write_conflict(&reader.wait_for_result().unwrap_err().0, 0, 0);
+        assert!(queues.is_empty());
     }
 
     #[test]

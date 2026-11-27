@@ -512,6 +512,8 @@ pub struct WriteResultLockInfo {
     pub hash_for_latch: u64,
     /// Whether the pending request is trying to acquire a shared lock.
     pub is_shared_lock_request: bool,
+    /// A pending upgrader blocked this shared reader at the MVCC check.
+    pub blocked_by_upgrader: bool,
     /// The exclusive waiter actually holds a shared member while waiting.
     pub is_lock_upgrade: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
@@ -550,6 +552,7 @@ impl WriteResultLockInfo {
             parameters,
             hash_for_latch,
             is_shared_lock_request,
+            blocked_by_upgrader: false,
             is_lock_upgrade,
             lock_wait_token: LockWaitToken(None),
             req_states: None,

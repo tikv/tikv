@@ -12243,14 +12243,26 @@ mod tests {
         cmd.is_shared_lock_upgrade = true;
         let (cb, pending) = paired_future_callback();
         storage.sched_txn_command(upgrade, cb).unwrap();
-        // A subsequent operation on this key is serialized behind registration.
-        let (cb, f) = paired_future_callback();
+        wait_for_lock_waiters(&lock_mgr, 1);
+        let upgrader = *lock_mgr.get_all_tokens().iter().next().unwrap();
+        let (tx, rx) = channel();
         storage
-            .sched_txn_command(request(30, true).lock_wait_timeout(None), cb)
+            .sched_txn_command(
+                request(30, true).lock_wait_timeout(Some(WaitTimeout::Millis(10_000))),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
             .unwrap();
-        assert!(extract_key_error(&block_on(f).unwrap().unwrap().unwrap_err()).has_locked());
-        lock_mgr.simulate_timeout_all();
+        wait_for_lock_waiters(&lock_mgr, 2);
+        lock_mgr.simulate_timeout(upgrader);
         assert!(extract_key_error(&block_on(pending).unwrap().unwrap_err()).has_locked());
+        let retry = rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            extract_key_error(&retry).get_conflict().get_reason(),
+            kvrpcpb::WriteConflictReason::PessimisticRetry
+        );
         let (cb, f) = paired_future_callback();
         storage
             .sched_txn_command(request(30, true).lock_wait_timeout(None), cb)
@@ -12338,6 +12350,61 @@ mod tests {
         assert!(ext.pessimistic_locks.read().get(&key).is_none());
         let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, b"upgraded", 10, 40);
         assert_eq!(lock.shared_lock_upgrade_ts, 30.into());
+    }
+
+    #[test]
+    fn test_mixed_exclusive_refresh_evicts_old_memory_lock() {
+        let ext = Arc::new(TxnExt::default());
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true)
+            .build_for_txn(ext.clone())
+            .unwrap();
+        let a = Key::from_raw(b"a");
+        let b = Key::from_raw(b"b");
+        let acquire = |keys, ts, upgrade, ttl, min_commit_ts: u64| {
+            let mut request = new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                keys,
+                Some(b"a"),
+                15,
+                ts,
+                false,
+                false,
+            );
+            let Command::AcquirePessimisticLock(cmd) = &mut request.cmd else {
+                unreachable!()
+            };
+            cmd.is_shared_lock_upgrade = upgrade;
+            cmd.lock_ttl = ttl;
+            cmd.min_commit_ts = min_commit_ts.into();
+            let (cb, f) = paired_future_callback();
+            storage.sched_txn_command(request, cb).unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+        };
+        acquire(vec![(a.clone(), false, true)], 20, false, 3000, 21);
+        acquire(vec![(a.clone(), false, false)], 30, true, 3000, 31);
+        acquire(vec![(b.clone(), false, false)], 20, false, 8000, 100);
+        assert_eq!(
+            ext.pessimistic_locks
+                .read()
+                .get(&b)
+                .unwrap()
+                .0
+                .for_update_ts,
+            20.into()
+        );
+        acquire(
+            vec![(a, false, false), (b.clone(), false, false)],
+            40,
+            false,
+            3000,
+            41,
+        );
+        delete_pessimistic_lock(&storage, b.clone(), 15, 20);
+        assert!(ext.pessimistic_locks.read().get(&b).is_none());
+        let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, b"b", 15, 40);
+        assert_eq!(lock.ttl, 8000);
+        assert_eq!(lock.min_commit_ts, 100.into());
     }
 
     #[test]

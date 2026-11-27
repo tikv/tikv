@@ -166,7 +166,7 @@ High-risk contracts:
   exclusive lock. An explicit upgrade records its statement timestamp in the
   exclusive lock. Prewrite preserves that timestamp for replay.
 - While an explicit upgrader is queued, its slot closes admission to new
-  shared holders. Removing the waiter reopens admission. Partial resolutions
+  shared holders. Removing the upgrader wakes registered shared readers for a client retry. Partial resolutions
   publish the final holder set under the key latch after apply.
 - Shared pessimistic locks, upgrades, and transitions of a shared wrapper
   to shrink-only take effect on Raft apply. Requests that change this state

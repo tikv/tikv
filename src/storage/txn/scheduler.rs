@@ -1118,6 +1118,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         tracker: TrackerToken,
     ) {
+        let upgrader_blocked_key = lock_info.blocked_by_upgrader.then(|| lock_info.key.clone());
         let key = lock_info.key.clone();
         let lock_digest = lock_info.lock_digest;
         let start_ts = lock_info.parameters.start_ts;
@@ -1169,6 +1170,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_req_ctx.get_callback_for_cancellation(),
             diag_ctx,
         );
+        if let Some(key) = upgrader_blocked_key {
+            self.inner
+                .lock_wait_queues
+                .register_upgrader_blocked_reader(&key, wait_token);
+        }
     }
 
     fn on_release_locks(
@@ -1848,7 +1854,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         .modifies
                         .iter()
                         .filter_map(|write| match write {
-                            Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                            Modify::Put(CF_LOCK, key, ..) | Modify::Delete(CF_LOCK, key) | Modify::PessimisticLock(key, _) => {
                                 locks.get_mut(key).map(|(_, deleted)| {
                                     *deleted = true;
                                     key.to_owned()
