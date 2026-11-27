@@ -1426,7 +1426,7 @@ mod tests {
                 (Either::Right(mut l), Either::Right(lock)) => {
                     l.parse_all();
                     assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
-                    assert!(lock.pre_allocate_size() >= v.len());
+                    assert!(lock.estimated_encoded_size() >= v.len());
                 }
                 (l, lock) => panic!("#{} mismatch: parsed={:?}, expected={:?}", i, l, lock),
             }
