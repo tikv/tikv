@@ -363,8 +363,42 @@ impl Resolver {
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
+        self.untrack_lock_with_start_ts(key, None, index);
+    }
+
+    pub fn untrack_lock_with_start_ts(
+        &mut self,
+        key: &[u8],
+        expected_start_ts: Option<TimeStamp>,
+        index: Option<u64>,
+    ) {
         if let Some(index) = index {
             self.update_tracked_index(index);
+        }
+        if let Some(expected_ts) = expected_start_ts {
+            if let Some(&tracked_ts) = self.locks_by_key.get(key) {
+                if tracked_ts != expected_ts {
+                    debug!(
+                        "skip untracking lock owned by another transaction";
+                        "key" => &log_wrappers::Value::key(key),
+                        "tracked_start_ts" => tracked_ts,
+                        "event_start_ts" => expected_ts,
+                        "region_id" => self.region_id,
+                    );
+                    return;
+                }
+            } else if let Some(&tracked_ts) = self.large_txn_key_representative.get(key) {
+                if tracked_ts != expected_ts {
+                    debug!(
+                        "skip untracking large txn lock owned by another transaction";
+                        "key" => &log_wrappers::Value::key(key),
+                        "tracked_start_ts" => tracked_ts,
+                        "event_start_ts" => expected_ts,
+                        "region_id" => self.region_id,
+                    );
+                    return;
+                }
+            }
         }
         if let Some(start_ts) = self.locks_by_key.remove(key) {
             let bytes = self.lock_heap_size(key);
@@ -952,5 +986,54 @@ mod tests {
         // 10.
         assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 9.into());
         // Now the txn can commit, with the smallest possible commit_ts = 10.
+    }
+
+    #[test]
+    fn test_untrack_lock_with_start_ts_preserves_other_txn_data_lock() {
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache);
+        let key: Vec<u8> = b"data-secondary".to_vec();
+
+        // Transaction B (start_ts=10) prewrites a data secondary on `key`.
+        resolver
+            .track_lock(10.into(), key.clone(), Some(1), 0)
+            .unwrap();
+        assert_eq!(
+            resolver.resolve(50.into(), None, TsSource::PdTso),
+            10.into()
+        );
+
+        // Transaction A (start_ts=5) writes a rollback on the same key while B's lock
+        // stays.
+        resolver.untrack_lock_with_start_ts(&key, Some(5.into()), Some(2));
+        assert_eq!(
+            resolver.resolve(50.into(), None, TsSource::PdTso),
+            10.into()
+        );
+
+        // Transaction B's own commit (start_ts=10) untracks the lock and lets
+        // resolved-ts advance.
+        resolver.untrack_lock_with_start_ts(&key, Some(10.into()), Some(3));
+        assert_eq!(
+            resolver.resolve(50.into(), None, TsSource::PdTso),
+            50.into()
+        );
+
+        // Same check for a large transaction (generation > 0).
+        let large_key: Vec<u8> = b"large-secondary".to_vec();
+        resolver
+            .track_lock(60.into(), large_key.clone(), Some(4), 1)
+            .unwrap();
+        resolver.untrack_lock_with_start_ts(&large_key, Some(55.into()), Some(5));
+        assert_eq!(
+            resolver.resolve(80.into(), None, TsSource::PdTso),
+            59.into()
+        );
+        resolver.untrack_lock_with_start_ts(&large_key, Some(60.into()), Some(6));
+        assert_eq!(
+            resolver.resolve(80.into(), None, TsSource::PdTso),
+            80.into()
+        );
     }
 }

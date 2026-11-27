@@ -63,13 +63,7 @@ impl ChangeLog {
                         let flags =
                             WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
                         let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                        let mut requests: Vec<Request> = request.requests.into();
-                        if flags.contains(WriteBatchFlags::FLASHBACK) && !is_one_pc {
-                            // Flashback rollback can write multiple historical versions for a
-                            // shared key. The lock CF mutation gives the resolver its final
-                            // lock state for rollback, prewrite and commit.
-                            requests.retain(|req| req.get_put().get_cf() != CF_WRITE);
-                        }
+                        let requests: Vec<Request> = request.requests.into();
                         let (changes, has_ingest_sst) = group_row_changes(requests);
                         let mut rows = Self::encode_rows(changes, is_one_pc);
                         if has_ingest_sst {
@@ -88,40 +82,90 @@ impl ChangeLog {
     }
 
     fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
-        changes
-            .into_iter()
-            .filter_map(|(key, row)| match (row.write, row.lock, row.default) {
-                (Some(KeyOp::Put(mut commit_ts, write)), _, default) => {
-                    decode_write(key.as_encoded(), &write, true).map(|write| {
+        let mut out = Vec::with_capacity(changes.len());
+        for (key, row) in changes {
+            let RowChange {
+                writes,
+                lock,
+                mut default,
+            } = row;
+            if !writes.is_empty() {
+                let mut emitted_write = false;
+                let mut filtered_write = false;
+                for write_op in writes {
+                    let (mut commit_ts, write) = write_op.into_put();
+                    if let Some(write) = decode_write(key.as_encoded(), &write, true) {
+                        emitted_write = true;
                         let Write {
                             short_value,
                             start_ts,
                             write_type,
                             ..
                         } = write;
-                        let value = default.map_or(short_value, |v| Some(v.into_put().1));
+                        let value = default.take().map_or(short_value, |v| Some(v.into_put().1));
                         if is_one_pc {
-                            ChangeRow::OnePc {
+                            out.push(ChangeRow::OnePc {
                                 commit_ts: commit_ts.unwrap_or_default(),
                                 write_type,
                                 value,
-                                key,
-                            }
+                                key: key.clone(),
+                            });
                         } else {
                             if write.write_type == WriteType::Rollback {
                                 commit_ts = None;
                             }
-                            ChangeRow::Commit {
-                                key,
+                            out.push(ChangeRow::Commit {
+                                key: key.clone(),
                                 commit_ts,
                                 start_ts: Some(start_ts),
                                 write_type,
-                            }
+                            });
                         }
-                    })
+                    } else {
+                        filtered_write = true;
+                    }
                 }
-                (None, Some(KeyOp::Put(_, lock)), default) => decode_lock(key.as_encoded(), &lock)
-                    .map(|lock| {
+                match lock {
+                    Some(KeyOp::Put(_, lock_val)) => {
+                        if let Some(lock) = decode_lock(key.as_encoded(), &lock_val) {
+                            let Lock {
+                                short_value,
+                                ts,
+                                lock_type,
+                                generation,
+                                ..
+                            } = lock;
+                            let value =
+                                default.take().map_or(short_value, |v| Some(v.into_put().1));
+                            out.push(ChangeRow::Prewrite {
+                                key,
+                                start_ts: ts,
+                                lock_type,
+                                value,
+                                generation,
+                            });
+                        }
+                    }
+                    Some(KeyOp::Delete) if !is_one_pc && (!emitted_write || filtered_write) => {
+                        // A final CF_LOCK delete guarantees no physical lock remains on this
+                        // key. When a write record was filtered out (such as an overlapped
+                        // rollback rewriting an older write with gc_fence, or a lock-only
+                        // commit), emit an authoritative unlock so the resolver does not
+                        // keep a stale lock pinned.
+                        out.push(ChangeRow::Commit {
+                            key,
+                            commit_ts: None,
+                            start_ts: None,
+                            write_type: WriteType::Rollback,
+                        });
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            match (lock, default) {
+                (Some(KeyOp::Put(_, lock)), default) => {
+                    if let Some(lock) = decode_lock(key.as_encoded(), &lock) {
                         let Lock {
                             short_value,
                             ts,
@@ -130,23 +174,25 @@ impl ChangeLog {
                             ..
                         } = lock;
                         let value = default.map_or(short_value, |v| Some(v.into_put().1));
-                        ChangeRow::Prewrite {
+                        out.push(ChangeRow::Prewrite {
                             key,
                             start_ts: ts,
                             lock_type,
                             value,
                             generation,
-                        }
-                    }),
-                (None, Some(KeyOp::Delete), _) => Some(ChangeRow::Commit {
+                        });
+                    }
+                }
+                (Some(KeyOp::Delete), _) => out.push(ChangeRow::Commit {
                     key,
                     commit_ts: None,
                     start_ts: None,
                     write_type: WriteType::Rollback,
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
-            })
-            .collect()
+            }
+        }
+        out
     }
 }
 
@@ -233,7 +279,7 @@ impl KeyOp {
 
 #[derive(Default, Debug)]
 struct RowChange {
-    write: Option<KeyOp>,
+    writes: Vec<KeyOp>,
     lock: Option<KeyOp>,
     default: Option<KeyOp>,
 }
@@ -258,30 +304,15 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                         if let Ok(ts) = key.decode_ts() {
                             let key = key.truncate_ts().unwrap();
                             let row = changes.entry(key).or_default();
-                            assert!(row.write.is_none());
-                            row.write = Some(KeyOp::Put(Some(ts), value));
+                            row.writes.push(KeyOp::Put(Some(ts), value));
                         }
                     }
                     CF_LOCK => {
-                        match changes.entry(key) {
-                            std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
-                                if occupied_entry.get().lock.is_some() {
-                                    error!(
-                                        "there is already row={:?} with same key processing key={:?} value={:?}",
-                                        occupied_entry.get(),
-                                        log_wrappers::Value::key(occupied_entry.key().as_encoded()),
-                                        log_wrappers::Value::value(&value),
-                                    );
-                                }
-                                assert!(occupied_entry.get().lock.is_none());
-                                occupied_entry.get_mut().lock = Some(KeyOp::Put(None, value));
-                            }
-                            std::collections::hash_map::Entry::Vacant(vacant_entry) => {
-                                let mut row_change = RowChange::default();
-                                row_change.lock = Some(KeyOp::Put(None, value));
-                                vacant_entry.insert(row_change);
-                            }
-                        };
+                        // A single Raft batch (such as batched ResolveLock over a shared
+                        // wrapper) can update the same CF_LOCK key multiple times; keep the
+                        // final physical lock state.
+                        let row = changes.entry(key).or_default();
+                        row.lock = Some(KeyOp::Put(None, value));
                     }
                     "" | CF_DEFAULT => {
                         if let Ok(ts) = key.decode_ts() {
@@ -354,6 +385,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 #[cfg(test)]
 mod tests {
     use concurrency_manager::ConcurrencyManager;
+    use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::{
         kvrpcpb::{AssertionLevel, PrewriteRequestPessimisticAction::*},
         raft_cmdpb::{CmdType, Request},
@@ -488,8 +520,14 @@ mod tests {
                 lock_type: LockType::Put,
                 generation: 0,
             },
-            // Rollback of the txn@start_ts=7 will be missing as overlapped rollback is not
-            // hanlded.
+            // Overlapped rollback deletes CF_LOCK even though the rewritten Write CF
+            // record is filtered, so emit an authoritative unlock row.
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: None,
+                commit_ts: None,
+                write_type: WriteType::Rollback,
+            },
         ];
         assert_eq!(rows, expected);
 
@@ -541,5 +579,254 @@ mod tests {
                 value: Some(b"v4".to_vec()),
             }
         )
+    }
+
+    #[test]
+    fn test_cmd_encode_batched_shared_member_resolutions() {
+        let key = Key::from_raw(b"shared-key");
+        let w1 = txn_types::Write::new_rollback(10.into(), true);
+        let w2 = txn_types::Write::new_rollback(20.into(), true);
+        let mut remaining = txn_types::SharedLocks::new();
+        remaining
+            .insert_lock(txn_types::Lock::new(
+                LockType::Pessimistic,
+                b"shared-key".to_vec(),
+                30.into(),
+                1000,
+                None,
+                30.into(),
+                1,
+                0.into(),
+                false,
+            ))
+            .unwrap();
+        let remaining_bytes = remaining.to_bytes();
+
+        // Case 1: two shared rollbacks + two intermediate CF_LOCK updates with a
+        // surviving holder.
+        let reqs_surviving: Vec<Request> = vec![
+            Modify::Put(
+                CF_WRITE,
+                key.clone().append_ts(10.into()),
+                w1.as_ref().to_bytes(),
+            )
+            .into(),
+            Modify::Put(CF_LOCK, key.clone(), remaining_bytes.clone()).into(),
+            Modify::Put(
+                CF_WRITE,
+                key.clone().append_ts(20.into()),
+                w2.as_ref().to_bytes(),
+            )
+            .into(),
+            Modify::Put(CF_LOCK, key.clone(), remaining_bytes).into(),
+        ];
+        let (changes, has_ingest_sst) = group_row_changes(reqs_surviving);
+        assert!(!has_ingest_sst);
+        let rows = ChangeLog::encode_rows(changes, false);
+        assert_eq!(
+            rows,
+            vec![
+                ChangeRow::Commit {
+                    key: key.clone(),
+                    write_type: WriteType::Rollback,
+                    start_ts: Some(10.into()),
+                    commit_ts: None,
+                },
+                ChangeRow::Commit {
+                    key: key.clone(),
+                    write_type: WriteType::Rollback,
+                    start_ts: Some(20.into()),
+                    commit_ts: None,
+                },
+            ]
+        );
+
+        // Case 2: two shared rollbacks + intermediate CF_LOCK put + final CF_LOCK
+        // delete.
+        let reqs_deleted: Vec<Request> = vec![
+            Modify::Put(
+                CF_WRITE,
+                key.clone().append_ts(10.into()),
+                w1.as_ref().to_bytes(),
+            )
+            .into(),
+            Modify::Put(CF_LOCK, key.clone(), remaining.to_bytes()).into(),
+            Modify::Put(
+                CF_WRITE,
+                key.clone().append_ts(20.into()),
+                w2.as_ref().to_bytes(),
+            )
+            .into(),
+            Modify::Delete(CF_LOCK, key.clone()).into(),
+        ];
+        let (changes, _) = group_row_changes(reqs_deleted);
+        let rows = ChangeLog::encode_rows(changes, false);
+        assert_eq!(
+            rows,
+            vec![
+                ChangeRow::Commit {
+                    key: key.clone(),
+                    write_type: WriteType::Rollback,
+                    start_ts: Some(10.into()),
+                    commit_ts: None,
+                },
+                ChangeRow::Commit {
+                    key,
+                    write_type: WriteType::Rollback,
+                    start_ts: Some(20.into()),
+                    commit_ts: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_overlapped_rollback_untracks_and_unrelated_rollback_pins_resolver() {
+        use std::sync::Arc;
+
+        use tikv::storage::txn::txn_status_cache::TxnStatusCache;
+        use tikv_util::memory::MemoryQuota;
+        use txn_types::TimeStamp;
+
+        use crate::{TsSource, resolver::Resolver};
+
+        let rocks_engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache);
+        let mut apply_index = 0u64;
+
+        let apply_batches =
+            |batches: Vec<Vec<Modify>>, resolver: &mut Resolver, apply_index: &mut u64| {
+                for batch in batches {
+                    *apply_index += 1;
+                    let reqs: Vec<Request> = batch.into_iter().map(Into::into).collect();
+                    let (changes, _) = group_row_changes(reqs);
+                    for row in ChangeLog::encode_rows(changes, false) {
+                        match row {
+                            ChangeRow::Prewrite {
+                                key,
+                                start_ts,
+                                generation,
+                                ..
+                            } => {
+                                resolver
+                                    .track_lock(
+                                        start_ts,
+                                        key.to_raw().unwrap(),
+                                        Some(*apply_index),
+                                        generation,
+                                    )
+                                    .unwrap();
+                            }
+                            ChangeRow::Commit { key, start_ts, .. } => {
+                                resolver.untrack_lock_with_start_ts(
+                                    &key.to_raw().unwrap(),
+                                    start_ts,
+                                    Some(*apply_index),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            };
+
+        // 1. Protected overlapped rollback deletes CF_LOCK and must advance
+        //    resolved-ts, and subsequent transactions on the same key must not stay
+        //    pinned at 7.
+        must_prewrite_put(&mut engine, b"k1", b"v4", b"k1", 6);
+        must_commit(&mut engine, b"k1", 6, 7);
+        apply_batches(engine.take_last_modifies(), &mut resolver, &mut apply_index);
+        assert_eq!(resolver.resolve(6.into(), None, TsSource::PdTso), 6.into());
+
+        must_prewrite_put(&mut engine, b"k1", b"v5", b"k1", 7);
+        apply_batches(engine.take_last_modifies(), &mut resolver, &mut apply_index);
+        assert_eq!(resolver.resolve(50.into(), None, TsSource::PdTso), 7.into());
+
+        must_rollback(&mut engine, b"k1", 7, true);
+        apply_batches(engine.take_last_modifies(), &mut resolver, &mut apply_index);
+        assert_eq!(resolver.resolve(9.into(), None, TsSource::PdTso), 9.into());
+
+        must_prewrite_put(&mut engine, b"k1", b"v6", b"k1", 10);
+        apply_batches(engine.take_last_modifies(), &mut resolver, &mut apply_index);
+        assert_eq!(
+            resolver.resolve(50.into(), None, TsSource::PdTso),
+            10.into()
+        );
+
+        must_commit(&mut engine, b"k1", 10, 11);
+        apply_batches(engine.take_last_modifies(), &mut resolver, &mut apply_index);
+        assert_eq!(
+            resolver.resolve(50.into(), None, TsSource::PdTso),
+            50.into()
+        );
+
+        // 2. Rollback by another transaction that leaves k2's active data lock in place
+        //    (no CF_LOCK delete) must keep resolved-ts pinned at the active owner's
+        //    start_ts.
+        let mut resolver2 = Resolver::new(
+            2,
+            Arc::new(MemoryQuota::new(usize::MAX)),
+            Arc::new(TxnStatusCache::new(100)),
+        );
+        let mut apply_index2 = 0u64;
+        must_prewrite_put(&mut engine, b"k2", b"v1", b"k2", 20);
+        apply_batches(
+            engine.take_last_modifies(),
+            &mut resolver2,
+            &mut apply_index2,
+        );
+        assert_eq!(
+            resolver2.resolve(50.into(), None, TsSource::PdTso),
+            20.into()
+        );
+
+        // Unrelated rollback (start_ts=15) writes CF_WRITE rollback without deleting
+        // CF_LOCK.
+        must_rollback(&mut engine, b"k2", 15, false);
+        apply_batches(
+            engine.take_last_modifies(),
+            &mut resolver2,
+            &mut apply_index2,
+        );
+        assert_eq!(
+            resolver2.resolve(50.into(), None, TsSource::PdTso),
+            20.into()
+        );
+
+        // Also ensure a filtered overlapped write without CF_LOCK delete keeps k2
+        // pinned.
+        let k2 = Key::from_raw(b"k2");
+        let overlapped =
+            txn_types::Write::new(WriteType::Put, TimeStamp::new(12), Some(b"old".to_vec()))
+                .set_overlapped_rollback(true, Some(TimeStamp::new(0)));
+        let (changes, _) = group_row_changes(vec![
+            Modify::Put(
+                CF_WRITE,
+                k2.clone().append_ts(15.into()),
+                overlapped.as_ref().to_bytes(),
+            )
+            .into(),
+        ]);
+        assert!(ChangeLog::encode_rows(changes, false).is_empty());
+        assert_eq!(
+            resolver2.resolve(50.into(), None, TsSource::PdTso),
+            20.into()
+        );
+
+        // Committing the active owner (start_ts=20) untracks k2 and lets resolved-ts
+        // advance.
+        must_commit(&mut engine, b"k2", 20, 25);
+        apply_batches(
+            engine.take_last_modifies(),
+            &mut resolver2,
+            &mut apply_index2,
+        );
+        assert_eq!(
+            resolver2.resolve(50.into(), None, TsSource::PdTso),
+            50.into()
+        );
     }
 }
