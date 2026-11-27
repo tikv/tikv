@@ -164,6 +164,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: vec![],
+            shared_lock_upgrade_hints: vec![],
             lock_guards,
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: vec![],
@@ -380,6 +381,7 @@ mod tests {
 
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -436,6 +438,7 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,

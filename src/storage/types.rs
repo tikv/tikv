@@ -178,6 +178,8 @@ pub struct PessimisticLockParameters {
     /// continue trying to acquire the lock when it's woken up. Also see:
     /// [`super::lock_manager::lock_waiting_queue`]
     pub allow_lock_with_conflict: bool,
+    /// Preserve the original read dependency across retries after a wait.
+    pub is_shared_lock_upgrade: bool,
 }
 
 /// Represents the result of pessimistic lock on a single key.

@@ -322,9 +322,13 @@ impl ObserveRegion {
                                         *generation,
                                     )?;
                                 }
-                                ChangeRow::Commit { key, .. } => self
-                                    .resolver
-                                    .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                ChangeRow::Commit { key, start_ts, .. } => {
+                                    self.resolver.untrack_lock_with_start_ts(
+                                        &key.to_raw().unwrap(),
+                                        *start_ts,
+                                        Some(*index),
+                                    )
+                                }
                                 // One pc command do not contain any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {
                                     self.resolver.update_tracked_index(*index);
@@ -378,9 +382,13 @@ impl ObserveRegion {
                                 generation,
                             )?;
                         }
-                        PendingLock::Untrack { key, .. } => self
-                            .resolver
-                            .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
+                        PendingLock::Untrack { key, start_ts, .. } => {
+                            self.resolver.untrack_lock_with_start_ts(
+                                &key.to_raw().unwrap(),
+                                start_ts,
+                                Some(pending_tracked_index),
+                            )
+                        }
                     }
                 }
                 info!(

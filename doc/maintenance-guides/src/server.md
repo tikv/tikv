@@ -243,6 +243,10 @@ Start triage with:
 - status-server control operations not reaching real runtime owners
 - GC compaction behavior drifting from MVCC rules
 
+Shared-lock waits report a dependency on each other blocking holder. A pending
+upgrade retains its own shared member; exclude that transaction when detecting,
+cleaning, and displaying wait edges. A shrinking wrapper refreshes those edges.
+
 ## Reading Map And Companion Docs
 
 Suggested reading order:

@@ -22,9 +22,9 @@ use crate::storage::{
     txn::{
         Error, Result, acquire_pessimistic_lock,
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult, WriteResultLockInfo,
-            acquire_pessimistic_lock::make_write_data,
+            Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext,
+            WriteResult, WriteResultLockInfo,
+            acquire_pessimistic_lock::{make_write_data, pessimistic_lock_response_policy},
         },
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
@@ -154,6 +154,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 params.lock_only_if_exists,
                 true,
                 false,
+                params.is_shared_lock_upgrade,
+                false,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -226,6 +228,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
         }
 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
+        let response_policy = pessimistic_lock_response_policy(&modifies);
         let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
@@ -236,8 +239,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             lock_info: encountered_locks,
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
-            response_policy: ResponsePolicy::OnProposed,
+            response_policy,
             known_txn_status: vec![],
         })
     }
@@ -323,6 +327,7 @@ mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
@@ -382,6 +387,7 @@ mod tests {
             is_first_lock: false,
             lock_only_if_exists: false,
             allow_lock_with_conflict: true,
+            is_shared_lock_upgrade: false,
         };
 
         let key = Key::from_raw(key);
@@ -396,6 +402,7 @@ mod tests {
             parameters,
             should_not_exist: false,
             is_shared_lock: false,
+            is_lock_upgrade: false,
             lock_wait_token: token,
             legacy_wake_up_index: Some(0),
             req_states,

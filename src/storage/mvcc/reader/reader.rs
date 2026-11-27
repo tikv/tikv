@@ -1175,6 +1175,8 @@ pub mod tests {
                 false,
                 false,
                 false,
+                false,
+                false,
             )
             .unwrap();
             self.write(txn.into_modifies());

@@ -766,6 +766,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: vec![],
                 released_locks,
                 new_acquired_locks,
+                shared_lock_upgrade_hints: vec![],
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
                 known_txn_status: if !one_pc_commit_ts.is_zero() {
@@ -791,6 +792,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: vec![],
                 released_locks: ReleasedLocks::new(),
                 new_acquired_locks: vec![],
+                shared_lock_upgrade_hints: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
                 known_txn_status: vec![],
@@ -1673,6 +1675,7 @@ mod tests {
         macro_rules! context {
             () => {
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: ConcurrencyManager::new_for_test(10.into()),
                     extra_op: ExtraOp::Noop,
@@ -1845,6 +1848,7 @@ mod tests {
                 )
             };
             let context = WriteContext {
+                lock_wait_queues: None,
                 lock_mgr: &MockLockManager::new(),
                 concurrency_manager: cm.clone(),
                 extra_op: ExtraOp::Noop,
@@ -1956,6 +1960,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -1985,6 +1990,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2069,6 +2075,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -2102,6 +2109,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2373,6 +2381,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -2398,6 +2407,7 @@ mod tests {
             10.into(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2605,6 +2615,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: ConcurrencyManager::new_for_test(20.into()),
             extra_op: ExtraOp::Noop,
@@ -2991,6 +3002,31 @@ mod tests {
         must_locked(&mut engine, k1, 10);
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
+    }
+
+    #[test]
+    fn test_shared_prewrite_retry_after_commit() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let mut statistics = Statistics::default();
+        let key = b"shared-prewrite-retry";
+        let prewrite_shared = || {
+            PrewritePessimistic::with_defaults(
+                vec![(
+                    Mutation::make_shared_lock(Key::from_raw(key)),
+                    DoPessimisticCheck,
+                )],
+                key.to_vec(),
+                10.into(),
+                10.into(),
+            )
+        };
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 10, 2000);
+        prewrite_command(&mut engine, cm.clone(), &mut statistics, prewrite_shared()).unwrap();
+        must_commit(&mut engine, key, 10, 20);
+        prewrite_command(&mut engine, cm, &mut statistics, prewrite_shared()).unwrap();
+        must_unlocked(&mut engine, key);
     }
 
     #[test]

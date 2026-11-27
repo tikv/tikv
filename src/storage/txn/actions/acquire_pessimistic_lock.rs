@@ -12,6 +12,7 @@ use crate::storage::{
     Snapshot,
     mvcc::{
         Error as MvccError, ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
+        TxnCommitRecord,
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
     txn::{
@@ -56,6 +57,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     lock_only_if_exists: bool,
     allow_lock_with_conflict: bool,
     is_shared_lock_req: bool,
+    is_shared_lock_upgrade: bool,
+    has_pending_upgrader: bool,
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -87,14 +90,96 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // `load_old_value` doing repeated work.
     let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
+    if is_shared_lock_req && allow_lock_with_conflict && !is_shared_lock_upgrade {
+        return Err(box_err!("shared locking reads require normal wake-up mode"));
+    }
     let mut val = None;
-    let current_lock = reader.load_lock(&key)?;
+    let mut current_lock = reader.load_lock(&key)?;
+    if is_shared_lock_upgrade {
+        // An ordinary X may use the current statement timestamp. An upgrade
+        // must preserve what the transaction read under its *original* S.
+        if is_shared_lock_req || allow_lock_with_conflict {
+            return Err(ErrorInner::SharedLockLost {
+                start_ts: reader.start_ts,
+                key: key.to_raw()?,
+            }
+            .into());
+        }
+        check_shared_request_outcome(reader, &key)?;
+        match current_lock.as_mut() {
+            Some(Either::Left(lock)) if lock.ts == reader.start_ts => {
+                if lock.primary != primary
+                    || lock.shared_lock_upgrade_ts.is_zero()
+                    || lock.shared_lock_upgrade_ts != for_update_ts
+                    || (lock.is_pessimistic_lock() && lock.for_update_ts != for_update_ts)
+                    || lock.is_pessimistic_lock_with_conflict()
+                {
+                    return Err(ErrorInner::SharedLockLost {
+                        start_ts: reader.start_ts,
+                        key: key.to_raw()?,
+                    }
+                    .into());
+                }
+                // A late copy can arrive after the first upgrade was prewritten.
+                // Return the read result but never change a prepared lock back to pessimistic.
+                if !lock.is_pessimistic_lock() {
+                    let (value, old_value) = read_shared_lock_value(
+                        reader,
+                        &key,
+                        should_not_exist,
+                        for_update_ts,
+                        need_value,
+                        need_check_existence,
+                        need_old_value,
+                    )?;
+                    return Ok((
+                        PessimisticLockKeyResult::new_success(
+                            need_value,
+                            need_check_existence,
+                            None,
+                            value,
+                        ),
+                        old_value,
+                    ));
+                }
+            }
+            Some(Either::Right(holders)) if holders.contains_start_ts(reader.start_ts) => {
+                let holder = holders.get_lock(&reader.start_ts)?.unwrap();
+                if !holder.is_pessimistic_lock()
+                    || holder.primary != primary
+                    || holder.for_update_ts > for_update_ts
+                {
+                    return Err(ErrorInner::SharedLockLost {
+                        start_ts: reader.start_ts,
+                        key: key.to_raw()?,
+                    }
+                    .into());
+                }
+            }
+            _ => {
+                return Err(ErrorInner::SharedLockLost {
+                    start_ts: reader.start_ts,
+                    key: key.to_raw()?,
+                }
+                .into());
+            }
+        }
+    }
     let mut current_shared_locks: Option<SharedLocks> = None;
     if let Some(lock_or_shared) = current_lock {
         match lock_or_shared {
             Either::Left(lock) => {
-                if !is_shared_lock_req {
-                    // Exclusive lock request with existing exclusive lock
+                if is_shared_lock_req
+                    && lock.ts == reader.start_ts
+                    && lock.primary != primary
+                    && for_update_ts <= lock.for_update_ts
+                {
+                    return Err(
+                        ErrorInner::PrimaryMismatch(lock.into_lock_info(key.to_raw()?)).into(),
+                    );
+                }
+                if !is_shared_lock_req || lock.ts == reader.start_ts {
+                    // An S request on our own X retains X.
                     return handle_existing_exclusive_lock(
                         txn,
                         reader,
@@ -109,6 +194,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                         need_old_value,
                         allow_lock_with_conflict,
                         lock,
+                        if is_shared_lock_req {
+                            ExistingLockRequest::SharedRead
+                        } else {
+                            ExistingLockRequest::Exclusive
+                        },
                     );
                 } else {
                     // Shared lock request blocked by exclusive lock
@@ -117,9 +207,37 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     );
                 }
             }
-            Either::Right(shared_locks) => {
+            Either::Right(mut shared_locks) => {
                 if !is_shared_lock_req {
-                    if !shared_locks.is_shrink_only() {
+                    if shared_locks.contains_start_ts(reader.start_ts) && !is_shared_lock_upgrade {
+                        return Err(ErrorInner::SharedLockLost {
+                            start_ts: reader.start_ts,
+                            key: key.to_raw()?,
+                        }
+                        .into());
+                    }
+                    if shared_locks.len() == 1 && shared_locks.contains_start_ts(reader.start_ts) {
+                        let member = shared_locks.get_lock(&reader.start_ts)?.unwrap().clone();
+                        return handle_existing_exclusive_lock(
+                            txn,
+                            reader,
+                            key,
+                            primary,
+                            should_not_exist,
+                            lock_ttl,
+                            for_update_ts,
+                            need_value,
+                            need_check_existence,
+                            min_commit_ts,
+                            need_old_value,
+                            allow_lock_with_conflict,
+                            member,
+                            ExistingLockRequest::Upgrade {
+                                only_if_exists: lock_only_if_exists,
+                            },
+                        );
+                    }
+                    if !is_shared_lock_upgrade && !shared_locks.is_shrink_only() {
                         return Err(ErrorInner::NotInShrinkMode(shared_locks).into());
                     }
                     let lock_info = shared_locks.into_lock_info(key.into_raw()?);
@@ -132,6 +250,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             reader,
                             key,
                             primary,
+                            should_not_exist,
                             lock_ttl,
                             min_commit_ts,
                             for_update_ts,
@@ -142,7 +261,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                             shared_locks,
                         );
                     }
-                    if shared_locks.is_shrink_only() {
+                    if has_pending_upgrader || shared_locks.is_shrink_only() {
                         let lock_info = shared_locks.into_lock_info(key.into_raw()?);
                         return Err(ErrorInner::KeyIsLocked(lock_info).into());
                     }
@@ -301,17 +420,19 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
-    if is_shared_lock_req {
-        let (mut shared_locks, is_new) = match current_shared_locks {
-            Some(l) => (l, false),
-            None => (SharedLocks::new(), true),
-        };
-        shared_locks
-            .insert_lock(lock.into_lock())
-            .map_err(MvccError::from)?;
-        txn.put_shared_locks(key, &shared_locks, is_new);
-    } else if !lock_only_if_exists || val.is_some() {
-        txn.put_pessimistic_lock(key, lock, true);
+    if !lock_only_if_exists || val.is_some() {
+        if is_shared_lock_req {
+            let (mut shared_locks, is_new) = match current_shared_locks {
+                Some(l) => (l, false),
+                None => (SharedLocks::new(), true),
+            };
+            shared_locks
+                .insert_lock(lock.into_lock())
+                .map_err(MvccError::from)?;
+            txn.put_shared_locks(key, &shared_locks, is_new);
+        } else {
+            txn.put_pessimistic_lock(key, lock, true);
+        }
     } else if let Some(conflict_info) = conflict_info {
         return Err(conflict_info.into_write_conflict_error(
             reader.start_ts,
@@ -330,6 +451,32 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         ),
         old_value,
     ))
+}
+
+fn check_shared_request_outcome<S: Snapshot>(
+    reader: &mut SnapshotReader<S>,
+    key: &Key,
+) -> MvccResult<()> {
+    match reader.get_txn_commit_record(key)? {
+        TxnCommitRecord::SingleRecord { commit_ts, write }
+            if write.write_type != WriteType::Rollback =>
+        {
+            Err(ErrorInner::Committed {
+                start_ts: reader.start_ts,
+                commit_ts,
+                key: key.to_raw()?,
+            }
+            .into())
+        }
+        TxnCommitRecord::SingleRecord { .. } | TxnCommitRecord::OverlappedRollback { .. } => {
+            Err(ErrorInner::SharedLockLost {
+                start_ts: reader.start_ts,
+                key: key.to_raw()?,
+            }
+            .into())
+        }
+        TxnCommitRecord::None { .. } => Ok(()),
+    }
 }
 
 fn load_old_value<S: Snapshot>(
@@ -355,6 +502,12 @@ fn load_old_value<S: Snapshot>(
     }
 }
 
+enum ExistingLockRequest {
+    Exclusive,
+    SharedRead,
+    Upgrade { only_if_exists: bool },
+}
+
 fn handle_existing_exclusive_lock<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -368,7 +521,8 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
     min_commit_ts: TimeStamp,
     need_old_value: bool,
     allow_lock_with_conflict: bool,
-    lock: Lock,
+    mut lock: Lock,
+    request: ExistingLockRequest,
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     if lock.ts != reader.start_ts {
         return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
@@ -385,6 +539,30 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
     let mut val = None;
     let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
+    if matches!(request, ExistingLockRequest::SharedRead) && for_update_ts < lock.for_update_ts {
+        let mut ts = TimeStamp::max();
+        while let Some((commit_ts, write)) = reader.seek_write(&key, ts)? {
+            if commit_ts <= for_update_ts {
+                break;
+            }
+            if write.write_type == WriteType::Rollback {
+                ts = commit_ts.prev();
+                continue;
+            }
+            MVCC_CONFLICT_COUNTER
+                .acquire_pessimistic_lock_conflict
+                .inc();
+            return Err(ConflictInfo {
+                conflict_start_ts: write.start_ts,
+                conflict_commit_ts: commit_ts,
+            }
+            .into_write_conflict_error(
+                reader.start_ts,
+                primary.to_vec(),
+                key.into_raw()?,
+            ));
+        }
+    }
     let requested_for_update_ts = for_update_ts;
     let locked_with_conflict_ts = if allow_lock_with_conflict && for_update_ts < lock.for_update_ts
     {
@@ -434,22 +612,42 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
         None,
     )?;
 
-    let lock_to_write = PessimisticLock {
-        primary: primary.into(),
-        start_ts: reader.start_ts,
-        ttl: lock_ttl,
-        for_update_ts,
-        min_commit_ts,
-        last_change: lock.last_change.clone(),
-        is_locked_with_conflict: lock.is_pessimistic_lock_with_conflict(),
-    };
-
-    if for_update_ts > lock.for_update_ts {
-        txn.put_pessimistic_lock(key, lock_to_write, false);
-    } else {
-        MVCC_DUPLICATE_CMD_COUNTER_VEC
+    lock.ttl = lock.ttl.max(lock_ttl);
+    lock.min_commit_ts = lock.min_commit_ts.max(min_commit_ts);
+    let advanced = for_update_ts > lock.for_update_ts;
+    if advanced {
+        primary.clone_into(&mut lock.primary);
+        lock.for_update_ts = for_update_ts;
+    }
+    match request {
+        ExistingLockRequest::Upgrade { only_if_exists } => {
+            if !only_if_exists || val.is_some() {
+                lock.shared_lock_upgrade_ts = for_update_ts;
+                txn.put_lock(key, &lock, true);
+            }
+        }
+        ExistingLockRequest::SharedRead => {
+            // A CF_LOCK Put also evicts any in-memory X when Raft applies it.
+            txn.put_lock(key, &lock, false);
+        }
+        ExistingLockRequest::Exclusive if advanced && !lock.shared_lock_upgrade_ts.is_zero() => {
+            txn.put_lock(key, &lock, false);
+        }
+        ExistingLockRequest::Exclusive if advanced => {
+            let pessimistic = PessimisticLock {
+                start_ts: lock.ts,
+                ttl: lock.ttl,
+                for_update_ts,
+                min_commit_ts: lock.min_commit_ts,
+                is_locked_with_conflict: lock.is_pessimistic_lock_with_conflict(),
+                last_change: lock.last_change,
+                primary: lock.primary.into(),
+            };
+            txn.put_pessimistic_lock(key, pessimistic, false);
+        }
+        ExistingLockRequest::Exclusive => MVCC_DUPLICATE_CMD_COUNTER_VEC
             .acquire_pessimistic_lock
-            .inc();
+            .inc(),
     }
 
     Ok((
@@ -463,11 +661,50 @@ fn handle_existing_exclusive_lock<S: Snapshot>(
     ))
 }
 
+fn read_shared_lock_value<S: Snapshot>(
+    reader: &mut SnapshotReader<S>,
+    key: &Key,
+    should_not_exist: bool,
+    for_update_ts: TimeStamp,
+    need_value: bool,
+    need_check_existence: bool,
+    need_old_value: bool,
+) -> MvccResult<(Option<Value>, OldValue)> {
+    let need_load_value = need_value || (need_check_existence && need_old_value);
+    let mut val = None;
+    if need_load_value || need_check_existence || should_not_exist {
+        if let Some((write, commit_ts)) = reader.get_write_with_commit_ts(key, for_update_ts)? {
+            check_data_constraint(reader, should_not_exist, &write, commit_ts, key)?;
+            val = if need_load_value {
+                Some(reader.load_data(key, write)?)
+            } else if need_check_existence {
+                Some(vec![])
+            } else {
+                None
+            };
+        }
+    }
+
+    let old_value = load_old_value(
+        need_old_value,
+        need_load_value,
+        val.as_ref(),
+        reader,
+        key,
+        for_update_ts,
+        false,
+        None,
+    )?;
+
+    Ok((val, old_value))
+}
+
 fn handle_existing_shared_lock<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
     key: Key,
     primary: &[u8],
+    should_not_exist: bool,
     lock_ttl: u64,
     min_commit_ts: TimeStamp,
     for_update_ts: TimeStamp,
@@ -479,45 +716,40 @@ fn handle_existing_shared_lock<S: Snapshot>(
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     debug_assert!(!allow_lock_with_conflict);
 
-    let need_load_value = need_value || (need_check_existence && need_old_value);
-    // don't support load value for shared lock now.
-    let val = None;
+    let sub_lock = shared_locks
+        .get_lock(&reader.start_ts)?
+        .expect("shared lock entry must exist for the current transaction");
+    if sub_lock.primary != primary && for_update_ts <= sub_lock.for_update_ts {
+        return Err(
+            ErrorInner::PrimaryMismatch(sub_lock.clone().into_lock_info(key.to_raw()?)).into(),
+        );
+    }
+    if !sub_lock.is_pessimistic_lock() {
+        return Err(ErrorInner::LockTypeNotMatch {
+            start_ts: reader.start_ts,
+            key: key.into_raw()?,
+            pessimistic: false,
+        }
+        .into());
+    }
 
-    let (existing_for_update_ts, last_change, is_locked_with_conflict) = {
-        let sub_lock = shared_locks
-            .get_lock(&reader.start_ts)?
-            .expect("shared lock entry must exist for the current transaction");
-        (
-            sub_lock.for_update_ts,
-            sub_lock.last_change.clone(),
-            sub_lock.is_locked_with_conflict,
-        )
-    };
-
-    let old_value = load_old_value(
-        need_old_value,
-        need_load_value,
-        val.as_ref(),
+    let (val, old_value) = read_shared_lock_value(
         reader,
         &key,
+        should_not_exist,
         for_update_ts,
-        false,
-        None,
+        need_value,
+        need_check_existence,
+        need_old_value,
     )?;
 
-    if for_update_ts > existing_for_update_ts {
-        let lock_to_write = PessimisticLock {
-            primary: primary.into(),
-            start_ts: reader.start_ts,
-            ttl: lock_ttl,
-            for_update_ts,
-            min_commit_ts,
-            last_change,
-            is_locked_with_conflict,
-        };
-        shared_locks
-            .update_lock(lock_to_write.into_lock())
-            .map_err(MvccError::from)?;
+    if for_update_ts > sub_lock.for_update_ts {
+        let mut refreshed = sub_lock.clone();
+        primary.clone_into(&mut refreshed.primary);
+        refreshed.for_update_ts = for_update_ts;
+        refreshed.ttl = lock_ttl.max(refreshed.ttl);
+        refreshed.min_commit_ts = min_commit_ts.max(refreshed.min_commit_ts);
+        shared_locks.update_lock(refreshed)?;
         txn.put_shared_locks(key, &shared_locks, false);
     } else {
         MVCC_DUPLICATE_CMD_COUNTER_VEC
@@ -621,6 +853,8 @@ pub mod tests {
             lock_only_if_exists,
             true,
             false,
+            false,
+            false,
         );
         if res.is_ok() {
             let modifies = txn.into_modifies();
@@ -691,6 +925,8 @@ pub mod tests {
             min_commit_ts,
             false,
             lock_only_if_exists,
+            false,
+            false,
             false,
             false,
         )
@@ -901,6 +1137,8 @@ pub mod tests {
             lock_only_if_exists,
             false,
             is_shared_lock_req,
+            false,
+            false,
         )
         .unwrap_err()
     }
@@ -956,6 +1194,8 @@ pub mod tests {
             false,
             false,
             true,
+            false,
+            false,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -1585,6 +1825,8 @@ pub mod tests {
                         false,
                         false,
                         false,
+                        false,
+                        false,
                     )
                     .unwrap();
                     assert_eq!(old_value, OldValue::None);
@@ -1638,6 +1880,8 @@ pub mod tests {
             false,
             false,
             false,
+            false,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1671,6 +1915,8 @@ pub mod tests {
             false,
             min_commit_ts,
             true,
+            false,
+            false,
             false,
             false,
             false,
@@ -1716,6 +1962,8 @@ pub mod tests {
                             *need_check_existence,
                             min_commit_ts,
                             need_old_value,
+                            false,
+                            false,
                             false,
                             false,
                             false,
@@ -1774,6 +2022,8 @@ pub mod tests {
             false,
             false,
             false,
+            false,
+            false,
         )
         .unwrap_err();
 
@@ -1807,6 +2057,8 @@ pub mod tests {
             check_existence,
             min_commit_ts,
             need_old_value,
+            false,
+            false,
             false,
             false,
             false,
@@ -2775,6 +3027,262 @@ pub mod tests {
         must_pessimistic_locked(&mut engine, b"k2", 40, 50);
     }
 
+    #[cfg(test)]
+    fn request_exclusive_lock<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        primary: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+        upgrade: bool,
+        force: bool,
+    ) -> MvccResult<()> {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut txn = MvccTxn::new(start_ts.into(), ConcurrencyManager::new_for_test(0.into()));
+        let mut reader = SnapshotReader::new(start_ts.into(), snapshot, true);
+        acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            primary,
+            false,
+            3000,
+            for_update_ts.into(),
+            false,
+            false,
+            0.into(),
+            false,
+            false,
+            force,
+            false,
+            upgrade,
+            false,
+        )?;
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine
+                .write(&Context::default(), WriteData::from_modifies(modifies))
+                .unwrap();
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn put_raw_write<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+        ty: WriteType,
+    ) {
+        let mut txn = MvccTxn::new(start_ts.into(), ConcurrencyManager::new_for_test(0.into()));
+        txn.put_write(
+            Key::from_raw(key),
+            commit_ts.into(),
+            Write::new(ty, start_ts.into(), None).as_ref().to_bytes(),
+        );
+        engine
+            .write(
+                &Context::default(),
+                WriteData::from_modifies(txn.into_modifies()),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_shared_primary_reentry_and_upgrade_preserve_pushed_bounds() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"primary";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        let mut holders = load_shared_locks(&mut engine, key);
+        let mut member = holders.get_lock(&10.into()).unwrap().unwrap().clone();
+        member.min_commit_ts = 200.into();
+        member.ttl = 8000;
+        holders.update_lock(member).unwrap();
+        let mut txn = MvccTxn::new(10.into(), ConcurrencyManager::new_for_test(200.into()));
+        txn.put_shared_locks(Key::from_raw(key), &holders, false);
+        write(&engine, &Context::default(), txn.into_modifies());
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 30, 2000);
+        request_exclusive_lock(&mut engine, key, key, 10, 40, true, false).unwrap();
+        request_exclusive_lock(&mut engine, key, key, 10, 50, false, false).unwrap();
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 50);
+        assert_eq!(lock.ttl, 8000);
+        assert_eq!(lock.min_commit_ts, 200.into());
+    }
+
+    #[test]
+    fn test_upgrade_and_replay_ignore_compatible_history_when_holder_exists() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"normal-s-upgrade";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        // Represents the lock-only commit of a compatible shared member.
+        put_raw_write(&mut engine, key, 12, 30, WriteType::Lock);
+        request_exclusive_lock(&mut engine, key, key, 10, 40, true, false).unwrap();
+        must_pessimistic_locked(&mut engine, key, 10, 40);
+        // The first successful response was lost: retry the exact same request.
+        request_exclusive_lock(&mut engine, key, key, 10, 40, true, false).unwrap();
+        must_pessimistic_locked(&mut engine, key, 10, 40);
+        // A different request or primary is not proof of an upgrade replay.
+        assert!(request_exclusive_lock(&mut engine, key, key, 10, 41, true, false).is_err());
+        assert!(
+            request_exclusive_lock(&mut engine, key, b"other-primary", 10, 40, true, false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_replayed_upgrade_preserves_prewrite() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"prepared-upgrade";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        request_exclusive_lock(&mut engine, key, key, 10, 30, true, false).unwrap();
+        must_pessimistic_prewrite_put(&mut engine, key, b"value", key, 10, 40, DoPessimisticCheck);
+        assert!(matches!(
+            request_exclusive_lock(&mut engine, key, key, 10, 40, true, false),
+            Err(MvccError(box ErrorInner::SharedLockLost { .. }))
+        ));
+        request_exclusive_lock(&mut engine, key, key, 10, 30, true, false).unwrap();
+        let lock = must_locked(&mut engine, key, 10);
+        assert_eq!(lock.lock_type, txn_types::LockType::Put);
+        assert_eq!(lock.for_update_ts, 40.into());
+        must_commit(&mut engine, key, 10, 50);
+    }
+
+    #[test]
+    fn test_upgrade_requires_own_shared_holder_regardless_of_history() {
+        for has_history in [false, true] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
+            let key = b"lost-s-upgrade";
+            if has_history {
+                put_raw_write(&mut engine, key, 12, 30, WriteType::Lock);
+            }
+            let assert_lost = |engine: &mut _| {
+                let err =
+                    request_exclusive_lock(engine, key, key, 10, 40, true, false).unwrap_err();
+                assert!(
+                    matches!(err, MvccError(box ErrorInner::SharedLockLost { .. })),
+                    "{err:?}"
+                );
+            };
+            assert_lost(&mut engine);
+            must_unlocked(&mut engine, key);
+
+            must_acquire_shared_pessimistic_lock(&mut engine, key, key, 15, 40, 3000);
+            assert_lost(&mut engine);
+            let holders = load_shared_locks(&mut engine, key);
+            assert!(!holders.is_shrink_only());
+            assert_eq!(holders.len(), 1);
+            assert!(holders.contains_start_ts(15.into()));
+
+            request_exclusive_lock(&mut engine, key, key, 15, 40, true, false).unwrap();
+            assert_lost(&mut engine);
+            must_pessimistic_locked(&mut engine, key, 15, 40);
+        }
+    }
+
+    #[test]
+    fn test_plain_x_never_silently_upgrades_s() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"explicit-upgrade-only";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        assert!(request_exclusive_lock(&mut engine, key, key, 10, 40, false, false).is_err());
+        assert!(load_shared_locks(&mut engine, key).contains_start_ts(10.into()));
+        // The same history is allowed for an ordinary fresh X at a later f.
+        let fresh = b"ordinary-new-x";
+        put_raw_write(&mut engine, fresh, 12, 30, WriteType::Lock);
+        request_exclusive_lock(&mut engine, fresh, fresh, 10, 40, false, false).unwrap();
+        must_pessimistic_locked(&mut engine, fresh, 10, 40);
+    }
+
+    #[test]
+    fn test_upgrade_rejects_force_rebuilt_x_and_terminal_result() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"force-rebuilt-x";
+        put_raw_write(&mut engine, key, 12, 30, WriteType::Lock);
+        request_exclusive_lock(&mut engine, key, key, 10, 20, false, true).unwrap();
+        assert!(request_exclusive_lock(&mut engine, key, key, 10, 30, true, false).is_err());
+        let rolled_back = b"rolled-back-s";
+        put_raw_write(&mut engine, rolled_back, 10, 10, WriteType::Rollback);
+        assert!(
+            request_exclusive_lock(&mut engine, rolled_back, rolled_back, 10, 40, true, false)
+                .is_err()
+        );
+        must_unlocked(&mut engine, rolled_back);
+        let committed = b"already-committed-s";
+        put_raw_write(&mut engine, committed, 10, 30, WriteType::Lock);
+        assert!(
+            matches!(request_exclusive_lock(&mut engine, committed, committed, 10, 40, true, false),
+            Err(MvccError(box ErrorInner::Committed { commit_ts, .. })) if commit_ts == 30.into())
+        );
+        must_unlocked(&mut engine, committed);
+        let prepared = b"already-prepared-s";
+        must_acquire_shared_pessimistic_lock(&mut engine, prepared, prepared, 10, 20, 3000);
+        must_shared_prewrite_lock(&mut engine, prepared, prepared, 10, 20);
+        assert!(
+            request_exclusive_lock(&mut engine, prepared, prepared, 10, 40, true, false).is_err()
+        );
+        let mut holders = load_shared_locks(&mut engine, prepared);
+        assert_eq!(
+            holders.get_lock(&10.into()).unwrap().unwrap().lock_type,
+            txn_types::LockType::Lock
+        );
+    }
+
+    #[test]
+    fn test_shared_lock_only_if_exists_returns_value_on_retry() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-rc";
+        let pk = b"primary";
+        let ctx = Context::default();
+        let read = |engine: &mut tikv_kv::RocksEngine, start_ts, return_value| {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let (result, _) = acquire_pessimistic_lock(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(key),
+                pk,
+                false,
+                1000,
+                start_ts,
+                return_value,
+                !return_value,
+                TimeStamp::zero(),
+                false,
+                return_value,
+                false,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            result
+        };
+
+        assert_eq!(read(&mut engine, 5.into(), true).unwrap_value(), None);
+        must_unlocked(&mut engine, key);
+
+        must_prewrite_put(&mut engine, key, b"value", key, 6);
+        must_commit(&mut engine, key, 6, 7);
+        for _ in 0..2 {
+            assert_eq!(
+                read(&mut engine, 10.into(), true).unwrap_value(),
+                Some(b"value".to_vec())
+            );
+        }
+        assert!(read(&mut engine, 10.into(), false).unwrap_existence());
+        assert_eq!(load_shared_locks(&mut engine, key).len(), 1);
+    }
+
     #[test]
     fn test_acquire_shared_lock_creates_shared_entry() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
@@ -2854,6 +3362,61 @@ pub mod tests {
     }
 
     #[test]
+    fn test_shared_lock_refresh_can_move_primary() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"q";
+        let ts = TimeStamp::from(10);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, b"p", ts, 20, 100);
+        for delayed_ts in [19, 20] {
+            let err = must_err_shared_lock(&mut engine, key, key, ts, delayed_ts);
+            assert!(matches!(err, MvccError(box ErrorInner::PrimaryMismatch(_))));
+        }
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, 21, 100);
+        pessimistic_rollback::tests::must_success(&mut engine, key, ts, 20);
+        let mut holders = load_shared_locks(&mut engine, key);
+        let lock = holders.get_lock(&ts).unwrap().unwrap();
+        assert_eq!(lock.primary, key);
+        assert_eq!(lock.for_update_ts, 21.into());
+    }
+
+    #[test]
+    fn test_shared_lock_refresh_preserves_ttl_and_min_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts = TimeStamp::from(10);
+        let key = b"q";
+        let mut txn = MvccTxn::new(ts, ConcurrencyManager::new_for_test(ts));
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
+        acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            key,
+            false,
+            200,
+            20.into(),
+            false,
+            false,
+            50.into(),
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+        write(&engine, &Context::default(), txn.into_modifies());
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, 21, 50);
+        let mut holders = load_shared_locks(&mut engine, key);
+        let lock = holders.get_lock(&ts).unwrap().unwrap();
+        assert_eq!(lock.for_update_ts, 21.into());
+        assert_eq!(lock.ttl, 200);
+        assert_eq!(lock.min_commit_ts, 50.into());
+    }
+
+    #[test]
     fn test_acquire_shared_lock_idempotent_for_same_txn() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"shared-idempotent";
@@ -2886,7 +3449,87 @@ pub mod tests {
     }
 
     #[test]
-    fn test_lock_upgrade_and_downgrade_blocked() {
+    fn test_conditional_upgrade_miss_preserves_shared_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"absent";
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 10, 20, 3000);
+        let before = load_shared_locks(&mut engine, key).to_bytes();
+        let mut txn = MvccTxn::new(10.into(), ConcurrencyManager::new_for_test(10.into()));
+        let mut reader = SnapshotReader::new(
+            10.into(),
+            engine.snapshot(Default::default()).unwrap(),
+            true,
+        );
+        let (result, _) = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            key,
+            false,
+            3000,
+            30.into(),
+            true,
+            false,
+            0.into(),
+            false,
+            true,
+            false,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+        result.assert_value(None);
+        assert!(txn.into_modifies().is_empty());
+        assert_eq!(load_shared_locks(&mut engine, key).to_bytes(), before);
+        must_shared_prewrite_lock(&mut engine, key, key, 10, 30);
+    }
+
+    #[test]
+    fn test_shared_read_on_force_locked_exclusive_rechecks_conflict() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"force-locked";
+        for (ts, commit, value) in [(5, 10, b"v1"), (15, 30, b"v2")] {
+            must_prewrite_put(&mut engine, key, value, key, ts);
+            must_commit(&mut engine, key, ts, commit);
+        }
+        must_succeed_allow_lock_with_conflict(&mut engine, key, key, 19, 20, true, false, 3000)
+            .assert_locked_with_conflict(Some(b"v2"), 30);
+        // A later rollback is not the committed version that caused the conflict.
+        put_raw_write(&mut engine, key, 35, 35, WriteType::Rollback);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(19.into(), snapshot, true);
+        let mut txn = MvccTxn::new(19.into(), ConcurrencyManager::new_for_test(0.into()));
+        let mut read = |ts: u64| {
+            acquire_pessimistic_lock(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(key),
+                key,
+                false,
+                3000,
+                ts.into(),
+                true,
+                false,
+                0.into(),
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+            )
+        };
+        assert!(
+            matches!(read(25), Err(MvccError(box ErrorInner::WriteConflict {
+            conflict_start_ts, conflict_commit_ts, ..
+        })) if conflict_start_ts == 15.into() && conflict_commit_ts == 30.into())
+        );
+        read(30).unwrap().0.assert_value(Some(b"v2"));
+    }
+
+    #[test]
+    fn test_plain_x_cannot_upgrade_and_shared_read_retains_own_x() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let shared_key = b"shared-lock";
         let exclusive_key = b"exclusive-lock";
@@ -2895,7 +3538,7 @@ pub mod tests {
         let for_update_ts = TimeStamp::from(35);
         let new_for_update_ts = TimeStamp::from(45);
 
-        // shared lock cannot propagate to exclusive lock
+        // A plain X may not implicitly upgrade an existing S.
         must_acquire_shared_pessimistic_lock(
             &mut engine,
             shared_key,
@@ -2906,9 +3549,27 @@ pub mod tests {
         );
         must_err(&mut engine, shared_key, pk, start_ts, new_for_update_ts);
 
-        // exclusive lock cannot downgrade to shared lock
+        // An ordinary exclusive acquisition is not proof of an explicit upgrade.
         must_acquire_pessimistic_lock(&mut engine, exclusive_key, pk, start_ts, for_update_ts);
-        must_err_shared_lock(&mut engine, exclusive_key, pk, start_ts, new_for_update_ts);
+        for stale_ts in [34, 35] {
+            assert!(matches!(
+                must_err_shared_lock(&mut engine, exclusive_key, b"other", start_ts, stale_ts),
+                MvccError(box ErrorInner::PrimaryMismatch(_))
+            ));
+        }
+        assert!(matches!(
+            request_exclusive_lock(&mut engine, exclusive_key, pk, 25, 35, true, false),
+            Err(MvccError(box ErrorInner::SharedLockLost { .. }))
+        ));
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            exclusive_key,
+            pk,
+            start_ts,
+            new_for_update_ts,
+            3000,
+        );
+        must_pessimistic_locked(&mut engine, exclusive_key, start_ts, new_for_update_ts);
     }
 
     #[test]

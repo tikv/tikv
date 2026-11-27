@@ -244,6 +244,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
             allow_lock_with_conflict,
+            req.get_is_shared_lock_upgrade(),
             req.take_context(),
         )
     }
@@ -460,6 +461,7 @@ pub struct WriteResult {
     pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
     pub new_acquired_locks: Vec<LockInfo>,
+    pub shared_lock_upgrade_hints: Vec<crate::storage::mvcc::SharedLockUpgradeHint>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
     /// The txn status that can be inferred by the successful writing. This will
@@ -479,6 +481,7 @@ impl WriteResult {
         lock_info: Vec<WriteResultLockInfo>,
         released_locks: ReleasedLocks,
         new_acquired_locks: Vec<LockInfo>,
+        shared_lock_upgrade_hints: Vec<crate::storage::mvcc::SharedLockUpgradeHint>,
         lock_guards: Vec<KeyHandleGuard>,
         response_policy: ResponsePolicy,
         known_txn_status: Vec<(TimeStamp, TimeStamp)>,
@@ -491,6 +494,7 @@ impl WriteResult {
             lock_info,
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints,
             lock_guards,
             response_policy,
             known_txn_status,
@@ -508,6 +512,10 @@ pub struct WriteResultLockInfo {
     pub hash_for_latch: u64,
     /// Whether the pending request is trying to acquire a shared lock.
     pub is_shared_lock_request: bool,
+    /// A pending upgrader blocked this shared reader at the MVCC check.
+    pub blocked_by_upgrader: bool,
+    /// The exclusive waiter actually holds a shared member while waiting.
+    pub is_lock_upgrade: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
@@ -529,6 +537,12 @@ impl WriteResultLockInfo {
             ts: lock_info_pb.get_lock_version().into(),
             hash: key.gen_hash(),
         };
+        let is_lock_upgrade = parameters.is_shared_lock_upgrade
+            && !is_shared_lock_request
+            && lock_info_pb
+                .get_shared_lock_infos()
+                .iter()
+                .any(|holder| holder.lock_version == parameters.start_ts.into_inner());
         let hash_for_latch = latch::Lock::hash(&key);
         Self {
             lock_digest: lock,
@@ -538,6 +552,8 @@ impl WriteResultLockInfo {
             parameters,
             hash_for_latch,
             is_shared_lock_request,
+            blocked_by_upgrader: false,
+            is_lock_upgrade,
             lock_wait_token: LockWaitToken(None),
             req_states: None,
         }
@@ -614,6 +630,8 @@ pub struct RawExt {
 
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
+    pub lock_wait_queues:
+        Option<&'a crate::storage::lock_manager::lock_waiting_queue::LockWaitQueues<L>>,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
@@ -902,6 +920,7 @@ pub mod test_util {
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -1064,6 +1083,7 @@ pub mod test_util {
         );
 
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
@@ -1090,6 +1110,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
@@ -1142,9 +1163,11 @@ pub mod test_util {
             false,
             false,
             false,
+            false,
             ctx,
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,

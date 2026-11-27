@@ -683,6 +683,11 @@ error = '''
 KV:Storage:PessimisticLockRolledBack
 '''
 
+["KV:Storage:SharedLockLost"]
+error = '''
+KV:Storage:SharedLockLost
+'''
+
 ["KV:Storage:TxnLockNotFound"]
 error = '''
 KV:Storage:TxnLockNotFound
@@ -726,6 +731,11 @@ KV:Storage:CommitTsExpired
 ["KV:Storage:KeyVersion"]
 error = '''
 KV:Storage:KeyVersion
+'''
+
+["KV:Storage:LockUpgradeConflict"]
+error = '''
+KV:Storage:LockUpgradeConflict
 '''
 
 ["KV:Storage:PessimisticLockNotFound"]
