@@ -295,6 +295,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
@@ -334,6 +335,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
+                        lock_wait_queues: None,
                         lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),

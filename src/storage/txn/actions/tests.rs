@@ -258,6 +258,7 @@ pub fn flush_put_impl_with_assertion<E: Engine>(
     let mut statistics = Statistics::default();
     let cm = ConcurrencyManager::new_for_test(start_ts);
     let context = WriteContext {
+        lock_wait_queues: None,
         lock_mgr: &MockLockManager::new(),
         concurrency_manager: cm.clone(),
         extra_op: ExtraOp::Noop,

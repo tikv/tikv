@@ -160,9 +160,14 @@ High-risk contracts:
   A partial batch persists remaining holders and resumes at the same key.
   Its write budget includes the surviving wrapper and rollback records. An
   indivisible member and its remaining wrapper can exceed the batch target.
-- Shared-lock prewrite requires the transaction's own shared holder. An
-  explicit upgrade requires that holder or an exact replay of the resulting
-  exclusive lock. Missing holders cannot be recreated from MVCC history.
+- A shared read on its own exclusive pessimistic lock persists that lock in
+  CF_LOCK and waits for apply to remove any in-memory copy. Shared-lock
+  prewrite accepts either the transaction's shared member or its retained
+  exclusive lock. An explicit upgrade records its statement timestamp in the
+  exclusive lock. Prewrite preserves that timestamp for replay.
+- While an explicit upgrader is queued, its slot closes admission to new
+  shared holders. Removing the waiter reopens admission. Partial resolutions
+  publish the final holder set under the key latch after apply.
 - Shared pessimistic locks, upgrades, and transitions of a shared wrapper
   to shrink-only take effect on Raft apply. Requests that change this state
   bypass in-memory pessimistic locking and pipelined responses.

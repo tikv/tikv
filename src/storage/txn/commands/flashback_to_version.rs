@@ -161,6 +161,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             )?,
         }
         let rows = txn.modifies.len();
+        let new_acquired_locks = txn.take_new_locks();
         let shared_lock_upgrade_hints = txn.take_shared_lock_upgrade_hints();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         // To let the flashback modification could be proposed and applied successfully.
@@ -204,7 +205,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             })(),
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
-            new_acquired_locks: vec![],
+            new_acquired_locks,
             shared_lock_upgrade_hints,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -276,6 +277,7 @@ mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
+                        lock_wait_queues: None,
                         lock_mgr: &MockLockManager::new(),
                         concurrency_manager: ConcurrencyManager::new_for_test(start_ts),
                         extra_op: Default::default(),

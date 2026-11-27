@@ -403,8 +403,7 @@ impl WaitTable {
     ) -> Option<Waiter> {
         let token = *self.wait_table.get(&(lock.hash, waiter_ts))?;
         let info = &self.waiter_pool.get(&token)?.wait_info;
-        if info.lock_info.is_shared_lock() && !info.blocking_txns(waiter_ts).any(|ts| ts == lock.ts)
-        {
+        if !info.blocking_txns(waiter_ts).any(|ts| ts == lock.ts) {
             // The holder exited before the detector's response arrived.
             return None;
         }
@@ -1039,6 +1038,61 @@ pub mod tests {
                     TimeStamp::zero(),
                 )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn test_delayed_deadlock_after_shared_to_exclusive_transition() {
+        let mut table = WaitTable::new(Arc::new(AtomicUsize::new(1)));
+        let token = LockWaitToken(Some(1));
+        let mut waiter = dummy_waiter(10.into(), 0.into(), 123);
+        waiter
+            .wait_info
+            .lock_info
+            .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+        for ts in [20, 30] {
+            let mut member = LockInfo::default();
+            member.set_lock_version(ts);
+            waiter
+                .wait_info
+                .lock_info
+                .mut_shared_lock_infos()
+                .push(member);
+        }
+        let current = dummy_waiter(10.into(), 20.into(), 123).wait_info;
+        table.add_waiter(token, waiter);
+        table
+            .update_waiter(
+                &UpdateWaitForEvent {
+                    token,
+                    start_ts: 10.into(),
+                    is_first_lock: false,
+                    wait_info: current,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        ts: 30.into(),
+                        hash: 123
+                    },
+                    10.into()
+                )
+                .is_none()
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        ts: 20.into(),
+                        hash: 123
+                    },
+                    10.into()
+                )
+                .is_some()
         );
     }
 

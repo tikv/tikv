@@ -118,6 +118,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.allow_lock_with_conflict,
                 is_shared_lock,
                 self.is_shared_lock_upgrade,
+                is_shared_lock
+                    && context
+                        .lock_wait_queues
+                        .is_some_and(|queues| queues.has_pending_upgrader(&k)),
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -158,7 +162,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     // Clear previous mutations, mark `shared_locks` as shrink-only and write it
                     // back.
                     let locked_raw_key = k.to_raw()?;
-                    let upgrading = shared_locks.contains_start_ts(start_ts);
+                    debug_assert!(!self.is_shared_lock_upgrade);
                     txn.clear();
                     old_values.clear();
                     res.0.clear();
@@ -168,18 +172,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     } else {
                         shared_locks.set_shrink_only();
                         txn.put_shared_locks(k, &shared_locks, false);
-                        if upgrading {
-                            MvccErrorInner::WriteConflict {
-                                start_ts,
-                                conflict_start_ts: TimeStamp::zero(),
-                                conflict_commit_ts: TimeStamp::zero(),
-                                key: locked_raw_key,
-                                primary: self.primary.clone(),
-                                reason: kvproto::kvrpcpb::WriteConflictReason::PessimisticRetry,
-                            }
-                        } else {
-                            MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
-                        }
+                        MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
                     };
                     shrink_error = Some(error);
                     break;
@@ -550,6 +543,7 @@ mod tests {
             ctx,
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,

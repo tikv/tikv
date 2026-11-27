@@ -1675,6 +1675,7 @@ mod tests {
         macro_rules! context {
             () => {
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: ConcurrencyManager::new_for_test(10.into()),
                     extra_op: ExtraOp::Noop,
@@ -1847,6 +1848,7 @@ mod tests {
                 )
             };
             let context = WriteContext {
+                lock_wait_queues: None,
                 lock_mgr: &MockLockManager::new(),
                 concurrency_manager: cm.clone(),
                 extra_op: ExtraOp::Noop,
@@ -1958,6 +1960,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -1987,6 +1990,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2071,6 +2075,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -2104,6 +2109,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2375,6 +2381,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
@@ -2400,6 +2407,7 @@ mod tests {
             10.into(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -2607,6 +2615,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: ConcurrencyManager::new_for_test(20.into()),
             extra_op: ExtraOp::Noop,

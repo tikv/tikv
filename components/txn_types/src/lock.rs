@@ -45,6 +45,7 @@ const LAST_CHANGE_PREFIX: u8 = b'l';
 const TXN_SOURCE_PREFIX: u8 = b's';
 const _RESERVED_PREFIX: u8 = b'T'; // Reserved for future use.
 const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
+const SHARED_LOCK_UPGRADE_TS_PREFIX: u8 = b'U';
 const GENERATION_PREFIX: u8 = b'g';
 const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
 const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
@@ -124,6 +125,8 @@ pub struct Lock {
     pub is_locked_with_conflict: bool,
     /// The generation of the lock, used in pipelined DML.
     pub generation: u64,
+    /// Statement timestamp of the S-to-X conversion, retained across prewrite.
+    pub shared_lock_upgrade_ts: TimeStamp,
 }
 
 impl std::fmt::Debug for Lock {
@@ -193,6 +196,7 @@ impl Lock {
             txn_source: 0,
             is_locked_with_conflict,
             generation: 0,
+            shared_lock_upgrade_ts: TimeStamp::zero(),
         }
     }
 
@@ -290,6 +294,11 @@ impl Lock {
             b.push(GENERATION_PREFIX);
             b.encode_u64(self.generation).unwrap();
         }
+        if !self.shared_lock_upgrade_ts.is_zero() {
+            b.push(SHARED_LOCK_UPGRADE_TS_PREFIX);
+            b.encode_u64(self.shared_lock_upgrade_ts.into_inner())
+                .unwrap();
+        }
         b
     }
 
@@ -332,6 +341,9 @@ impl Lock {
             size += 1;
         }
         if self.generation > 0 {
+            size += 1 + size_of::<u64>();
+        }
+        if !self.shared_lock_upgrade_ts.is_zero() {
             size += 1 + size_of::<u64>();
         }
         size
@@ -541,6 +553,7 @@ impl Lock {
         let mut estimated_versions_to_last_change = 0;
         let mut txn_source = 0;
         let mut is_locked_with_conflict = false;
+        let mut shared_lock_upgrade_ts = TimeStamp::zero();
         let mut generation = 0;
         while !b.is_empty() {
             match b.read_u8()? {
@@ -585,6 +598,9 @@ impl Lock {
                 PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX => {
                     is_locked_with_conflict = true;
                 }
+                SHARED_LOCK_UPGRADE_TS_PREFIX => {
+                    shared_lock_upgrade_ts = number::decode_u64(&mut b)?.into()
+                }
                 GENERATION_PREFIX => {
                     generation = number::decode_u64(&mut b)?;
                 }
@@ -613,6 +629,7 @@ impl Lock {
         .set_txn_source(txn_source)
         .with_rollback_ts(rollback_ts)
         .with_generation(generation);
+        lock.shared_lock_upgrade_ts = shared_lock_upgrade_ts;
         if use_async_commit {
             lock = lock.use_async_commit(secondaries);
         }
@@ -1852,6 +1869,7 @@ mod tests {
             txn_source: 0,
             is_locked_with_conflict: false,
             generation: 0,
+            shared_lock_upgrade_ts: TimeStamp::zero(),
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);

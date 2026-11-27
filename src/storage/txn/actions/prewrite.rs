@@ -96,18 +96,17 @@ pub fn prewrite_with_generation<S: Snapshot>(
     let (shared_locks, lock_status) = match reader.load_lock(&mutation.key)? {
         Some(lock_or_shared) => match lock_or_shared {
             Either::Left(lock) => {
-                if mutation.is_shared_lock {
-                    if lock.ts == reader.start_ts {
-                        return Err(ErrorInner::PessimisticLockNotFound {
-                            start_ts: reader.start_ts,
-                            key: mutation.key.to_raw()?,
-                            reason: PessimisticLockNotFoundReason::LockTsMismatch,
-                        }
-                        .into());
+                if mutation.is_shared_lock
+                    && (lock.primary != txn_props.primary
+                        || (!lock.is_pessimistic_lock()
+                            && !(lock.lock_type == LockType::Lock
+                                && !lock.for_update_ts.is_zero())))
+                {
+                    return Err(ErrorInner::PessimisticLockNotFound {
+                        start_ts: reader.start_ts,
+                        key: mutation.key.to_raw()?,
+                        reason: PessimisticLockNotFoundReason::LockTsMismatch,
                     }
-                    return Err(ErrorInner::KeyIsLocked(
-                        lock.into_lock_info(mutation.key.to_raw()?),
-                    )
                     .into());
                 }
                 let lock_status = mutation.check_lock(
@@ -378,6 +377,7 @@ struct PrewriteMutation<'a> {
     min_commit_ts: TimeStamp,
     pessimistic_action: PrewriteRequestPessimisticAction,
     is_shared_lock: bool,
+    shared_lock_upgrade_ts: TimeStamp,
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
@@ -425,6 +425,7 @@ impl<'a> PrewriteMutation<'a> {
             min_commit_ts: txn_props.min_commit_ts,
             pessimistic_action,
             is_shared_lock,
+            shared_lock_upgrade_ts: TimeStamp::zero(),
 
             lock_type,
             lock_ttl: txn_props.lock_ttl,
@@ -480,6 +481,7 @@ impl<'a> PrewriteMutation<'a> {
         }
 
         self.last_change = lock.last_change.clone();
+        self.shared_lock_upgrade_ts = lock.shared_lock_upgrade_ts;
 
         if lock.is_pessimistic_lock() {
             // TODO: remove it in future
@@ -698,6 +700,7 @@ impl<'a> PrewriteMutation<'a> {
         )
         .set_txn_source(self.txn_props.txn_source)
         .with_generation(generation);
+        lock.shared_lock_upgrade_ts = self.shared_lock_upgrade_ts;
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
         // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
@@ -3123,7 +3126,7 @@ pub mod tests {
             }
             assert!(matches!(
                 prewrite_shared_member(&mut engine, key, key, 10),
-                Err(Error(box ErrorInner::KeyIsLocked(info))) if info.lock_version == 20
+                Err(Error(box ErrorInner::PessimisticLockNotFound { .. }))
             ));
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut reader = SnapshotReader::new(10.into(), snapshot, true);

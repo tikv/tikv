@@ -86,7 +86,7 @@ pub struct MvccTxn {
     // used to update the lock waiting information and redo deadlock detection, if there are some
     // pessimistic lock requests waiting on the keys.
     pub(crate) new_locks: Vec<LockInfo>,
-    shared_lock_upgrade_hints: Vec<SharedLockUpgradeHint>,
+    shared_lock_upgrade_hints: HashMap<Key, TimeStamp>,
     // Only the final set of blockers per key may be reported after the write.
     changed_shared_holders: HashMap<Key, SharedLocks>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
@@ -111,7 +111,7 @@ impl MvccTxn {
             modifies: vec![],
             locks_for_1pc: vec![],
             new_locks: vec![],
-            shared_lock_upgrade_hints: vec![],
+            shared_lock_upgrade_hints: HashMap::default(),
             changed_shared_holders: HashMap::default(),
             concurrency_manager,
             guards: vec![],
@@ -138,21 +138,25 @@ impl MvccTxn {
     }
 
     pub fn take_shared_lock_upgrade_hints(&mut self) -> Vec<SharedLockUpgradeHint> {
-        std::mem::take(&mut self.shared_lock_upgrade_hints)
+        self.shared_lock_upgrade_hints
+            .drain()
+            .map(|(key, sole_holder_start_ts)| SharedLockUpgradeHint {
+                key,
+                sole_holder_start_ts,
+            })
+            .collect()
     }
 
     pub(crate) fn put_remaining_shared_locks(&mut self, key: Key, shared: SharedLocks) {
         if shared.len() == 1 {
             let sole_holder_start_ts = *shared.iter_ts().next().unwrap();
-            self.shared_lock_upgrade_hints.push(SharedLockUpgradeHint {
-                key: key.clone(),
-                sole_holder_start_ts,
-            });
+            self.shared_lock_upgrade_hints
+                .insert(key.clone(), sole_holder_start_ts);
+        } else {
+            self.shared_lock_upgrade_hints.remove(&key);
         }
         self.put_shared_locks(key.clone(), &shared, false);
-        if shared.is_shrink_only() {
-            self.changed_shared_holders.insert(key, shared);
-        }
+        self.changed_shared_holders.insert(key, shared);
     }
 
     pub fn write_size(&self) -> usize {
@@ -170,6 +174,7 @@ impl MvccTxn {
                 .push(lock.clone().into_lock_info(key.to_raw().unwrap()));
         }
         self.changed_shared_holders.remove(&key);
+        self.shared_lock_upgrade_hints.remove(&key);
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
@@ -212,6 +217,7 @@ impl MvccTxn {
     ) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(self.start_ts, commit_ts, key.clone(), pessimistic);
         self.changed_shared_holders.remove(&key);
+        self.shared_lock_upgrade_hints.remove(&key);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);
@@ -1852,6 +1858,7 @@ pub(crate) mod tests {
             txn.put_remaining_shared_locks(key.clone(), holders);
             txn.unlock_key(key.clone(), true, TimeStamp::zero());
             assert!(txn.take_new_locks().is_empty());
+            assert!(txn.take_shared_lock_upgrade_hints().is_empty());
         }
 
         let make_pessimistic_lock = |ts: u64, ttl: u64| PessimisticLock {

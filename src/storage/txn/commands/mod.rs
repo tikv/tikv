@@ -627,6 +627,8 @@ pub struct RawExt {
 
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
+    pub lock_wait_queues:
+        Option<&'a crate::storage::lock_manager::lock_waiting_queue::LockWaitQueues<L>>,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
@@ -915,6 +917,7 @@ pub mod test_util {
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
@@ -1077,6 +1080,7 @@ pub mod test_util {
         );
 
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
@@ -1103,6 +1107,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
@@ -1159,6 +1164,7 @@ pub mod test_util {
             ctx,
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,

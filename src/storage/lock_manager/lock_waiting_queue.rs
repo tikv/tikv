@@ -738,10 +738,35 @@ impl<L: LockManager> LockWaitQueues<L> {
         result
     }
 
+    pub fn has_pending_upgrader(&self, key: &Key) -> bool {
+        self.inner
+            .queue_map
+            .get(key)
+            .is_some_and(|state| state.pending_upgrader.is_some())
+    }
+
     pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
+            if !lock_info.get_shared_lock_infos().is_empty() {
+                let stale = self
+                    .inner
+                    .queue_map
+                    .get(&key)
+                    .and_then(|state| state.pending_upgrader)
+                    .filter(|pending| {
+                        !lock_info
+                            .get_shared_lock_infos()
+                            .iter()
+                            .any(|holder| holder.lock_version == pending.start_ts.into_inner())
+                    });
+                if let Some(entry) =
+                    stale.and_then(|pending| self.remove_by_token(&key, pending.token))
+                {
+                    Self::finish_pending_upgrader(entry, PendingUpgraderWakeupKind::SharedLockLost);
+                }
+            }
             if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
                 key_state.current_lock = lock_info;
                 update_wait_for_events.reserve(key_state.queue.len());
@@ -1791,6 +1816,26 @@ mod tests {
         expect_write_conflict(&err.0, 0, 0);
         assert!(queues.pending_upgrader(b"k-matching-hint").is_none());
         assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_removed_upgrader_releases_slot_with_two_holders_left() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"three-holders";
+        let old = queues.mock_upgrade_wait(key, 10, 20);
+        let mut info = kvrpcpb::LockInfo::default();
+        info.set_key(key.to_vec());
+        info.set_lock_type(kvrpcpb::Op::SharedLock);
+        for ts in [20, 30] {
+            let mut member = kvrpcpb::LockInfo::default();
+            member.set_lock_version(ts);
+            info.mut_shared_lock_infos().push(member);
+        }
+        queues.update_lock_wait(vec![info]);
+        expect_shared_lock_lost(&old.wait_for_result().unwrap_err().0, 10, key);
+        assert!(!queues.has_pending_upgrader(&Key::from_raw(key)));
+        let next = queues.mock_upgrade_wait(key, 20, 30);
+        assert_eq!(queues.pending_upgrader(key).unwrap().token, next.token);
     }
 
     #[test]

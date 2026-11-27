@@ -1491,6 +1491,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
+                lock_wait_queues: Some(&txn_scheduler.inner.lock_wait_queues),
                 lock_mgr: &txn_scheduler.inner.lock_mgr,
                 concurrency_manager,
                 extra_op: task.extra_op(),

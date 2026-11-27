@@ -155,6 +155,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 true,
                 false,
                 params.is_shared_lock_upgrade,
+                false,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -325,6 +326,7 @@ mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
