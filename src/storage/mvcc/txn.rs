@@ -220,7 +220,10 @@ impl MvccTxn {
                 MAX_SHARED_LOCK_BYTES
             ));
         }
-        self.put_shared_lock_value(key, &shared, is_new, value);
+        self.put_shared_lock_value(key.clone(), &shared, is_new, value);
+        if !is_new {
+            self.changed_shared_holders.insert(key, shared);
+        }
         Ok(())
     }
 

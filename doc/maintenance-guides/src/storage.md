@@ -173,7 +173,9 @@ High-risk contracts:
   bypass in-memory pessimistic locking and pipelined responses.
 - New shared members are admitted up to 1,024 per physical key and a 1 MiB
   encoded Lock CF value. Existing members can renew, prepare and drain even
-  at capacity.
+  at capacity. Waiter admission and blocker refresh enforce the same
+  16,384-edge budget per key. A refresh keeps the oldest registrations
+  and completes excess waiters with the queue-capacity error.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

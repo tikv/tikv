@@ -86,8 +86,7 @@ use crate::storage::{
     types::PessimisticLockParameters,
 };
 
-// Bound per-key wait records as well as the fan-out to shared holders. A
-// shrinking wrapper cannot gain members while these requests wait for it.
+// Bound per-key wait records as well as their fan-out to shared holders.
 const MAX_SHARED_LOCK_WAITERS: usize = 1024;
 const MAX_SHARED_LOCK_WAIT_EDGES: usize = 16 * 1024;
 
@@ -95,6 +94,10 @@ const MAX_SHARED_LOCK_WAIT_EDGES: usize = 16 * 1024;
 // permits an empty raw key, with the holder identified by its timestamp.
 fn has_lock_info(info: &kvrpcpb::LockInfo) -> bool {
     info.lock_version != 0 || !info.get_shared_lock_infos().is_empty() || !info.key.is_empty()
+}
+
+fn shared_wait_capacity(holders: usize) -> usize {
+    MAX_SHARED_LOCK_WAITERS.min(MAX_SHARED_LOCK_WAIT_EDGES / holders.max(1))
 }
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
@@ -339,7 +342,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         let holders = key_state.current_lock.get_shared_lock_infos().len();
         if holders != 0 || lock_wait_entry.is_shared_lock || lock_wait_entry.is_lock_upgrade {
-            let capacity = MAX_SHARED_LOCK_WAITERS.min(MAX_SHARED_LOCK_WAIT_EDGES / holders.max(1));
+            let capacity = shared_wait_capacity(holders);
             if key_state.queue.len() >= capacity {
                 drop(key_state);
                 if new_key {
@@ -779,12 +782,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
         let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
-            if let Some(res) = v.queue.remove(&lock_wait_token) {
-                self.inner.entries_count.fetch_sub(1, Ordering::SeqCst);
-                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
-                Self::on_dequeue(v, lock_wait_token, &mut readers);
-                result = Some(res);
-            }
+            result = self.remove_wait_entry(v, lock_wait_token, &mut readers);
             v.queue.is_empty()
         });
 
@@ -794,6 +792,19 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         self.retry_shared_readers(key, readers);
         result
+    }
+
+    fn remove_wait_entry(
+        &self,
+        state: &mut KeyLockWaitState,
+        token: LockWaitToken,
+        readers: &mut Vec<LockWaitToken>,
+    ) -> Option<Box<LockWaitEntry>> {
+        let entry = state.queue.remove(&token)?;
+        self.inner.entries_count.fetch_sub(1, Ordering::SeqCst);
+        LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
+        Self::on_dequeue(state, token, readers);
+        Some(entry)
     }
 
     pub fn has_pending_upgrader(&self, key: &Key) -> bool {
@@ -807,26 +818,35 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
-            if !lock_info.get_shared_lock_infos().is_empty() {
-                let stale = self
-                    .inner
-                    .queue_map
-                    .get(&key)
-                    .and_then(|state| state.pending_upgrader)
-                    .filter(|pending| {
-                        !lock_info
-                            .get_shared_lock_infos()
-                            .iter()
-                            .any(|holder| holder.lock_version == pending.start_ts.into_inner())
-                    });
-                if let Some(entry) =
-                    stale.and_then(|pending| self.remove_by_token(&key, pending.token))
-                {
-                    Self::finish_shared_wait(entry, SharedWaitWakeupKind::SharedLockLost);
-                }
-            }
-            if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
+            let mut stale = None;
+            let mut evicted = Vec::new();
+            let mut readers = Vec::new();
+            let removed_key = self.inner.queue_map.remove_if_mut(&key, |_, key_state| {
                 key_state.current_lock = lock_info;
+                let holders = key_state.current_lock.get_shared_lock_infos();
+                if !holders.is_empty() {
+                    let capacity = shared_wait_capacity(holders.len());
+                    if let Some(pending) = key_state.pending_upgrader.filter(|pending| {
+                        !holders
+                            .iter()
+                            .any(|h| h.lock_version == pending.start_ts.into_inner())
+                    }) {
+                        stale = self.remove_wait_entry(key_state, pending.token, &mut readers);
+                    }
+                    if key_state.queue.len() > capacity {
+                        // Keep the oldest registrations and discard excess waiters before
+                        // copying the expanded blocker set into update events.
+                        let mut tokens: Vec<_> =
+                            key_state.queue.iter().map(|(&token, _)| token).collect();
+                        tokens.sort_unstable_by_key(|t| t.0);
+                        for token in &tokens[capacity..] {
+                            evicted.push(
+                                self.remove_wait_entry(key_state, *token, &mut readers)
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                }
                 update_wait_for_events.reserve(key_state.queue.len());
                 for (&token, entry) in key_state.queue.iter() {
                     let event = UpdateWaitForEvent {
@@ -845,6 +865,23 @@ impl<L: LockManager> LockWaitQueues<L> {
                     };
                     update_wait_for_events.push(event);
                 }
+                key_state.queue.is_empty()
+            });
+            if removed_key.is_some() {
+                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+            }
+            self.retry_shared_readers(&key, readers);
+            if let Some(entry) = stale {
+                Self::finish_shared_wait(entry, SharedWaitWakeupKind::SharedLockLost);
+            }
+            for entry in evicted {
+                // This waiter was already registered. Its normal completion callback
+                // removes it from the waiter manager and cleans up detector edges.
+                let cb = entry.key_cb.unwrap().into_inner();
+                cb(
+                    Err(StorageError::from(StorageErrorInner::SharedLockWaitQueueFull).into()),
+                    false,
+                );
             }
         }
         if !update_wait_for_events.is_empty() {
@@ -1773,6 +1810,49 @@ mod tests {
             StorageErrorInner::SharedLockWaitQueueFull
         ));
         assert_eq!(queues.get_queue_length_of_key(key), MAX_SHARED_LOCK_WAITERS);
+    }
+
+    #[test]
+    fn test_refresh_growing_shared_holder_set_evicts_excess_waiters() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"grow";
+        let mut handles = Vec::new();
+        for i in 0..17 {
+            handles.push(queues.mock_lock_wait(key, 2000 + i, 10, false));
+        }
+        let upgrade = queues.mock_upgrade_wait_with_request_callback(key, 10, 20);
+        let mut info = queues.make_lock_info_pb(key, 0);
+        info.set_lock_type(kvrpcpb::Op::SharedLock);
+        info.set_shared_lock_infos(
+            (1..=1024)
+                .map(|ts| queues.make_lock_info_pb(key, ts))
+                .collect(),
+        );
+        queues.update_lock_wait(vec![info]);
+        let rejected = handles.pop().unwrap().wait_for_result().unwrap_err();
+        assert!(matches!(
+            *rejected.0.0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert!(matches!(
+            *upgrade
+                .request_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap_err()
+                .0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert_eq!(queues.entry_count(), 16);
+        assert!(!queues.has_pending_upgrader(&Key::from_raw(key)));
+        for handle in handles {
+            assert!(
+                queues
+                    .remove_by_token(&Key::from_raw(key), handle.token)
+                    .is_some()
+            );
+        }
+        assert!(queues.is_empty());
     }
 
     #[test]
