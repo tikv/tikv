@@ -86,6 +86,12 @@ use crate::storage::{
     types::PessimisticLockParameters,
 };
 
+// A resumed entry can be requeued without new lock information. API V1 also
+// permits an empty raw key, with the holder identified by its timestamp.
+fn has_lock_info(info: &kvrpcpb::LockInfo) -> bool {
+    info.lock_version != 0 || !info.get_shared_lock_infos().is_empty() || !info.key.is_empty()
+}
+
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
 pub struct LockWaitEntry {
@@ -286,7 +292,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             new_key = true;
             KeyLockWaitState::new()
         });
-        if !current_lock.key.is_empty() {
+        if has_lock_info(&current_lock) {
             key_state.current_lock = current_lock;
         }
 
@@ -1858,6 +1864,42 @@ mod tests {
         upgrade.cancel();
         queues.register_upgrader_blocked_reader(&Key::from_raw(key), reader.token);
         expect_write_conflict(&reader.wait_for_result().unwrap_err().0, 0, 0);
+        assert!(queues.is_empty());
+    }
+
+    #[test]
+    fn test_cancel_upgrader_wakes_registered_reader_on_empty_key() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let mut shared_info = kvrpcpb::LockInfo::default();
+        shared_info.set_lock_type(kvrpcpb::Op::SharedLock);
+        for ts in [10u64, 20] {
+            let mut member = kvrpcpb::LockInfo::default();
+            member.set_lock_version(ts);
+            shared_info.mut_shared_lock_infos().push(member);
+        }
+        let mut upgrader_info = shared_info.clone();
+        upgrader_info.set_lock_version(20);
+        let (mut upgrader_entry, upgrade) =
+            queues.make_mock_lock_wait_entry(b"", 10, upgrader_info.clone());
+        upgrader_entry.is_lock_upgrade = true;
+        queues.push_lock_wait(upgrader_entry, upgrader_info);
+
+        let (mut reader_entry, reader) =
+            queues.make_mock_lock_wait_entry(b"", 30, shared_info.clone());
+        reader_entry.is_shared_lock = true;
+        queues.push_lock_wait(reader_entry, shared_info);
+        queues.register_upgrader_blocked_reader(&Key::from_raw(b""), reader.token);
+
+        upgrade.cancel();
+        expect_write_conflict(
+            &reader
+                .wait_for_result_timeout(Duration::from_secs(1))
+                .expect("registered reader on empty key should wake on upgrader cancellation")
+                .unwrap_err()
+                .0,
+            0,
+            0,
+        );
         assert!(queues.is_empty());
     }
 
