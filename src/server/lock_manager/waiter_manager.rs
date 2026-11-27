@@ -376,6 +376,46 @@ impl WaitTable {
         self.waiter_pool.get_mut(&token)?.registered_edge.take()
     }
 
+    /// Drops blockers still registered by another surviving waiter for the same
+    /// `(key_hash, start_ts)` so removing one duplicate token cannot erase a
+    /// DetectTable edge that an older waiter still needs.
+    fn filter_unshared_cleanup_edge(
+        &self,
+        start_ts: TimeStamp,
+        mut edge: KeyLockWaitInfo,
+    ) -> Option<KeyLockWaitInfo> {
+        let Some(tokens) = self.wait_table.get(&(edge.lock_digest.hash, start_ts)) else {
+            return Some(edge);
+        };
+        let is_covered = |blocker: TimeStamp| {
+            tokens.iter().any(|token| {
+                self.waiter_pool[token]
+                    .registered_edge
+                    .as_ref()
+                    .is_some_and(|other| other.blocking_txns(start_ts).any(|ts| ts == blocker))
+            })
+        };
+        if edge.lock_info.is_shared_lock() {
+            let shared: Vec<_> = edge
+                .lock_info
+                .take_shared_lock_infos()
+                .into_iter()
+                .filter(|holder| {
+                    let ts = TimeStamp::new(holder.lock_version);
+                    ts != start_ts && !is_covered(ts)
+                })
+                .collect();
+            if shared.is_empty() {
+                None
+            } else {
+                edge.lock_info.set_shared_lock_infos(shared.into());
+                Some(edge)
+            }
+        } else {
+            (!is_covered(edge.lock_digest.ts)).then_some(edge)
+        }
+    }
+
     fn update_waiter(
         &mut self,
         update_event: &UpdateWaitForEvent,
@@ -570,7 +610,10 @@ impl WaiterManager {
             let mut wait_table = wait_table.borrow_mut();
             if let Some(waiter) = wait_table.take_waiter(token) {
                 let start_ts = waiter.start_ts;
-                let edge = waiter.registered_edge.clone();
+                let edge = waiter
+                    .registered_edge
+                    .clone()
+                    .and_then(|edge| wait_table.filter_unshared_cleanup_edge(start_ts, edge));
                 let _wait_info = waiter.cancel_for_timeout();
                 if let Some(edge) = edge {
                     detector_scheduler.clean_up_wait_for(start_ts, edge);
@@ -592,7 +635,10 @@ impl WaiterManager {
             return;
         };
         let start_ts = waiter.start_ts;
-        let edge = waiter.registered_edge.clone();
+        let edge = waiter
+            .registered_edge
+            .clone()
+            .and_then(|edge| wait_table.filter_unshared_cleanup_edge(start_ts, edge));
         let _wait_info = waiter.cancel_for_finished();
         if let Some(edge) = edge {
             self.detector_scheduler.clean_up_wait_for(start_ts, edge);
@@ -613,7 +659,13 @@ impl WaiterManager {
                 if previous_wait_info.lock_info.is_shared_lock()
                     || event.wait_info.lock_info.is_shared_lock()
                 {
-                    if let Some(edge) = wait_table.take_registered_edge(event.token) {
+                    if let Some(edge) =
+                        wait_table
+                            .take_registered_edge(event.token)
+                            .and_then(|edge| {
+                                wait_table.filter_unshared_cleanup_edge(event.start_ts, edge)
+                            })
+                    {
                         self.detector_scheduler
                             .clean_up_wait_for(event.start_ts, edge);
                     }
@@ -627,8 +679,12 @@ impl WaiterManager {
                     // A cycle that needs the new edge is invisible until this
                     // wait ends (capped by wait-for-lock-timeout) and retries.
                     if let Some(edge) = wait_table.take_registered_edge(event.token) {
-                        self.detector_scheduler
-                            .clean_up_wait_for(event.start_ts, edge);
+                        if let Some(edge) =
+                            wait_table.filter_unshared_cleanup_edge(event.start_ts, edge)
+                        {
+                            self.detector_scheduler
+                                .clean_up_wait_for(event.start_ts, edge);
+                        }
                         TASK_COUNTER_METRICS.drop_registered_edge.inc();
                     }
                 }
@@ -648,18 +704,28 @@ impl WaiterManager {
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
-        let waiter = self
-            .wait_table
-            .borrow_mut()
-            .take_waiter_by_lock_digest(lock, waiter_ts);
+        let (waiter, edge) = {
+            let mut wait_table = self.wait_table.borrow_mut();
+            match wait_table.take_waiter_by_lock_digest(lock, waiter_ts) {
+                Some(waiter) => {
+                    let edge = if waiter.wait_info.lock_info.is_shared_lock() {
+                        waiter.registered_edge.clone().and_then(|edge| {
+                            wait_table.filter_unshared_cleanup_edge(waiter_ts, edge)
+                        })
+                    } else {
+                        None
+                    };
+                    (Some(waiter), edge)
+                }
+                None => (None, None),
+            }
+        };
         if let Some(waiter) = waiter {
-            if waiter.wait_info.lock_info.is_shared_lock() {
+            if let Some(edge) = edge {
                 // When deadlock detected on a shared lock, some wait-for entries might have
                 // been registered to the detect table. So do clean up here to avoid those
                 // entries causing false-positive deadlock errors.
-                if let Some(edge) = waiter.registered_edge.clone() {
-                    self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
-                }
+                self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
             }
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
@@ -1754,5 +1820,48 @@ pub mod tests {
         wait_for_counts(&counters, 0, 0);
         worker.stop().unwrap();
         counters.detect_worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_filter_unshared_cleanup_edge_preserves_shared_overlap() {
+        let mut table = WaitTable::new(Arc::new(AtomicUsize::new(2)));
+        let make_shared_waiter = |holders: &[u64]| {
+            let mut waiter = dummy_waiter(10.into(), 0.into(), 42);
+            waiter
+                .wait_info
+                .lock_info
+                .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+            waiter.wait_info.lock_info.set_shared_lock_infos(
+                holders
+                    .iter()
+                    .map(|&ts| LockInfo {
+                        lock_version: ts,
+                        ..Default::default()
+                    })
+                    .collect(),
+            );
+            waiter.registered_edge = Some(waiter.wait_info.clone());
+            waiter
+        };
+        table.add_waiter(LockWaitToken(Some(1)), make_shared_waiter(&[20, 30]));
+        table.add_waiter(LockWaitToken(Some(2)), make_shared_waiter(&[20, 40]));
+
+        let removed = table.take_waiter(LockWaitToken(Some(2))).unwrap();
+        let filtered = table
+            .filter_unshared_cleanup_edge(10.into(), removed.registered_edge.unwrap())
+            .unwrap();
+        assert_eq!(
+            filtered.blocking_txns(10.into()).collect::<Vec<_>>(),
+            vec![TimeStamp::new(40)]
+        );
+
+        let last = table.take_waiter(LockWaitToken(Some(1))).unwrap();
+        let filtered = table
+            .filter_unshared_cleanup_edge(10.into(), last.registered_edge.unwrap())
+            .unwrap();
+        assert_eq!(
+            filtered.blocking_txns(10.into()).collect::<Vec<_>>(),
+            vec![TimeStamp::new(20), TimeStamp::new(30)]
+        );
     }
 }

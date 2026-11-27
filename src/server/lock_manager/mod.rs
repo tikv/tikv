@@ -741,6 +741,99 @@ mod tests {
         let _ = f_c;
     }
 
+    #[test]
+    fn test_duplicate_wait_removal_preserves_deadlock_detection() {
+        let lock_mgr = start_lock_manager();
+        let (w1, _, f1) = new_test_waiter_with_key(10.into(), 20.into(), b"k1");
+        let token1 = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token1,
+            1,
+            RegionEpoch::default(),
+            1,
+            w1.start_ts,
+            w1.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            w1.cancel_callback,
+            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+        );
+        let (w2, _, f2) = new_test_waiter_with_key(10.into(), 20.into(), b"k1");
+        let token2 = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token2,
+            1,
+            RegionEpoch::default(),
+            1,
+            w2.start_ts,
+            w2.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            w2.cancel_callback,
+            diag_ctx(b"k1", b"tag2", INVALID_TRACKER_TOKEN),
+        );
+        // Removing the duplicate token must keep 10 -> 20 alive in DetectTable
+        // while token1 is still waiting.
+        lock_mgr.remove_lock_wait(token2);
+        block_on(f2).unwrap_err();
+        thread::sleep(Duration::from_millis(50));
+
+        let (b, lock_info_b, f_b) = new_test_waiter_with_key(20.into(), 10.into(), b"k2");
+        lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
+            1,
+            RegionEpoch::default(),
+            1,
+            b.start_ts,
+            b.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            b.cancel_callback,
+            diag_ctx(b"k2", b"tag-b", INVALID_TRACKER_TOKEN),
+        );
+        assert_elapsed(
+            || {
+                expect_deadlock(
+                    block_on(f_b).unwrap(),
+                    20.into(),
+                    lock_info_b,
+                    Key::from_raw(b"k1").gen_hash(),
+                    &[(10, 20, b"k1", b"tag2"), (20, 10, b"k2", b"tag-b")],
+                )
+            },
+            0,
+            500,
+        );
+
+        // Once the last surviving token leaves, 10 -> 20 must be cleaned up so
+        // a later 20 -> 10 wait does not false-deadlock.
+        lock_mgr.remove_lock_wait(token1);
+        block_on(f1).unwrap_err();
+        thread::sleep(Duration::from_millis(50));
+
+        let (b2, _, mut f_b2) = new_test_waiter_with_key(20.into(), 10.into(), b"k2");
+        let token_b2 = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token_b2,
+            1,
+            RegionEpoch::default(),
+            1,
+            b2.start_ts,
+            b2.wait_info,
+            false,
+            Some(WaitTimeout::Millis(3000)),
+            b2.cancel_callback,
+            diag_ctx(b"k2", b"tag-b2", INVALID_TRACKER_TOKEN),
+        );
+        thread::sleep(Duration::from_millis(150));
+        assert_pending(
+            &mut f_b2,
+            "10 -> 20 should be cleaned up after token1 leaves",
+        );
+        lock_mgr.remove_lock_wait(token_b2);
+        block_on(f_b2).unwrap_err();
+    }
+
     #[bench]
     fn bench_lock_mgr_clone(b: &mut test::Bencher) {
         let lock_mgr = LockManager::new(&Config {
