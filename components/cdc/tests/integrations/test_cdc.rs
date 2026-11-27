@@ -134,7 +134,7 @@ fn test_foreign_rollback_keeps_data_prewrite_pinning_cdc() {
     suite.must_kv_rollback(1, vec![key.to_vec()], foreign);
     let mut rows = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
-    loop {
+    while rows.len() < 2 {
         assert!(std::time::Instant::now() < deadline);
         let event = recv(true);
         for region in event.get_events() {
@@ -142,10 +142,6 @@ fn test_foreign_rollback_keeps_data_prewrite_pinning_cdc() {
             for row in region.get_entries().get_entries() {
                 rows.push((row.get_type(), row.start_ts));
             }
-        }
-        if rows.len() >= 2 && event.has_resolved_ts() {
-            assert!(event.get_resolved_ts().ts < foreign.into_inner());
-            break;
         }
     }
     assert_eq!(
@@ -155,6 +151,25 @@ fn test_foreign_rollback_keeps_data_prewrite_pinning_cdc() {
             (EventLogType::Rollback, foreign.into_inner())
         ]
     );
+    let candidate = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    assert!(candidate > foreign);
+    suite.endpoints[&1]
+        .scheduler()
+        .schedule(Task::MinTs {
+            regions: vec![1],
+            min_ts: candidate,
+            current_ts: candidate,
+        })
+        .unwrap();
+    loop {
+        assert!(std::time::Instant::now() < deadline);
+        let event = recv(true);
+        assert!(event.get_events().is_empty(), "{event:?}");
+        if event.has_resolved_ts() && event.get_resolved_ts().ts >= start.into_inner() {
+            assert_eq!(event.get_resolved_ts().ts, start.into_inner());
+            break;
+        }
+    }
     let commit = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![key.to_vec()], start, commit);
     let mut committed = false;
@@ -173,6 +188,11 @@ fn test_foreign_rollback_keeps_data_prewrite_pinning_cdc() {
                 );
                 committed = true;
             }
+        }
+        // The explicit MinTs task precedes the commit on the endpoint. Check
+        // intervening watermarks even if the first pinned value was buffered.
+        if !committed && event.has_resolved_ts() {
+            assert_eq!(event.get_resolved_ts().ts, start.into_inner());
         }
         if event.get_resolved_ts().ts >= commit.into_inner() {
             break;

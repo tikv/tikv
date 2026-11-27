@@ -451,7 +451,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let latest_lock_info = match &key_state {
             DashMapEntry::Occupied(entry) => {
                 let info = &entry.get().current_lock;
-                (!info.key.is_empty()).then(|| info.clone())
+                has_lock_info(info).then(|| info.clone())
             }
             DashMapEntry::Vacant(_) => None,
         };
@@ -1857,38 +1857,43 @@ mod tests {
 
     #[test]
     fn test_shared_wait_capacity_rejects_only_new_waiters() {
-        let queues = LockWaitQueues::new(MockLockManager::new());
-        let key = b"hot";
-        let mut wrapper = queues.make_lock_info_pb(key, 0);
-        wrapper.set_lock_type(kvrpcpb::Op::SharedLock);
-        wrapper.set_shared_lock_infos(
-            (1..=1024)
-                .map(|ts| queues.make_lock_info_pb(key, ts))
-                .collect(),
-        );
-        let limit = MAX_SHARED_LOCK_WAIT_EDGES / wrapper.get_shared_lock_infos().len();
-        let mut handles = Vec::new();
-        for i in 0..limit {
-            let (entry, handle) =
-                queues.make_mock_lock_wait_entry(key, (2000 + i) as u64, wrapper.clone());
-            assert!(queues.push_lock_wait(entry, wrapper.clone()));
-            handles.push(handle);
+        for (key, holders, limit) in [
+            (b"hot".as_slice(), 1024, MAX_SHARED_LOCK_WAIT_EDGES / 1024),
+            (b"", 1, MAX_SHARED_LOCK_WAITERS),
+            (b"", 1024, MAX_SHARED_LOCK_WAIT_EDGES / 1024),
+        ] {
+            let queues = LockWaitQueues::new(MockLockManager::new());
+            let mut wrapper = queues.make_lock_info_pb(key, 0);
+            wrapper.set_lock_type(kvrpcpb::Op::SharedLock);
+            wrapper.set_shared_lock_infos(
+                (1..=holders)
+                    .map(|ts| queues.make_lock_info_pb(key, ts))
+                    .collect(),
+            );
+            let mut handles = Vec::new();
+            for i in 0..limit {
+                let (entry, handle) =
+                    queues.make_mock_lock_wait_entry(key, (2000 + i) as u64, wrapper.clone());
+                assert!(queues.push_lock_wait(entry, wrapper.clone()));
+                handles.push(handle);
+            }
+            let (entry, rejected) = queues.make_mock_lock_wait_entry(key, 5000, wrapper.clone());
+            assert!(!queues.push_lock_wait(entry, wrapper.clone()));
+            let err = rejected.wait_for_result().unwrap_err();
+            let region_error =
+                crate::storage::errors::extract_region_error_from_error(&err.0).unwrap();
+            assert_eq!(
+                region_error.get_server_is_busy().get_reason(),
+                "shared lock wait queue is full"
+            );
+            assert_eq!(queues.get_queue_length_of_key(key), limit);
+            queues
+                .remove_by_token(&Key::from_raw(key), handles.pop().unwrap().token)
+                .unwrap();
+            let (entry, _handle) = queues.make_mock_lock_wait_entry(key, 6000, wrapper.clone());
+            assert!(queues.push_lock_wait(entry, wrapper));
+            assert_eq!(queues.get_queue_length_of_key(key), limit);
         }
-        let (entry, rejected) = queues.make_mock_lock_wait_entry(key, 5000, wrapper.clone());
-        assert!(!queues.push_lock_wait(entry, wrapper.clone()));
-        let err = rejected.wait_for_result().unwrap_err();
-        let region_error = crate::storage::errors::extract_region_error_from_error(&err.0).unwrap();
-        assert_eq!(
-            region_error.get_server_is_busy().get_reason(),
-            "shared lock wait queue is full"
-        );
-        assert_eq!(queues.get_queue_length_of_key(key), limit);
-        queues
-            .remove_by_token(&Key::from_raw(key), handles.pop().unwrap().token)
-            .unwrap();
-        let (entry, _handle) = queues.make_mock_lock_wait_entry(key, 6000, wrapper.clone());
-        assert!(queues.push_lock_wait(entry, wrapper));
-        assert_eq!(queues.get_queue_length_of_key(key), limit);
     }
 
     #[test]

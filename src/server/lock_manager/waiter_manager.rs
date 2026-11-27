@@ -19,6 +19,7 @@ use futures::{
     task::{Context, Poll},
 };
 use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
+use smallvec::SmallVec;
 use tikv_util::{
     config::ReadableDuration,
     time::{InstantExt, duration_to_sec},
@@ -325,9 +326,8 @@ impl Waiter {
 }
 
 struct WaitTable {
-    // Map lock hash and ts to waiters.
-    // For compatibility.
-    wait_table: HashMap<(u64, TimeStamp), LockWaitToken>,
+    // Deadlock responses identify the transaction and key, not the request token.
+    wait_table: HashMap<(u64, TimeStamp), SmallVec<[LockWaitToken; 1]>>,
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
 }
@@ -354,15 +354,21 @@ impl WaitTable {
     /// the `token` is unique and doesn't exist in waiter manager currently.
     fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) {
         self.wait_table
-            .insert((waiter.wait_info.lock_digest.hash, waiter.start_ts), token);
+            .entry((waiter.wait_info.lock_digest.hash, waiter.start_ts))
+            .or_default()
+            .push(token);
         assert!(self.waiter_pool.insert(token, waiter).is_none());
     }
 
     fn take_waiter(&mut self, token: LockWaitToken) -> Option<Waiter> {
         let waiter = self.waiter_pool.remove(&token)?;
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        self.wait_table
-            .remove(&(waiter.wait_info.lock_digest.hash, waiter.start_ts));
+        let key = (waiter.wait_info.lock_digest.hash, waiter.start_ts);
+        let tokens = self.wait_table.get_mut(&key).unwrap();
+        tokens.retain(|t| *t != token);
+        if tokens.is_empty() {
+            self.wait_table.remove(&key);
+        }
         Some(waiter)
     }
 
@@ -401,12 +407,14 @@ impl WaitTable {
         lock: LockDigest,
         waiter_ts: TimeStamp,
     ) -> Option<Waiter> {
-        let token = *self.wait_table.get(&(lock.hash, waiter_ts))?;
-        let info = &self.waiter_pool.get(&token)?.wait_info;
-        if !info.blocking_txns(waiter_ts).any(|ts| ts == lock.ts) {
-            // The holder exited before the detector's response arrived.
-            return None;
-        }
+        let tokens = self.wait_table.get(&(lock.hash, waiter_ts))?;
+        // A delayed detector response must still match a live blocker.
+        let token = tokens.iter().rev().copied().find(|token| {
+            self.waiter_pool[token]
+                .wait_info
+                .blocking_txns(waiter_ts)
+                .any(|ts| ts == lock.ts)
+        })?;
         self.take_waiter(token)
     }
 
@@ -1327,19 +1335,28 @@ pub mod tests {
                 hash: 20,
             },
         );
-        let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        scheduler.wait_for(
-            LockWaitToken(Some(1)),
-            1,
-            RegionEpoch::default(),
-            1,
-            waiter.start_ts,
-            waiter.wait_info,
-            WaitTimeout::Millis(1000),
-            waiter.cancel_callback,
-            DiagnosticContext::default(),
-            false,
-        );
+        let register = |token| {
+            let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
+            scheduler.wait_for(
+                token,
+                1,
+                RegionEpoch::default(),
+                1,
+                waiter.start_ts,
+                waiter.wait_info,
+                WaitTimeout::Millis(1000),
+                waiter.cancel_callback,
+                DiagnosticContext::default(),
+                false,
+            );
+            (lock_info, f)
+        };
+        let (lock_info, f) = register(LockWaitToken(Some(1)));
+        let duplicate = LockWaitToken(Some(2));
+        let (_, evicted) = register(duplicate);
+        scheduler.remove_lock_wait(duplicate);
+        // Eviction finishes the newer wait without canceling the older request.
+        block_on(evicted).unwrap_err();
         scheduler.deadlock(waiter_ts, b"foo".to_vec(), lock, 30, vec![]);
         assert_elapsed(
             || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, &[]),
