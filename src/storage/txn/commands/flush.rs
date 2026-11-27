@@ -102,6 +102,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
             lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: new_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: guards,
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: vec![],

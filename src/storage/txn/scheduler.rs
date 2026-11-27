@@ -983,6 +983,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        shared_lock_upgrade_hints: Vec<crate::storage::mvcc::SharedLockUpgradeHint>,
         known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
         request_source: &str,
@@ -1024,6 +1025,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         }
 
+        // A member may be removed without releasing the entire key. Publish the
+        // one-holder transition only after the corresponding write has succeeded
+        // and while this command still owns the key latch.
+        if result.is_ok() && !shared_lock_upgrade_hints.is_empty() {
+            self.inner
+                .lock_wait_queues
+                .consume_shared_lock_upgrade_hints(shared_lock_upgrade_hints);
+        }
+        let write_succeeded = result.is_ok();
         let tctx = self.inner.dequeue_task_context(cid);
 
         let mut do_wake_up = !tctx.woken_up_resumable_lock_requests.is_empty();
@@ -1068,7 +1078,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(request_source, metadata, new_acquired_locks);
+        if write_succeeded {
+            self.on_acquired_locks_finished(request_source, metadata, new_acquired_locks);
+        }
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -1106,6 +1118,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         tracker: TrackerToken,
     ) {
+        let upgrader_blocked_key = lock_info.blocked_by_upgrader.then(|| lock_info.key.clone());
         let key = lock_info.key.clone();
         let lock_digest = lock_info.lock_digest;
         let start_ts = lock_info.parameters.start_ts;
@@ -1113,7 +1126,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let wait_timeout = lock_info.parameters.wait_timeout;
         let allow_lock_with_conflict = lock_info.parameters.allow_lock_with_conflict;
 
+        let requested_lock_mode = if lock_info.parameters.is_shared_lock_upgrade {
+            kvproto::deadlock::RequestedLockMode::Upgrade
+        } else if lock_info.is_shared_lock_request {
+            kvproto::deadlock::RequestedLockMode::Shared
+        } else {
+            kvproto::deadlock::RequestedLockMode::Exclusive
+        };
         let diag_ctx = DiagnosticContext {
+            requested_lock_mode,
             key: lock_info.key.to_raw().unwrap(),
             resource_group_tag: ctx.get_resource_group_tag().into(),
             tracker,
@@ -1131,9 +1152,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // therefore will woken up, thus the canceling operation will be
         // skipped. So pushing the entry to the queue must be done before any
         // possible cancellation.
-        self.inner
+        if !self
+            .inner
             .lock_wait_queues
-            .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
+            .push_lock_wait(lock_wait_entry, lock_info_pb.clone())
+        {
+            return;
+        }
 
         let wait_info = lock_manager::KeyLockWaitInfo {
             key,
@@ -1153,6 +1178,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_req_ctx.get_callback_for_cancellation(),
             diag_ctx,
         );
+        if let Some(key) = upgrader_blocked_key {
+            self.inner
+                .lock_wait_queues
+                .register_upgrader_blocked_reader(&key, wait_token);
+        }
     }
 
     fn on_release_locks(
@@ -1241,7 +1271,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         // If there are not too many new locks, do not spawn the task to the high
         // priority pool since it may consume more CPU.
-        if new_acquired_locks.len() < 30 {
+        if new_acquired_locks.len() < 30
+            || new_acquired_locks.iter().any(LockInfoExt::is_shared_lock)
+        {
             self.inner
                 .lock_wait_queues
                 .update_lock_wait(new_acquired_locks);
@@ -1473,6 +1505,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
+                lock_wait_queues: Some(&txn_scheduler.inner.lock_wait_queues),
                 lock_mgr: &txn_scheduler.inner.lock_mgr,
                 concurrency_manager,
                 extra_op: task.extra_op(),
@@ -1567,6 +1600,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             lock_info,
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints,
             lock_guards,
             response_policy,
             known_txn_status,
@@ -1634,6 +1668,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                shared_lock_upgrade_hints,
                 known_txn_status,
                 tag,
                 &ctx.request_source,
@@ -1643,17 +1678,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return None;
         }
 
-        // When xlock encounters slock without shrink-only flag, slock will be marked as
-        // shrink-only and written back to storage, in which case we can not use in-mem
-        // pessimistic lock.
-        let update_shared_lock = matches!(pr.get_key_lock_info(), Some(l) if l.is_shared_lock());
-
+        // Only pure pessimistic-lock writes can enter the in-memory table.
+        // An ordinary re-lock can also need to persist an earlier upgrade.
         if matches!(
             tag,
             CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
         ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
             && !is_shared_lock_cmd
-            && !update_shared_lock
+            && matches!(response_policy, ResponsePolicy::OnProposed)
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
@@ -1684,6 +1716,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                shared_lock_upgrade_hints,
                 known_txn_status,
                 tag,
                 &ctx.request_source,
@@ -1701,6 +1734,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 vec![],
                 ReleasedLocks::new(),
                 new_acquired_locks,
+                shared_lock_upgrade_hints,
                 lock_guards,
                 response_policy,
                 known_txn_status,
@@ -1805,6 +1839,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             rows,
             pr,
             new_acquired_locks,
+            shared_lock_upgrade_hints,
             lock_guards,
             known_txn_status,
             ..
@@ -1827,7 +1862,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         .modifies
                         .iter()
                         .filter_map(|write| match write {
-                            Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                            Modify::Put(CF_LOCK, key, ..) | Modify::Delete(CF_LOCK, key) | Modify::PessimisticLock(key, _) => {
                                 locks.get_mut(key).map(|(_, deleted)| {
                                     *deleted = true;
                                     key.to_owned()
@@ -1946,6 +1981,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         pipelined,
                         is_async_apply_prewrite,
                         new_acquired_locks,
+                        shared_lock_upgrade_hints,
                         known_txn_status,
                         tag,
                         &ctx.request_source,
@@ -2010,13 +2046,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         let tracker_token = task.tracker_token();
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
-        let pipelined = task.cmd().can_be_pipelined()
-            && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
         let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
-            cmd.keys.iter().any(|k| k.2)
+            cmd.is_shared_lock_upgrade || cmd.keys.iter().any(|k| k.2)
         } else {
             false
         };
+        let pipelined = task.cmd().can_be_pipelined()
+            && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined
+            && !is_shared_lock_cmd;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
         let write_bytes = task.cmd().write_bytes() as u64;
@@ -2253,6 +2290,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
         let is_shared_lock = lock_info.is_shared_lock_request;
+        let is_lock_upgrade = lock_info.is_lock_upgrade;
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
@@ -2273,6 +2311,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             is_shared_lock,
+            is_lock_upgrade,
             lock_wait_token,
             req_states: ctx.get_shared_states().clone(),
             legacy_wake_up_index: None,
@@ -2297,6 +2336,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             is_shared_lock: false,
+            is_lock_upgrade: false,
             lock_wait_token: lock_info.lock_wait_token,
             // This must be called after an execution of AcquirePessimisticLockResumed, in which
             // case there must be a valid req_state.
@@ -2590,6 +2630,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                false,
                 false,
                 false,
                 false,
@@ -2992,7 +3033,8 @@ mod tests {
             ReleasedLocks::new(),
             vec![],
             vec![],
-            ResponsePolicy::OnProposed,
+            vec![],
+            ResponsePolicy::OnApplied,
             vec![],
         );
         let mut sched_details = SchedulerDetails::new(TrackerToken::default());
@@ -3018,6 +3060,10 @@ mod tests {
         )
         .expect("shared lock update should be persisted");
 
+        assert!(matches!(
+            result.0.response_policy,
+            ResponsePolicy::OnApplied
+        ));
         assert!(txn_ext.pessimistic_locks.read().is_empty());
         engine
             .write(&Context::default(), result.0.to_be_write)

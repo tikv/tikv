@@ -54,6 +54,7 @@ command! {
             check_existence: bool,
             lock_only_if_exists: bool,
             allow_lock_with_conflict: bool,
+            is_shared_lock_upgrade: bool,
         }
         in_heap => {
             primary,
@@ -97,10 +98,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
         let mut encountered_locks = vec![];
-        let mut updated_shared_lock_info = None;
+        let mut shrink_error = None;
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         for (k, should_not_exist, is_shared_lock) in keys {
+            let has_pending_upgrader = is_shared_lock
+                && context
+                    .lock_wait_queues
+                    .is_some_and(|queues| queues.has_pending_upgrader(&k));
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -116,6 +121,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.lock_only_if_exists,
                 self.allow_lock_with_conflict,
                 is_shared_lock,
+                self.is_shared_lock_upgrade,
+                has_pending_upgrader,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -136,14 +143,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         is_first_lock: self.is_first_lock,
                         lock_only_if_exists: self.lock_only_if_exists,
                         allow_lock_with_conflict: self.allow_lock_with_conflict,
+                        is_shared_lock_upgrade: self.is_shared_lock_upgrade,
                     };
-                    let lock_info = WriteResultLockInfo::new(
+                    let blocked_by_upgrader =
+                        has_pending_upgrader && !lock_info.get_shared_lock_infos().is_empty();
+                    let mut lock_info = WriteResultLockInfo::new(
                         lock_info,
                         request_parameters,
                         k,
                         should_not_exist,
                         is_shared_lock,
                     );
+                    lock_info.blocked_by_upgrader = blocked_by_upgrader;
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.
                     txn.clear();
@@ -155,13 +166,19 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     // Clear previous mutations, mark `shared_locks` as shrink-only and write it
                     // back.
                     let locked_raw_key = k.to_raw()?;
-                    shared_locks.set_shrink_only();
+                    debug_assert!(!self.is_shared_lock_upgrade);
                     txn.clear();
-                    txn.put_shared_locks(k, &shared_locks, false);
                     old_values.clear();
                     res.0.clear();
-
-                    updated_shared_lock_info = Some(shared_locks.into_lock_info(locked_raw_key));
+                    let error = if self.wait_timeout.is_none() {
+                        // A failed NOWAIT must not close an otherwise open wrapper.
+                        MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
+                    } else {
+                        shared_locks.set_shrink_only();
+                        txn.put_shared_locks(k, &shared_locks, false);
+                        MvccErrorInner::KeyIsLocked(shared_locks.into_lock_info(locked_raw_key))
+                    };
+                    shrink_error = Some(error);
                     break;
                 }
                 Err(e) => return Err(Error::from(e)),
@@ -192,10 +209,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         }
         // Return KeyIsLocked when xlock encounters slock and tries to convert it to
         // shrink-only.
-        if let Some(lock_info) = updated_shared_lock_info {
-            res = Err(StorageError::from(Error::from(MvccError::from(
-                MvccErrorInner::KeyIsLocked(lock_info),
-            ))));
+        if let Some(err) = shrink_error {
+            res = Err(StorageError::from(Error::from(MvccError::from(err))));
         }
 
         let rows = if res.is_ok() { total_keys } else { 0 };
@@ -203,6 +218,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         record_network_out_bytes(res.as_ref().map_or(0, |v| v.estimate_resp_size()));
         let pr = ProcessResult::PessimisticLockRes { res };
 
+        let response_policy = pessimistic_lock_response_policy(&modifies);
         let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
@@ -213,10 +229,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
-            response_policy: ResponsePolicy::OnProposed,
+            response_policy,
             known_txn_status: vec![],
         })
+    }
+}
+
+pub(super) fn pessimistic_lock_response_policy(modifies: &[Modify]) -> ResponsePolicy {
+    if modifies
+        .iter()
+        .all(|m| matches!(m, Modify::PessimisticLock(..)))
+    {
+        ResponsePolicy::OnProposed
+    } else {
+        ResponsePolicy::OnApplied
     }
 }
 
@@ -520,9 +548,11 @@ mod tests {
             false,
             false,
             false,
+            false,
             ctx,
         );
         let context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,

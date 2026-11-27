@@ -794,16 +794,18 @@ impl Suite {
         keys: Vec<Vec<u8>>,
         ts: TimeStamp,
         pk: Vec<u8>,
+        mode: Op,
     ) {
         let mut lock_req = PessimisticLockRequest::new();
         lock_req.set_context(self.get_context(region_id));
         let mut mutations = vec![];
         for key in keys {
-            mutations.push(mutation_op(key, vec![], Op::PessimisticLock));
+            mutations.push(mutation_op(key, vec![], mode));
         }
         lock_req.set_mutations(mutations.into());
         lock_req.primary_lock = pk;
         lock_req.start_version = ts.into_inner();
+        lock_req.for_update_ts = ts.into_inner();
         lock_req.lock_ttl = ts.into_inner() + 1;
         let resp = self
             .get_tikv_client(region_id)

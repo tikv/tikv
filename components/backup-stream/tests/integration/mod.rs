@@ -264,19 +264,19 @@ mod all {
     #[test]
     fn pessimistic_lock() {
         let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 42)],
-            suite.tso(),
-            make_record_key(1, 42),
-        );
+        // Exercise disk scanning on registration, then observed Lock CF writes
+        // after registration. Neither a pure shared primary nor an ordinary
+        // pessimistic lock represents data that can delay the checkpoint.
+        use kvproto::kvrpcpb::Op;
+        for (handle, mode) in [(42, Op::PessimisticLock), (44, Op::SharedPessimisticLock)] {
+            let key = make_record_key(1, handle);
+            suite.must_kv_pessimistic_lock(1, vec![key.clone()], suite.tso(), key, mode);
+        }
         suite.must_register_task(1, "pessimistic_lock");
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 43)],
-            suite.tso(),
-            make_record_key(1, 43),
-        );
+        for (handle, mode) in [(43, Op::PessimisticLock), (45, Op::SharedPessimisticLock)] {
+            let key = make_record_key(1, handle);
+            suite.must_kv_pessimistic_lock(1, vec![key.clone()], suite.tso(), key, mode);
+        }
         let expected_tso = suite.tso().into_inner();
         suite.force_flush_files("pessimistic_lock");
         suite.wait_for_flush();
@@ -296,6 +296,37 @@ mod all {
             expected_tso,
             checkpoint
         );
+    }
+
+    #[test]
+    fn foreign_rollback_keeps_data_prewrite_pinning_checkpoint() {
+        let task = "foreign_rollback";
+        let mut suite = SuiteBuilder::new_named(task).nodes(1).build();
+        suite.must_register_task(1, task);
+        suite.sync();
+        let key = make_record_key(1, 42);
+        let start = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(key.clone(), b"value".to_vec())],
+            key.clone(),
+            start,
+        );
+        let ctx = suite.get_context(1);
+        let foreign = suite.tso();
+        test_raftstore::must_kv_rollback(
+            suite.get_tikv_client(1),
+            ctx,
+            vec![key.clone()],
+            foreign.into_inner(),
+        );
+        run_async_test(suite.force_flush_files_and_wait(task));
+        assert_eq!(suite.global_checkpoint(), start.into_inner());
+        let commit = suite.tso();
+        suite.must_kv_commit(1, vec![key], start, commit);
+        run_async_test(suite.force_flush_files_and_wait(task));
+        assert!(suite.global_checkpoint() >= commit.into_inner());
+        suite.cluster.shutdown();
     }
 
     async fn collect_all_current<T>(

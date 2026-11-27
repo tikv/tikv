@@ -145,9 +145,37 @@ High-risk contracts:
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
-- `CheckTxnStatus` must check whether a shared lock belongs to the queried
-  transaction before rejecting it as an invalid primary. Unrelated shared
-  holders must not hide that transaction's commit or rollback record.
+- A shared primary belongs to one transaction identified by its start
+  timestamp. Heartbeat, status checks, and TTL rollback update only that
+  member. Resolving an expired pessimistic member for a pessimistic secondary
+  removes the member without deciding the transaction. Resolving a prewritten
+  secondary checks its named primary and protects the rollback on expiry.
+  A terminal write takes precedence over a stale member.
+- Shared pessimistic lock acquisition honors lock-only-if-exists before inserting
+  a holder. Replaying a locking read on its own member returns the requested
+  value or existence at the request's for-update timestamp. A newer for-update
+  timestamp may change the member's primary and preserves its acknowledged
+  TTL and minimum commit timestamp.
+- Flashback rollback reads the full shared wrapper in the prepared region.
+  A partial batch persists remaining holders and resumes at the same key.
+  Its write budget includes the surviving wrapper and rollback records. An
+  indivisible member and its remaining wrapper can exceed the batch target.
+- A shared read on its own exclusive pessimistic lock persists that lock in
+  CF_LOCK and waits for apply to remove any in-memory copy. Shared-lock
+  prewrite accepts either the transaction's shared member or its retained
+  exclusive lock. An explicit upgrade records its statement timestamp in the
+  exclusive lock. Prewrite preserves that timestamp for replay.
+- While an explicit upgrader is queued, its slot closes admission to new
+  shared holders. Removing the upgrader wakes registered shared readers for a client retry. Partial resolutions
+  publish the final holder set under the key latch after apply.
+- Shared pessimistic locks, upgrades, and transitions of a shared wrapper
+  to shrink-only take effect on Raft apply. Requests that change this state
+  bypass in-memory pessimistic locking and pipelined responses.
+- New shared members are admitted up to 1,024 per physical key and a 1 MiB
+  encoded Lock CF value. Existing members can renew, prepare and drain even
+  at capacity. Waiter admission and blocker refresh enforce the same
+  16,384-edge budget per key. A refresh keeps the oldest registrations
+  and completes excess waiters with the queue-capacity error.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as
@@ -242,6 +270,15 @@ Start triage with:
 - incorrect region error extraction from lower layers
 - dynamic config updated in memory but not applied to runtime objects
 - lock wait wake-up logic causing starvation or missed wake-ups
+
+Shared lock upgrades keep the requesting transaction's member while waiting.
+There is one pending upgrader per key. Removing another member can make that
+upgrader the sole holder without unlocking the key. After the write succeeds,
+the scheduler notifies the matching wait token while it still owns the key
+latch. The client retries acquire and rechecks the holder state. When
+admitting a shared read, upgrade, or wait on a shared wrapper, each key has a budget of
+1,024 waiting requests and 16,384 waiter/holder pairs. Exceeding either
+returns ServerIsBusy before a new wait or upgrade slot is registered.
 
 ## Reading Map And Companion Docs
 

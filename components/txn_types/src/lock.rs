@@ -45,6 +45,7 @@ const LAST_CHANGE_PREFIX: u8 = b'l';
 const TXN_SOURCE_PREFIX: u8 = b's';
 const _RESERVED_PREFIX: u8 = b'T'; // Reserved for future use.
 const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
+const SHARED_LOCK_UPGRADE_TS_PREFIX: u8 = b'U';
 const GENERATION_PREFIX: u8 = b'g';
 const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
 const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
@@ -124,6 +125,8 @@ pub struct Lock {
     pub is_locked_with_conflict: bool,
     /// The generation of the lock, used in pipelined DML.
     pub generation: u64,
+    /// Statement timestamp of the S-to-X conversion, retained across prewrite.
+    pub shared_lock_upgrade_ts: TimeStamp,
 }
 
 impl std::fmt::Debug for Lock {
@@ -193,6 +196,7 @@ impl Lock {
             txn_source: 0,
             is_locked_with_conflict,
             generation: 0,
+            shared_lock_upgrade_ts: TimeStamp::zero(),
         }
     }
 
@@ -290,6 +294,11 @@ impl Lock {
             b.push(GENERATION_PREFIX);
             b.encode_u64(self.generation).unwrap();
         }
+        if !self.shared_lock_upgrade_ts.is_zero() {
+            b.push(SHARED_LOCK_UPGRADE_TS_PREFIX);
+            b.encode_u64(self.shared_lock_upgrade_ts.into_inner())
+                .unwrap();
+        }
         b
     }
 
@@ -332,6 +341,9 @@ impl Lock {
             size += 1;
         }
         if self.generation > 0 {
+            size += 1 + size_of::<u64>();
+        }
+        if !self.shared_lock_upgrade_ts.is_zero() {
             size += 1 + size_of::<u64>();
         }
         size
@@ -541,6 +553,7 @@ impl Lock {
         let mut estimated_versions_to_last_change = 0;
         let mut txn_source = 0;
         let mut is_locked_with_conflict = false;
+        let mut shared_lock_upgrade_ts = TimeStamp::zero();
         let mut generation = 0;
         while !b.is_empty() {
             match b.read_u8()? {
@@ -585,6 +598,9 @@ impl Lock {
                 PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX => {
                     is_locked_with_conflict = true;
                 }
+                SHARED_LOCK_UPGRADE_TS_PREFIX => {
+                    shared_lock_upgrade_ts = number::decode_u64(&mut b)?.into()
+                }
                 GENERATION_PREFIX => {
                     generation = number::decode_u64(&mut b)?;
                 }
@@ -613,6 +629,7 @@ impl Lock {
         .set_txn_source(txn_source)
         .with_rollback_ts(rollback_ts)
         .with_generation(generation);
+        lock.shared_lock_upgrade_ts = shared_lock_upgrade_ts;
         if use_async_commit {
             lock = lock.use_async_commit(secondaries);
         }
@@ -885,7 +902,7 @@ impl SharedLocks {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(self.pre_allocate_size());
+        let mut b = Vec::with_capacity(self.estimated_encoded_size());
         b.push(LockType::Shared.to_u8());
         if !self.flags.is_empty() {
             b.push(SHARED_LOCK_FLAGS_PREFIX);
@@ -902,7 +919,8 @@ impl SharedLocks {
         b
     }
 
-    fn pre_allocate_size(&self) -> usize {
+    /// Upper bound for the serialized wrapper, including every member.
+    pub fn estimated_encoded_size(&self) -> usize {
         1 // lock type
             + if !self.flags.is_empty() {
                 2 // SHARED_LOCK_FLAGS_PREFIX + flags byte
@@ -914,14 +932,38 @@ impl SharedLocks {
             + self
                 .txn_info_segments
                 .values()
-                .map(|lock| {
-                    MAX_VAR_I64_LEN
-                        + match lock {
-                            Either::Left(v) => v.len(),
-                            Either::Right(l) => l.pre_allocate_size(),
-                        }
-                })
+                .map(Self::segment_size_bound)
                 .sum::<usize>()
+    }
+
+    /// Read a member and its contribution to `estimated_encoded_size` without
+    /// replacing its stored bytes. A deferred member can then be copied
+    /// verbatim.
+    pub fn get_lock_with_size_bound(
+        &self,
+        ts: &TimeStamp,
+    ) -> Result<Option<(Cow<'_, Lock>, usize)>> {
+        let Some(segment) = self.txn_info_segments.get(ts) else {
+            return Ok(None);
+        };
+        let lock = match segment {
+            Either::Left(encoded) => Cow::Owned(Lock::parse(encoded)?),
+            Either::Right(lock) => Cow::Borrowed(lock),
+        };
+        Ok(Some((lock, Self::segment_size_bound(segment))))
+    }
+
+    /// Drop a member whose contents have already been read.
+    pub fn discard_lock(&mut self, ts: &TimeStamp) {
+        self.txn_info_segments.remove(ts);
+    }
+
+    fn segment_size_bound(segment: &Either<Vec<u8>, Lock>) -> usize {
+        MAX_VAR_I64_LEN
+            + match segment {
+                Either::Left(v) => v.len(),
+                Either::Right(l) => l.pre_allocate_size(),
+            }
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
@@ -1384,6 +1426,23 @@ mod tests {
                 segments
             })),
         ];
+        // An older lock without the optional field decodes with no upgrade
+        // timestamp. Both the converted lock and its prewrite retain the field.
+        for lock_type in [LockType::Pessimistic, LockType::Put] {
+            let mut lock = Lock::new(
+                lock_type,
+                b"pk".to_vec(),
+                1.into(),
+                10,
+                None,
+                6.into(),
+                0,
+                8.into(),
+                false,
+            );
+            lock.shared_lock_upgrade_ts = 5.into();
+            locks.push(Either::Left(lock));
+        }
         for (i, lock) in locks.drain(..).enumerate() {
             let v = match &lock {
                 Either::Left(lock) => lock.to_bytes(),
@@ -1401,7 +1460,7 @@ mod tests {
                 (Either::Right(mut l), Either::Right(lock)) => {
                     l.parse_all();
                     assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
-                    assert!(lock.pre_allocate_size() >= v.len());
+                    assert!(lock.estimated_encoded_size() >= v.len());
                 }
                 (l, lock) => panic!("#{} mismatch: parsed={:?}, expected={:?}", i, l, lock),
             }
@@ -1827,6 +1886,7 @@ mod tests {
             txn_source: 0,
             is_locked_with_conflict: false,
             generation: 0,
+            shared_lock_upgrade_ts: TimeStamp::zero(),
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);

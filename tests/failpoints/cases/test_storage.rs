@@ -22,6 +22,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use raftstore::store::TxnExt;
 use resource_control::ResourceGroupManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
@@ -474,6 +475,66 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     assert_eq!(pool.get_pool_size(CommandPri::Normal), 1);
     pool.scale_pool_size(2);
     assert_eq!(pool.get_pool_size(CommandPri::Normal), 2);
+}
+
+#[test]
+fn test_shared_pessimistic_locks_report_apply_failure_in_memory() {
+    shared_pessimistic_locks_report_apply_failure(true);
+}
+
+#[test]
+fn test_shared_pessimistic_locks_report_apply_failure_pipelined() {
+    shared_pessimistic_locks_report_apply_failure(false);
+}
+
+fn shared_pessimistic_locks_report_apply_failure(in_memory: bool) {
+    let txn_ext = Arc::new(TxnExt::default());
+    let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+        .pipelined_pessimistic_lock(true)
+        .in_memory_pessimistic_lock(in_memory)
+        .build_for_txn(txn_ext.clone())
+        .unwrap();
+    let key = b"shared-apply";
+    let acquire = |op, start_ts, upgrade, fail_apply| {
+        let mut req = kvrpcpb::PessimisticLockRequest::default();
+        req.set_primary_lock(key.to_vec());
+        req.set_start_version(start_ts);
+        req.set_for_update_ts(start_ts);
+        req.set_lock_ttl(3000);
+        req.set_wait_timeout(1000);
+        req.set_is_shared_lock_upgrade(upgrade);
+        req.set_mutations(vec![new_mutation(op, key, b"")].into());
+
+        let write_failpoint = "rockskv_write_modifies";
+        if fail_apply {
+            fail::cfg(write_failpoint, "return()").unwrap();
+        }
+        let (cb, fut) = paired_future_callback();
+        storage.sched_txn_command(req.into(), cb).unwrap();
+        let result = tikv_util::future::block_on_timeout(fut, Duration::from_secs(5));
+        fail::remove(write_failpoint);
+        result.unwrap().unwrap()
+    };
+
+    let assert_apply_failed = |op, start_ts, upgrade| {
+        assert!(matches!(
+            acquire(op, start_ts, upgrade, true),
+            Err(StorageError(box StorageErrorInner::Kv(_)))
+        ));
+    };
+    // A response at Proposed would hide the injected apply error.
+    assert_apply_failed(Op::SharedPessimisticLock, 10, false);
+    acquire(Op::SharedPessimisticLock, 10, false, false)
+        .unwrap()
+        .unwrap();
+    // A competing X must persist the shrink-only change before reporting a
+    // conflict.
+    assert_apply_failed(Op::PessimisticLock, 20, false);
+    assert_apply_failed(Op::PessimisticLock, 10, true);
+    acquire(Op::PessimisticLock, 10, true, false)
+        .unwrap()
+        .unwrap();
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }
 
 #[test]
@@ -993,6 +1054,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     false,
                     false,
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1344,6 +1406,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
+                    false,
                     false,
                     false,
                     false,

@@ -4245,6 +4245,7 @@ pub mod test_util {
             check_existence,
             false,
             false,
+            false,
             Context::default(),
         )
     }
@@ -4511,7 +4512,7 @@ mod tests {
         metapb::RegionEpoch,
     };
     use parking_lot::Mutex;
-    use tikv_util::config::ReadableSize;
+    use tikv_util::{config::ReadableSize, future::paired_future_callback};
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{LastChange, Mutation, PessimisticLock, SHORT_VALUE_MAX_LEN, WriteType};
 
@@ -4741,6 +4742,7 @@ mod tests {
             .process_write(
                 snapshot,
                 commands::WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: storage.concurrency_manager.clone(),
                     extra_op: ExtraOp::Noop,
@@ -8538,6 +8540,7 @@ mod tests {
                         false,
                         false,
                         false,
+                        false,
                         Context::default(),
                     ),
                     expect_ok_callback(tx.clone(), 0),
@@ -10658,6 +10661,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -10747,6 +10751,7 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
+                            false,
                             false,
                             false,
                             false,
@@ -11343,6 +11348,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -11363,6 +11369,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    false,
                     false,
                     false,
                     false,
@@ -11602,6 +11609,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -11627,6 +11635,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                false,
                 false,
                 false,
                 false,
@@ -12203,6 +12212,199 @@ mod tests {
                 Some(INVALID_KEY_MODE),
             );
         }
+    }
+
+    #[test]
+    fn test_upgrade_timeout_reopens_shared_reader_admission() {
+        let lock_mgr = MockLockManager::new();
+        let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+            .build()
+            .unwrap();
+        let key = Key::from_raw(b"upgrade-timeout");
+        let request = |ts, shared| {
+            new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                vec![(key.clone(), false, shared)],
+                None,
+                ts,
+                ts,
+                false,
+                false,
+            )
+        };
+        for ts in [10, 20] {
+            let (cb, f) = paired_future_callback();
+            storage.sched_txn_command(request(ts, true), cb).unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+        }
+        let mut upgrade = request(10, false);
+        let Command::AcquirePessimisticLock(cmd) = &mut upgrade.cmd else {
+            unreachable!()
+        };
+        cmd.is_shared_lock_upgrade = true;
+        let (cb, pending) = paired_future_callback();
+        storage.sched_txn_command(upgrade, cb).unwrap();
+        wait_for_lock_waiters(&lock_mgr, 1);
+        let upgrader = *lock_mgr.get_all_tokens().iter().next().unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                request(30, true).lock_wait_timeout(Some(WaitTimeout::Millis(10_000))),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        wait_for_lock_waiters(&lock_mgr, 2);
+        lock_mgr.simulate_timeout(upgrader);
+        assert!(extract_key_error(&block_on(pending).unwrap().unwrap_err()).has_locked());
+        let retry = rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            extract_key_error(&retry).get_conflict().get_reason(),
+            kvrpcpb::WriteConflictReason::PessimisticRetry
+        );
+        let (cb, f) = paired_future_callback();
+        storage
+            .sched_txn_command(request(30, true).lock_wait_timeout(None), cb)
+            .unwrap();
+        block_on(f).unwrap().unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_shared_read_materializes_in_memory_exclusive_lock() {
+        let ext = Arc::new(TxnExt::default());
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true)
+            .build_for_txn(ext.clone())
+            .unwrap();
+        for (raw, shared_ts, primary) in [(b"a", 20, b"a"), (b"b", 30, b"p")] {
+            let key = Key::from_raw(raw);
+            acquire_pessimistic_lock(&storage, key.clone(), 10, 20);
+            assert!(ext.pessimistic_locks.read().get(&key).is_some());
+            let (cb, f) = paired_future_callback();
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                        vec![(key.clone(), false, true)],
+                        Some(primary),
+                        10,
+                        shared_ts,
+                        false,
+                        false,
+                    ),
+                    cb,
+                )
+                .unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+            assert!(ext.pessimistic_locks.read().get(&key).is_none());
+            let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, raw, 10, shared_ts);
+            assert_eq!(lock.primary, primary);
+            assert_eq!(lock.min_commit_ts, (shared_ts + 1).into());
+            let (cb, f) = paired_future_callback();
+            storage
+                .sched_txn_command(
+                    commands::PrewritePessimistic::with_defaults(
+                        vec![(Mutation::make_shared_lock(key), DoPessimisticCheck)],
+                        primary.to_vec(),
+                        10.into(),
+                        shared_ts.into(),
+                    ),
+                    cb,
+                )
+                .unwrap();
+            block_on(f).unwrap().unwrap();
+            assert_eq!(
+                must_locked(&mut storage.engine, raw, 10).lock_type,
+                txn_types::LockType::Lock
+            );
+        }
+    }
+
+    #[test]
+    fn test_exclusive_refresh_after_upgrade_bypasses_memory() {
+        let ext = Arc::new(TxnExt::default());
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true)
+            .build_for_txn(ext.clone())
+            .unwrap();
+        let key = Key::from_raw(b"upgraded");
+        for (ts, shared, upgrade) in [(20, true, false), (30, false, true), (40, false, false)] {
+            let mut request = new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                vec![(key.clone(), false, shared)],
+                None,
+                10,
+                ts,
+                false,
+                false,
+            );
+            let Command::AcquirePessimisticLock(cmd) = &mut request.cmd else {
+                unreachable!()
+            };
+            cmd.is_shared_lock_upgrade = upgrade;
+            let (cb, f) = paired_future_callback();
+            storage.sched_txn_command(request, cb).unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+        }
+        assert!(ext.pessimistic_locks.read().get(&key).is_none());
+        let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, b"upgraded", 10, 40);
+        assert_eq!(lock.shared_lock_upgrade_ts, 30.into());
+    }
+
+    #[test]
+    fn test_mixed_exclusive_refresh_evicts_old_memory_lock() {
+        let ext = Arc::new(TxnExt::default());
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true)
+            .build_for_txn(ext.clone())
+            .unwrap();
+        let a = Key::from_raw(b"a");
+        let b = Key::from_raw(b"b");
+        let acquire = |keys, ts, upgrade, ttl, min_commit_ts: u64| {
+            let mut request = new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                keys,
+                Some(b"a"),
+                15,
+                ts,
+                false,
+                false,
+            );
+            let Command::AcquirePessimisticLock(cmd) = &mut request.cmd else {
+                unreachable!()
+            };
+            cmd.is_shared_lock_upgrade = upgrade;
+            cmd.lock_ttl = ttl;
+            cmd.min_commit_ts = min_commit_ts.into();
+            let (cb, f) = paired_future_callback();
+            storage.sched_txn_command(request, cb).unwrap();
+            block_on(f).unwrap().unwrap().unwrap();
+        };
+        acquire(vec![(a.clone(), false, true)], 20, false, 3000, 21);
+        acquire(vec![(a.clone(), false, false)], 30, true, 3000, 31);
+        acquire(vec![(b.clone(), false, false)], 20, false, 8000, 100);
+        assert_eq!(
+            ext.pessimistic_locks
+                .read()
+                .get(&b)
+                .unwrap()
+                .0
+                .for_update_ts,
+            20.into()
+        );
+        acquire(
+            vec![(a, false, false), (b.clone(), false, false)],
+            40,
+            false,
+            3000,
+            41,
+        );
+        delete_pessimistic_lock(&storage, b.clone(), 15, 20);
+        assert!(ext.pessimistic_locks.read().get(&b).is_none());
+        let lock = txn::tests::must_pessimistic_locked(&mut storage.engine, b"b", 15, 40);
+        assert_eq!(lock.ttl, 8000);
+        assert_eq!(lock.min_commit_ts, 100.into());
     }
 
     #[test]

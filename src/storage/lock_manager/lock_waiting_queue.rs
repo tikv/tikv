@@ -64,6 +64,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashSet;
 use dashmap::{self, mapref::entry::Entry as DashMapEntry};
 use futures_util::compat::Future01CompatExt;
 use keyed_priority_queue::KeyedPriorityQueue;
@@ -80,10 +81,24 @@ use crate::storage::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
     },
     metrics::*,
-    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, SharedLockUpgradeHint},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
     types::PessimisticLockParameters,
 };
+
+// Bound per-key wait records as well as their fan-out to shared holders.
+const MAX_SHARED_LOCK_WAITERS: usize = 1024;
+const MAX_SHARED_LOCK_WAIT_EDGES: usize = 16 * 1024;
+
+// A resumed entry can be requeued without new lock information. API V1 also
+// permits an empty raw key, with the holder identified by its timestamp.
+fn has_lock_info(info: &kvrpcpb::LockInfo) -> bool {
+    info.lock_version != 0 || !info.get_shared_lock_infos().is_empty() || !info.key.is_empty()
+}
+
+fn shared_wait_capacity(holders: usize) -> usize {
+    MAX_SHARED_LOCK_WAITERS.min(MAX_SHARED_LOCK_WAIT_EDGES / holders.max(1))
+}
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -94,8 +109,10 @@ pub struct LockWaitEntry {
     // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
     // Put it in a separated field.
     pub should_not_exist: bool,
-    /// Whether the lock currently blocking this entry is a shared lock.
+    /// Whether the waiting request is acquiring a shared lock.
     pub is_shared_lock: bool,
+    /// Whether this waiting request is a same-key shared-lock upgrade.
+    pub is_lock_upgrade: bool,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Arc<LockWaitContextSharedState>,
     pub legacy_wake_up_index: Option<usize>,
@@ -127,6 +144,12 @@ impl Ord for LockWaitEntry {
         // minimal.
         other.parameters.start_ts.cmp(&self.parameters.start_ts)
     }
+}
+
+#[derive(Clone, Copy)]
+struct PendingUpgrader {
+    start_ts: TimeStamp,
+    token: LockWaitToken,
 }
 
 pub struct KeyLockWaitState {
@@ -199,6 +222,8 @@ pub struct KeyLockWaitState {
 
     /// `(id, start_time, delay_duration)`
     delayed_notify_all_state: Option<(u64, Instant, Arc<AtomicU64>)>,
+    pending_upgrader: Option<PendingUpgrader>,
+    upgrader_blocked_readers: HashSet<LockWaitToken>,
 }
 
 impl KeyLockWaitState {
@@ -210,11 +235,18 @@ impl KeyLockWaitState {
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
             delayed_notify_all_state: None,
+            pending_upgrader: None,
+            upgrader_blocked_readers: HashSet::default(),
         }
     }
 }
 
 pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
+
+enum SharedWaitWakeupKind {
+    Retry,
+    SharedLockLost,
+}
 
 pub struct LockWaitQueueInner<L: LockManager> {
     queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
@@ -243,11 +275,13 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// Enqueues a lock wait entry. The key is indicated by the `key` field of
     /// the `lock_wait_entry`. The caller also needs to provide the
     /// information of the current-holding lock.
+    ///
+    /// Returns whether the entry is actually inserted into the queue.
     pub fn push_lock_wait(
         &self,
         mut lock_wait_entry: Box<LockWaitEntry>,
         current_lock: kvrpcpb::LockInfo,
-    ) {
+    ) -> bool {
         let mut new_key = false;
 
         let map_entry = self.inner.queue_map.entry(lock_wait_entry.key.clone());
@@ -259,19 +293,76 @@ impl<L: LockManager> LockWaitQueues<L> {
         // `LockWaitContext::is_canceled` field.
         if lock_wait_entry.req_states.is_canceled() {
             self.on_push_canceled_entry(lock_wait_entry, map_entry);
-            return;
+            return false;
         }
 
         let mut key_state = map_entry.or_insert_with(|| {
             new_key = true;
             KeyLockWaitState::new()
         });
-        if !current_lock.key.is_empty() {
+        if has_lock_info(&current_lock) {
             key_state.current_lock = current_lock;
         }
 
         if lock_wait_entry.legacy_wake_up_index.is_none() {
             lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
+        }
+
+        // Shared-lock upgrade waits have a stricter invariant than ordinary waiters:
+        // each key may have at most one pending upgrader. A later upgrader is rejected
+        // immediately as DuplicateInFlight / SecondUpgrader instead of entering the
+        // ordinary wait queue; otherwise it would keep its shared lock while queued
+        // behind the current upgrader and create an unresolvable deadlock.
+        if let Some(pending_upgrader) = key_state
+            .pending_upgrader
+            .filter(|_| lock_wait_entry.is_lock_upgrade)
+        {
+            // Release the queue-map guard before invoking external callback.
+            drop(key_state);
+
+            let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+            let reason = if pending_upgrader.start_ts == lock_wait_entry.parameters.start_ts {
+                LOCK_UPGRADE_CONFLICT_COUNTER_VEC.duplicate_in_flight.inc();
+                kvrpcpb::LockUpgradeConflictReason::DuplicateInFlight
+            } else {
+                LOCK_UPGRADE_CONFLICT_COUNTER_VEC.second_upgrader.inc();
+                kvrpcpb::LockUpgradeConflictReason::SecondUpgrader
+            };
+            let err = StorageError::from(TxnError::from(MvccError::from(
+                MvccErrorInner::LockUpgradeConflict {
+                    start_ts: lock_wait_entry.parameters.start_ts,
+                    owner_start_ts: pending_upgrader.start_ts,
+                    key: lock_wait_entry.key.clone().into_raw().unwrap(),
+                    reason,
+                },
+            )));
+            cb(Err(err.into()), true);
+            return false;
+        }
+
+        let holders = key_state.current_lock.get_shared_lock_infos().len();
+        if holders != 0 || lock_wait_entry.is_shared_lock || lock_wait_entry.is_lock_upgrade {
+            let capacity = shared_wait_capacity(holders);
+            if key_state.queue.len() >= capacity {
+                drop(key_state);
+                if new_key {
+                    self.inner
+                        .queue_map
+                        .remove_if(&lock_wait_entry.key, |_, state| state.queue.is_empty());
+                }
+                let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+                cb(
+                    Err(StorageError::from(StorageErrorInner::SharedLockWaitQueueFull).into()),
+                    true,
+                );
+                return false;
+            }
+        }
+        if lock_wait_entry.is_lock_upgrade {
+            key_state.pending_upgrader = Some(PendingUpgrader {
+                start_ts: lock_wait_entry.parameters.start_ts,
+                token: lock_wait_entry.lock_wait_token,
+            });
         }
 
         key_state
@@ -287,6 +378,68 @@ impl<L: LockManager> LockWaitQueues<L> {
         if new_key {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.inc()
         }
+        true
+    }
+
+    // Register after LockManager::wait_for so a retry also removes its wait graph
+    // entry. The upgrader can disappear between the MVCC check and registration.
+    pub fn register_upgrader_blocked_reader(&self, key: &Key, token: LockWaitToken) {
+        if let Some(mut state) = self.inner.queue_map.get_mut(key) {
+            if state.pending_upgrader.is_some() && state.queue.get_priority(&token).is_some() {
+                state.upgrader_blocked_readers.insert(token);
+                return;
+            }
+        }
+        self.retry_shared_readers(key, std::iter::once(token));
+    }
+
+    fn retry_shared_readers(&self, key: &Key, tokens: impl IntoIterator<Item = LockWaitToken>) {
+        for token in tokens {
+            if let Some(entry) = self.remove_by_token(key, token) {
+                Self::finish_shared_wait(entry, SharedWaitWakeupKind::Retry);
+            }
+        }
+    }
+
+    fn on_dequeue(
+        key_state: &mut KeyLockWaitState,
+        lock_wait_token: LockWaitToken,
+        readers: &mut Vec<LockWaitToken>,
+    ) {
+        key_state.upgrader_blocked_readers.remove(&lock_wait_token);
+        if key_state
+            .pending_upgrader
+            .as_ref()
+            .is_some_and(|pending| pending.token == lock_wait_token)
+        {
+            key_state.pending_upgrader = None;
+            if !key_state.current_lock.get_shared_lock_infos().is_empty() {
+                readers.extend(key_state.upgrader_blocked_readers.drain());
+            }
+        }
+    }
+
+    fn finish_shared_wait(lock_wait_entry: Box<LockWaitEntry>, wakeup_kind: SharedWaitWakeupKind) {
+        let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+        let err = match wakeup_kind {
+            SharedWaitWakeupKind::Retry => StorageError::from(TxnError::from(MvccError::from(
+                MvccErrorInner::WriteConflict {
+                    start_ts: lock_wait_entry.parameters.start_ts,
+                    conflict_start_ts: TimeStamp::zero(),
+                    conflict_commit_ts: TimeStamp::zero(),
+                    key: lock_wait_entry.key.into_raw().unwrap(),
+                    primary: lock_wait_entry.parameters.primary,
+                    reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
+                },
+            ))),
+            SharedWaitWakeupKind::SharedLockLost => StorageError::from(TxnError::from(
+                MvccError::from(MvccErrorInner::SharedLockLost {
+                    start_ts: lock_wait_entry.parameters.start_ts,
+                    key: lock_wait_entry.key.into_raw().unwrap(),
+                }),
+            )),
+        };
+        cb(Err(err.into()), false);
     }
 
     fn on_push_canceled_entry(
@@ -298,7 +451,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let latest_lock_info = match &key_state {
             DashMapEntry::Occupied(entry) => {
                 let info = &entry.get().current_lock;
-                (!info.key.is_empty()).then(|| info.clone())
+                has_lock_info(info).then(|| info.clone())
             }
             DashMapEntry::Vacant(_) => None,
         };
@@ -361,6 +514,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut popped_future: Option<DelayedNotifyAllFuture> = None;
         // For statistics.
         let mut removed_waiters = 0usize;
+        let mut readers = Vec::new();
 
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
@@ -372,6 +526,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
             if let Some((_, lock_wait_entry)) = v.queue.pop() {
                 removed_waiters += 1;
+                Self::on_dequeue(v, lock_wait_entry.lock_wait_token, &mut readers);
 
                 let mut group_entries = Vec::with_capacity(4);
                 let mut schedule_delayed_wake_up = false;
@@ -391,6 +546,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                         }
                         let (_, shared_entry) = v.queue.pop().unwrap();
                         removed_waiters += 1;
+                        Self::on_dequeue(v, shared_entry.lock_wait_token, &mut readers);
                         if !shared_entry.parameters.allow_lock_with_conflict {
                             v.legacy_wake_up_index += 1;
                             schedule_delayed_wake_up = true;
@@ -431,6 +587,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
 
+        self.retry_shared_readers(key, readers);
         (popped_entries, popped_future)
     }
 
@@ -523,6 +680,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut conflicting_commit_ts = TimeStamp::zero();
 
         let mut removed_waiters = 0usize;
+        let mut readers = Vec::new();
 
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
@@ -557,6 +715,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     break;
                 }
                 let (_, lock_wait_entry) = v.queue.pop().unwrap();
+                Self::on_dequeue(v, lock_wait_entry.lock_wait_token, &mut readers);
                 removed_waiters += 1;
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
@@ -581,6 +740,8 @@ impl<L: LockManager> LockWaitQueues<L> {
         if removed_key.is_some() {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
+
+        self.retry_shared_readers(key, readers);
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'd better make it concurrent with scheduling the new command
@@ -615,17 +776,13 @@ impl<L: LockManager> LockWaitQueues<L> {
         lock_wait_token: LockWaitToken,
     ) -> Option<Box<LockWaitEntry>> {
         let mut result = None;
-
+        let mut readers = Vec::new();
         // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
         let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
-            if let Some(res) = v.queue.remove(&lock_wait_token) {
-                self.inner.entries_count.fetch_sub(1, Ordering::SeqCst);
-                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
-                result = Some(res);
-            }
+            result = self.remove_wait_entry(v, lock_wait_token, &mut readers);
             v.queue.is_empty()
         });
 
@@ -633,15 +790,63 @@ impl<L: LockManager> LockWaitQueues<L> {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
 
+        self.retry_shared_readers(key, readers);
         result
+    }
+
+    fn remove_wait_entry(
+        &self,
+        state: &mut KeyLockWaitState,
+        token: LockWaitToken,
+        readers: &mut Vec<LockWaitToken>,
+    ) -> Option<Box<LockWaitEntry>> {
+        let entry = state.queue.remove(&token)?;
+        self.inner.entries_count.fetch_sub(1, Ordering::SeqCst);
+        LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
+        Self::on_dequeue(state, token, readers);
+        Some(entry)
+    }
+
+    pub fn has_pending_upgrader(&self, key: &Key) -> bool {
+        self.inner
+            .queue_map
+            .get(key)
+            .is_some_and(|state| state.pending_upgrader.is_some())
     }
 
     pub fn update_lock_wait(&self, lock_info: Vec<kvrpcpb::LockInfo>) {
         let mut update_wait_for_events = vec![];
         for lock_info in lock_info {
             let key = Key::from_raw(lock_info.get_key());
-            if let Some(mut key_state) = self.inner.queue_map.get_mut(&key) {
+            let mut stale = None;
+            let mut evicted = Vec::new();
+            let mut readers = Vec::new();
+            let removed_key = self.inner.queue_map.remove_if_mut(&key, |_, key_state| {
                 key_state.current_lock = lock_info;
+                let holders = key_state.current_lock.get_shared_lock_infos();
+                if !holders.is_empty() {
+                    let capacity = shared_wait_capacity(holders.len());
+                    if let Some(pending) = key_state.pending_upgrader.filter(|pending| {
+                        !holders
+                            .iter()
+                            .any(|h| h.lock_version == pending.start_ts.into_inner())
+                    }) {
+                        stale = self.remove_wait_entry(key_state, pending.token, &mut readers);
+                    }
+                    if key_state.queue.len() > capacity {
+                        // Keep the oldest registrations and discard excess waiters before
+                        // copying the expanded blocker set into update events.
+                        let mut tokens: Vec<_> =
+                            key_state.queue.iter().map(|(&token, _)| token).collect();
+                        tokens.sort_unstable_by_key(|t| t.0);
+                        for token in &tokens[capacity..] {
+                            evicted.push(
+                                self.remove_wait_entry(key_state, *token, &mut readers)
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                }
                 update_wait_for_events.reserve(key_state.queue.len());
                 for (&token, entry) in key_state.queue.iter() {
                     let event = UpdateWaitForEvent {
@@ -660,10 +865,54 @@ impl<L: LockManager> LockWaitQueues<L> {
                     };
                     update_wait_for_events.push(event);
                 }
+                key_state.queue.is_empty()
+            });
+            if removed_key.is_some() {
+                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+            }
+            self.retry_shared_readers(&key, readers);
+            if let Some(entry) = stale {
+                Self::finish_shared_wait(entry, SharedWaitWakeupKind::SharedLockLost);
+            }
+            for entry in evicted {
+                // This waiter was already registered. Its normal completion callback
+                // removes it from the waiter manager and cleans up detector edges.
+                let cb = entry.key_cb.unwrap().into_inner();
+                cb(
+                    Err(StorageError::from(StorageErrorInner::SharedLockWaitQueueFull).into()),
+                    false,
+                );
             }
         }
         if !update_wait_for_events.is_empty() {
             self.inner.lock_mgr.update_wait_for(update_wait_for_events);
+        }
+    }
+
+    /// Completes the current pending upgrader for each one-holder boundary
+    /// hint.
+    ///
+    /// The caller must hold the latch for every hinted key until its write
+    /// finishes.
+    pub fn consume_shared_lock_upgrade_hints(&self, hints: Vec<SharedLockUpgradeHint>) {
+        for hint in hints {
+            let pending = self
+                .inner
+                .queue_map
+                .get(&hint.key)
+                .and_then(|key_state| key_state.pending_upgrader);
+            let Some(pending) = pending else {
+                continue;
+            };
+            let wakeup_kind = if pending.start_ts == hint.sole_holder_start_ts {
+                SharedWaitWakeupKind::Retry
+            } else {
+                SharedWaitWakeupKind::SharedLockLost
+            };
+
+            if let Some(entry) = self.remove_by_token(&hint.key, pending.token) {
+                Self::finish_shared_wait(entry, wakeup_kind);
+            }
         }
     }
 
@@ -712,22 +961,61 @@ impl<L: LockManager> LockWaitQueues<L> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{Receiver, RecvTimeoutError, channel},
+        sync::{
+            Mutex,
+            mpsc::{Receiver, RecvTimeoutError, channel},
+        },
+        thread,
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
+        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, PessimisticLockResults,
+        StorageCallback,
         errors::SharedError,
         lock_manager::{MockLockManager, WaitTimeout, lock_wait_context::LockWaitContext},
         txn::ErrorInner as TxnErrorInner,
     };
 
+    const LOCK_UPGRADE_CONFLICT_METRIC: &str = "tikv_lock_upgrade_conflict_total";
+    static LOCK_UPGRADE_CONFLICT_METRIC_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn lock_upgrade_conflict_count(reason: &str) -> f64 {
+        for family in prometheus::gather() {
+            if family.get_name() != LOCK_UPGRADE_CONFLICT_METRIC {
+                continue;
+            }
+            for metric in family.get_metric() {
+                let has_reason = metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.get_name() == "reason" && label.get_value() == reason);
+                if has_reason {
+                    return metric.get_counter().get_value();
+                }
+            }
+        }
+        0.0
+    }
+
     struct TestLockWaitEntryHandle {
         token: LockWaitToken,
         wake_up_rx: Receiver<Result<PessimisticLockKeyResult, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
+    }
+
+    struct TestUpgradeWaitRequestHandle {
+        request_rx:
+            Receiver<crate::storage::Result<crate::storage::Result<PessimisticLockResults>>>,
+        cancel_cb: Box<dyn FnOnce()>,
+    }
+
+    fn upgrade_hint(key: &[u8], sole_holder_start_ts: u64) -> SharedLockUpgradeHint {
+        SharedLockUpgradeHint {
+            key: Key::from_raw(key),
+            sole_holder_start_ts: sole_holder_start_ts.into(),
+        }
     }
 
     impl TestLockWaitEntryHandle {
@@ -799,6 +1087,7 @@ mod tests {
                 is_first_lock: false,
                 lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
+                is_shared_lock_upgrade: false,
             };
 
             let key = Key::from_raw(key);
@@ -810,6 +1099,7 @@ mod tests {
                 parameters,
                 should_not_exist: false,
                 is_shared_lock: false,
+                is_lock_upgrade: false,
                 lock_wait_token: token,
                 req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
@@ -863,6 +1153,90 @@ mod tests {
             entry.is_shared_lock = shared;
             self.push_lock_wait(entry, lock_info_pb);
             handle
+        }
+
+        fn mock_upgrade_wait(
+            &self,
+            key: &[u8],
+            start_ts: impl Into<TimeStamp>,
+            encountered_lock_ts: impl Into<TimeStamp>,
+        ) -> TestLockWaitEntryHandle {
+            let start_ts = start_ts.into();
+            let mut lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
+            lock_info_pb.set_lock_type(kvrpcpb::Op::SharedLock);
+
+            let mut holder = self.make_lock_info_pb(key, start_ts);
+            holder.set_lock_type(kvrpcpb::Op::PessimisticLock);
+            lock_info_pb.set_shared_lock_infos(vec![holder].into());
+
+            let (mut entry, handle) =
+                self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
+            entry.is_lock_upgrade = true;
+            self.push_lock_wait(entry, lock_info_pb);
+            handle
+        }
+
+        fn mock_upgrade_wait_with_request_callback(
+            &self,
+            key: &[u8],
+            start_ts: impl Into<TimeStamp>,
+            encountered_lock_ts: impl Into<TimeStamp>,
+        ) -> TestUpgradeWaitRequestHandle {
+            let start_ts = start_ts.into();
+            let mut lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
+            lock_info_pb.set_lock_type(kvrpcpb::Op::SharedLock);
+
+            let mut holder = self.make_lock_info_pb(key, start_ts);
+            holder.set_lock_type(kvrpcpb::Op::PessimisticLock);
+            lock_info_pb.set_shared_lock_infos(vec![holder].into());
+
+            let token = self.inner.lock_mgr.allocate_token();
+            let (request_tx, request_rx) = channel();
+            let request_cb = StorageCallback::PessimisticLock(Box::new(move |res| {
+                request_tx.send(res).unwrap()
+            }));
+            let wait_ctx =
+                LockWaitContext::new(Key::from_raw(key), self.clone(), token, request_cb, false);
+            let cancel_cb = wait_ctx.get_callback_for_cancellation();
+            let cancel_lock_info = lock_info_pb.clone();
+            let cancel = move || {
+                cancel_cb(StorageError::from(TxnError::from(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(cancel_lock_info),
+                ))))
+            };
+            let key = Key::from_raw(key);
+            let lock_wait_entry = Box::new(LockWaitEntry {
+                key: key.clone(),
+                lock_hash: key.gen_hash(),
+                parameters: PessimisticLockParameters {
+                    pb_ctx: Default::default(),
+                    primary: key.to_raw().unwrap(),
+                    start_ts,
+                    lock_ttl: 1000,
+                    for_update_ts: start_ts,
+                    wait_timeout: Some(WaitTimeout::Default),
+                    return_values: false,
+                    min_commit_ts: 0.into(),
+                    check_existence: false,
+                    is_first_lock: false,
+                    lock_only_if_exists: false,
+                    allow_lock_with_conflict: false,
+                    is_shared_lock_upgrade: false,
+                },
+                should_not_exist: false,
+                is_shared_lock: false,
+                is_lock_upgrade: true,
+                lock_wait_token: token,
+                req_states: wait_ctx.get_shared_states().clone(),
+                legacy_wake_up_index: None,
+                key_cb: Some(SyncWrapper::new(wait_ctx.get_callback_for_blocked_key())),
+            });
+            assert!(self.push_lock_wait(lock_wait_entry, lock_info_pb));
+
+            TestUpgradeWaitRequestHandle {
+                request_rx,
+                cancel_cb: Box::new(cancel),
+            }
         }
 
         /// Pop an entry from the queue of the specified key, but do not create
@@ -950,6 +1324,13 @@ mod tests {
                 .get(&Key::from_raw(key))
                 .map_or(0, |v| v.queue.len())
         }
+
+        fn pending_upgrader(&self, key: &[u8]) -> Option<PendingUpgrader> {
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .and_then(|v| v.pending_upgrader)
+        }
     }
 
     impl LockWaitEntry {
@@ -984,6 +1365,47 @@ mod tests {
             )))) => {
                 assert_eq!(*conflict_start_ts, expect_conflict_start_ts.into());
                 assert_eq!(*conflict_commit_ts, expect_conflict_commit_ts.into());
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    fn expect_lock_upgrade_conflict(
+        err: &StorageError,
+        expect_start_ts: impl Into<TimeStamp>,
+        expect_owner_start_ts: impl Into<TimeStamp>,
+        expect_key: &[u8],
+        expect_reason: kvrpcpb::LockUpgradeConflictReason,
+    ) {
+        match &*err.0 {
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::LockUpgradeConflict {
+                    start_ts,
+                    owner_start_ts,
+                    key,
+                    reason,
+                },
+            )))) => {
+                assert_eq!(*start_ts, expect_start_ts.into());
+                assert_eq!(*owner_start_ts, expect_owner_start_ts.into());
+                assert_eq!(key, expect_key);
+                assert_eq!(*reason, expect_reason);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    fn expect_shared_lock_lost(
+        err: &StorageError,
+        expect_start_ts: impl Into<TimeStamp>,
+        expect_key: &[u8],
+    ) {
+        match &*err.0 {
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::SharedLockLost { start_ts, key },
+            )))) => {
+                assert_eq!(*start_ts, expect_start_ts.into());
+                assert_eq!(key, expect_key);
             }
             e => panic!("unexpected error: {:?}", e),
         }
@@ -1364,5 +1786,437 @@ mod tests {
         b.iter(|| {
             queues.update_lock_wait(lock_info.clone());
         });
+    }
+
+    #[test]
+    fn test_shared_readers_waiting_on_an_exclusive_holder_are_bounded() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"writer";
+        let blocker = queues.make_lock_info_pb(key, 1);
+        let mut handles = Vec::with_capacity(MAX_SHARED_LOCK_WAITERS);
+        for i in 0..MAX_SHARED_LOCK_WAITERS {
+            let (mut entry, handle) =
+                queues.make_mock_lock_wait_entry(key, (i + 2) as u64, blocker.clone());
+            entry.is_shared_lock = true;
+            assert!(queues.push_lock_wait(entry, blocker.clone()));
+            handles.push(handle);
+        }
+        let (mut entry, rejected) =
+            queues.make_mock_lock_wait_entry(key, u32::MAX as u64, blocker.clone());
+        entry.is_shared_lock = true;
+        assert!(!queues.push_lock_wait(entry, blocker));
+        assert!(matches!(
+            *rejected.wait_for_result().unwrap_err().0.0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert_eq!(queues.get_queue_length_of_key(key), MAX_SHARED_LOCK_WAITERS);
+    }
+
+    #[test]
+    fn test_refresh_growing_shared_holder_set_evicts_excess_waiters() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"grow";
+        let mut handles = Vec::new();
+        for i in 0..17 {
+            handles.push(queues.mock_lock_wait(key, 2000 + i, 10, false));
+        }
+        let upgrade = queues.mock_upgrade_wait_with_request_callback(key, 10, 20);
+        let mut info = queues.make_lock_info_pb(key, 0);
+        info.set_lock_type(kvrpcpb::Op::SharedLock);
+        info.set_shared_lock_infos(
+            (1..=1024)
+                .map(|ts| queues.make_lock_info_pb(key, ts))
+                .collect(),
+        );
+        queues.update_lock_wait(vec![info]);
+        let rejected = handles.pop().unwrap().wait_for_result().unwrap_err();
+        assert!(matches!(
+            *rejected.0.0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert!(matches!(
+            *upgrade
+                .request_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap_err()
+                .0,
+            StorageErrorInner::SharedLockWaitQueueFull
+        ));
+        assert_eq!(queues.entry_count(), 16);
+        assert!(!queues.has_pending_upgrader(&Key::from_raw(key)));
+        for handle in handles {
+            assert!(
+                queues
+                    .remove_by_token(&Key::from_raw(key), handle.token)
+                    .is_some()
+            );
+        }
+        assert!(queues.is_empty());
+    }
+
+    #[test]
+    fn test_shared_wait_capacity_rejects_only_new_waiters() {
+        for (key, holders, limit) in [
+            (b"hot".as_slice(), 1024, MAX_SHARED_LOCK_WAIT_EDGES / 1024),
+            (b"", 1, MAX_SHARED_LOCK_WAITERS),
+            (b"", 1024, MAX_SHARED_LOCK_WAIT_EDGES / 1024),
+        ] {
+            let queues = LockWaitQueues::new(MockLockManager::new());
+            let mut wrapper = queues.make_lock_info_pb(key, 0);
+            wrapper.set_lock_type(kvrpcpb::Op::SharedLock);
+            wrapper.set_shared_lock_infos(
+                (1..=holders)
+                    .map(|ts| queues.make_lock_info_pb(key, ts))
+                    .collect(),
+            );
+            let mut handles = Vec::new();
+            for i in 0..limit {
+                let (entry, handle) =
+                    queues.make_mock_lock_wait_entry(key, (2000 + i) as u64, wrapper.clone());
+                assert!(queues.push_lock_wait(entry, wrapper.clone()));
+                handles.push(handle);
+            }
+            let (entry, rejected) = queues.make_mock_lock_wait_entry(key, 5000, wrapper.clone());
+            assert!(!queues.push_lock_wait(entry, wrapper.clone()));
+            let err = rejected.wait_for_result().unwrap_err();
+            let region_error =
+                crate::storage::errors::extract_region_error_from_error(&err.0).unwrap();
+            assert_eq!(
+                region_error.get_server_is_busy().get_reason(),
+                "shared lock wait queue is full"
+            );
+            assert_eq!(queues.get_queue_length_of_key(key), limit);
+            queues
+                .remove_by_token(&Key::from_raw(key), handles.pop().unwrap().token)
+                .unwrap();
+            let (entry, _handle) = queues.make_mock_lock_wait_entry(key, 6000, wrapper.clone());
+            assert!(queues.push_lock_wait(entry, wrapper));
+            assert_eq!(queues.get_queue_length_of_key(key), limit);
+        }
+    }
+
+    #[test]
+    fn test_shared_lock_upgrade_second_upgrader_records_conflict_metric() {
+        let _metric_guard = LOCK_UPGRADE_CONFLICT_METRIC_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count_before = lock_upgrade_conflict_count("second_upgrader");
+        let queues = LockWaitQueues::new(MockLockManager::new());
+
+        let first = queues.mock_upgrade_wait(b"k-upgrade", 10, 5);
+        let second = queues.mock_upgrade_wait(b"k-upgrade", 20, 5);
+
+        assert_eq!(queues.get_queue_length_of_key(b"k-upgrade"), 1);
+        let pending = queues.pending_upgrader(b"k-upgrade").unwrap();
+        assert_eq!(pending.start_ts, 10.into());
+        assert_eq!(pending.token, first.token);
+
+        let err = second
+            .wait_for_result_timeout(Duration::from_secs(1))
+            .expect("second upgrader should not be queued")
+            .unwrap_err();
+        expect_lock_upgrade_conflict(
+            &err.0,
+            20,
+            10,
+            b"k-upgrade",
+            kvrpcpb::LockUpgradeConflictReason::SecondUpgrader,
+        );
+        assert_eq!(
+            lock_upgrade_conflict_count("second_upgrader"),
+            count_before + 1.0
+        );
+        assert!(
+            first
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_shared_lock_upgrade_duplicate_in_flight_records_conflict_metric() {
+        let _metric_guard = LOCK_UPGRADE_CONFLICT_METRIC_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count_before = lock_upgrade_conflict_count("duplicate_in_flight");
+        let queues = LockWaitQueues::new(MockLockManager::new());
+
+        let first = queues.mock_upgrade_wait(b"k-duplicate", 10, 5);
+        let duplicate = queues.mock_upgrade_wait(b"k-duplicate", 10, 5);
+
+        assert_eq!(queues.get_queue_length_of_key(b"k-duplicate"), 1);
+        let pending = queues.pending_upgrader(b"k-duplicate").unwrap();
+        assert_eq!(pending.start_ts, 10.into());
+        assert_eq!(pending.token, first.token);
+
+        let err = duplicate
+            .wait_for_result_timeout(Duration::from_secs(1))
+            .expect("duplicate upgrader should not be queued")
+            .unwrap_err();
+        expect_lock_upgrade_conflict(
+            &err.0,
+            10,
+            10,
+            b"k-duplicate",
+            kvrpcpb::LockUpgradeConflictReason::DuplicateInFlight,
+        );
+        assert_eq!(
+            lock_upgrade_conflict_count("duplicate_in_flight"),
+            count_before + 1.0
+        );
+        assert!(
+            first
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_delayed_notify_clears_pending_upgrader() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+
+        queues.mock_lock_wait(b"k-delayed-upgrader", 10, 5, false);
+        let upgrader = queues.mock_upgrade_wait(b"k-delayed-upgrader", 20, 5);
+
+        let (first, _delayed_notify) =
+            queues.must_pop_with_delayed_notify(b"k-delayed-upgrader", 5, 6);
+        first.check_start_ts(10);
+
+        // This waiter is newer than the delayed batch, so it keeps the key state alive.
+        queues.mock_lock_wait(b"k-delayed-upgrader", 30, 5, false);
+
+        let notify_id = queues.get_delayed_notify_id(b"k-delayed-upgrader").unwrap();
+        assert!(
+            queues
+                .delayed_notify_all(&Key::from_raw(b"k-delayed-upgrader"), notify_id)
+                .is_none()
+        );
+        expect_write_conflict(&upgrader.wait_for_result().unwrap_err().0, 5, 6);
+
+        assert!(queues.pending_upgrader(b"k-delayed-upgrader").is_none());
+
+        let fresh_upgrader = queues.mock_upgrade_wait(b"k-delayed-upgrader", 20, 5);
+        assert_eq!(queues.get_queue_length_of_key(b"k-delayed-upgrader"), 2);
+        let pending = queues.pending_upgrader(b"k-delayed-upgrader").unwrap();
+        assert_eq!(pending.start_ts, 20.into());
+        assert_eq!(pending.token, fresh_upgrader.token);
+        assert!(
+            fresh_upgrader
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_upgrade_hint_retries_matching_pending_upgrader() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let upgrader = queues.mock_upgrade_wait(b"k-matching-hint", 10, 5);
+
+        queues.consume_shared_lock_upgrade_hints(vec![upgrade_hint(b"k-matching-hint", 10)]);
+
+        let err = upgrader.wait_for_result().unwrap_err();
+        expect_write_conflict(&err.0, 0, 0);
+        assert!(queues.pending_upgrader(b"k-matching-hint").is_none());
+        assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_reader_registers_after_pending_upgrader_was_canceled() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"late-reader";
+        let upgrade = queues.mock_upgrade_wait(key, 10, 20);
+        let reader = queues.mock_lock_wait_with_shared(key, 30, 10, false, true);
+        upgrade.cancel();
+        queues.register_upgrader_blocked_reader(&Key::from_raw(key), reader.token);
+        expect_write_conflict(&reader.wait_for_result().unwrap_err().0, 0, 0);
+        assert!(queues.is_empty());
+    }
+
+    #[test]
+    fn test_cancel_upgrader_wakes_registered_reader_on_empty_key() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let mut shared_info = kvrpcpb::LockInfo::default();
+        shared_info.set_lock_type(kvrpcpb::Op::SharedLock);
+        for ts in [10u64, 20] {
+            let mut member = kvrpcpb::LockInfo::default();
+            member.set_lock_version(ts);
+            shared_info.mut_shared_lock_infos().push(member);
+        }
+        let mut upgrader_info = shared_info.clone();
+        upgrader_info.set_lock_version(20);
+        let (mut upgrader_entry, upgrade) =
+            queues.make_mock_lock_wait_entry(b"", 10, upgrader_info.clone());
+        upgrader_entry.is_lock_upgrade = true;
+        queues.push_lock_wait(upgrader_entry, upgrader_info);
+
+        let (mut reader_entry, reader) =
+            queues.make_mock_lock_wait_entry(b"", 30, shared_info.clone());
+        reader_entry.is_shared_lock = true;
+        queues.push_lock_wait(reader_entry, shared_info);
+        queues.register_upgrader_blocked_reader(&Key::from_raw(b""), reader.token);
+
+        upgrade.cancel();
+        expect_write_conflict(
+            &reader
+                .wait_for_result_timeout(Duration::from_secs(1))
+                .expect("registered reader on empty key should wake on upgrader cancellation")
+                .unwrap_err()
+                .0,
+            0,
+            0,
+        );
+        assert!(queues.is_empty());
+    }
+
+    #[test]
+    fn test_removed_upgrader_releases_slot_with_two_holders_left() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"three-holders";
+        let old = queues.mock_upgrade_wait(key, 10, 20);
+        let mut info = kvrpcpb::LockInfo::default();
+        info.set_key(key.to_vec());
+        info.set_lock_type(kvrpcpb::Op::SharedLock);
+        for ts in [20, 30] {
+            let mut member = kvrpcpb::LockInfo::default();
+            member.set_lock_version(ts);
+            info.mut_shared_lock_infos().push(member);
+        }
+        queues.update_lock_wait(vec![info]);
+        expect_shared_lock_lost(&old.wait_for_result().unwrap_err().0, 10, key);
+        assert!(!queues.has_pending_upgrader(&Key::from_raw(key)));
+        let next = queues.mock_upgrade_wait(key, 20, 30);
+        assert_eq!(queues.pending_upgrader(key).unwrap().token, next.token);
+    }
+
+    #[test]
+    fn test_upgrade_hint_aborts_mismatching_pending_upgrader() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let upgrader = queues.mock_upgrade_wait(b"k-mismatching-hint", 10, 5);
+
+        queues.consume_shared_lock_upgrade_hints(vec![upgrade_hint(b"k-mismatching-hint", 20)]);
+
+        let err = upgrader.wait_for_result().unwrap_err();
+        expect_shared_lock_lost(&err.0, 10, b"k-mismatching-hint");
+        assert!(queues.pending_upgrader(b"k-mismatching-hint").is_none());
+        assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_upgrade_hints_are_idempotent_and_preserve_other_waiters() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let first = queues.mock_lock_wait(b"k-idempotent-hint", 5, 1, false);
+        let upgrader = queues.mock_upgrade_wait(b"k-idempotent-hint", 10, 1);
+        let last = queues.mock_lock_wait(b"k-idempotent-hint", 20, 1, false);
+
+        queues.consume_shared_lock_upgrade_hints(vec![
+            upgrade_hint(b"k-idempotent-hint", 10),
+            upgrade_hint(b"k-idempotent-hint", 10),
+        ]);
+
+        let err = upgrader.wait_for_result().unwrap_err();
+        expect_write_conflict(&err.0, 0, 0);
+        assert_eq!(queues.entry_count(), 2);
+        assert_eq!(
+            queues
+                .must_pop(b"k-idempotent-hint", 30, 40)
+                .lock_wait_token,
+            first.token
+        );
+        assert_eq!(
+            queues
+                .must_pop(b"k-idempotent-hint", 30, 40)
+                .lock_wait_token,
+            last.token
+        );
+    }
+
+    #[test]
+    fn test_upgrade_hint_races_with_cancellation_by_exact_token() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let TestUpgradeWaitRequestHandle {
+            request_rx,
+            cancel_cb,
+        } = queues.mock_upgrade_wait_with_request_callback(b"k-cancel-hint", 10, 5);
+
+        cancel_cb();
+        queues.consume_shared_lock_upgrade_hints(vec![upgrade_hint(b"k-cancel-hint", 10)]);
+
+        let err = request_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cancellation should finish the request")
+            .unwrap_err();
+        assert!(matches!(
+            &*err.0,
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::KeyIsLocked(_),
+            ))))
+        ));
+        assert!(queues.pending_upgrader(b"k-cancel-hint").is_none());
+        assert_eq!(queues.entry_count(), 0);
+        assert!(queues.is_empty());
+
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let TestUpgradeWaitRequestHandle {
+            request_rx,
+            cancel_cb,
+        } = queues.mock_upgrade_wait_with_request_callback(b"k-cancel-hint", 10, 5);
+
+        queues.consume_shared_lock_upgrade_hints(vec![upgrade_hint(b"k-cancel-hint", 10)]);
+        cancel_cb();
+
+        let err = request_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("matching upgrade hint should finish the request")
+            .unwrap_err();
+        expect_write_conflict(&err, 0, 0);
+        assert!(matches!(
+            &*err.0,
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict {
+                    reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
+                    ..
+                },
+            ))))
+        ));
+        assert!(queues.pending_upgrader(b"k-cancel-hint").is_none());
+        assert_eq!(queues.entry_count(), 0);
+        assert!(queues.is_empty());
+    }
+
+    #[test]
+    fn test_upgrade_hint_callback_runs_without_queue_guard() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        let key = b"k-callback-hint";
+        let ordinary_waiter = queues.mock_lock_wait(key, 20, 5, false);
+        let mut current_lock = queues.make_lock_info_pb(key, 5);
+        current_lock.set_lock_type(kvrpcpb::Op::SharedLock);
+        let (mut entry, _unused_handle) =
+            queues.make_mock_lock_wait_entry(key, 10, current_lock.clone());
+        entry.is_lock_upgrade = true;
+
+        let callback_queues = queues.clone();
+        let (callback_tx, callback_rx) = channel();
+        entry.key_cb = Some(SyncWrapper::new(Box::new(move |result, _| {
+            let queue_len = callback_queues.get_queue_length_of_key(key);
+            callback_tx.send((queue_len, result)).unwrap();
+        })));
+        assert!(queues.push_lock_wait(entry, current_lock));
+
+        let consumer_queues = queues.clone();
+        let consumer = thread::spawn(move || {
+            consumer_queues.consume_shared_lock_upgrade_hints(vec![upgrade_hint(key, 10)]);
+        });
+        let (queue_len, result) = callback_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("callback should re-enter the same-key queue without deadlocking");
+        consumer.join().unwrap();
+
+        assert_eq!(queue_len, 1);
+        expect_write_conflict(&result.unwrap_err().0, 0, 0);
+        assert_eq!(
+            queues.must_pop(key, 30, 40).lock_wait_token,
+            ordinary_waiter.token
+        );
     }
 }

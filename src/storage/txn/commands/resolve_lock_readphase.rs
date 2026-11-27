@@ -153,6 +153,7 @@ mod tests {
         let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
         let lock_mgr = MockLockManager::new();
         let write_context = WriteContext {
+            lock_wait_queues: None,
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,
             extra_op: Default::default(),

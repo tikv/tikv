@@ -12,8 +12,9 @@ use std::{
 use collections::{HashMap, HashSet};
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
 use parking_lot::Mutex;
+use tikv_util::Either;
 use tracker::TrackerToken;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, LockInfoExt, TimeStamp};
 
 pub use crate::storage::lock_manager::lock_wait_context::CancellationCallback;
 use crate::{
@@ -43,6 +44,7 @@ pub struct DiagnosticContext {
     /// same statement) Currently it is the encoded SQL digest if the client
     /// is TiDB
     pub resource_group_tag: Vec<u8>,
+    pub requested_lock_mode: kvproto::deadlock::RequestedLockMode,
     /// The tracker is used to track and collect the lock wait details.
     pub tracker: TrackerToken,
 }
@@ -98,6 +100,24 @@ pub struct KeyLockWaitInfo {
     pub lock_digest: LockDigest,
     pub lock_info: LockInfo,
     pub allow_lock_with_conflict: bool,
+}
+
+impl KeyLockWaitInfo {
+    /// A shared wrapper has no owning transaction of its own. An upgrader
+    /// keeps its member, so that member is never an edge in the wait graph.
+    pub fn blocking_txns(&self, waiter: TimeStamp) -> impl Iterator<Item = TimeStamp> + '_ {
+        if self.lock_info.is_shared_lock() {
+            Either::Left(
+                self.lock_info
+                    .get_shared_lock_infos()
+                    .iter()
+                    .map(|holder| TimeStamp::new(holder.lock_version))
+                    .filter(move |ts| *ts != waiter),
+            )
+        } else {
+            Either::Right(std::iter::once(self.lock_digest.ts))
+        }
+    }
 }
 
 /// Uniquely identifies a lock-waiting request in a `LockManager`.

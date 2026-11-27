@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CF_LOCK;
 use tikv_util::Either;
 use txn_types::{Key, Lock, LockType, SharedLocks, TimeStamp, Write, WriteType};
 
@@ -8,7 +9,7 @@ use crate::storage::{
     mvcc::{self, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, SnapshotReader},
     txn::{
         self, Result as TxnResult,
-        actions::check_txn_status::{rollback_lock, rollback_shared_lock},
+        actions::check_txn_status::{rollback_lock, rollback_shared_member_record},
     },
 };
 
@@ -66,10 +67,9 @@ pub fn flashback_to_version_read_write(
 // `CF_LOCK`.
 pub fn rollback_locks(
     txn: &mut MvccTxn,
-    snapshot: impl Snapshot,
+    reader: &mut SnapshotReader<impl Snapshot>,
     key_locks: Vec<(Key, Either<Lock, SharedLocks>)>,
 ) -> TxnResult<Option<Key>> {
-    let mut reader = SnapshotReader::new(txn.start_ts, snapshot, false);
     for (key, lock_or_shared) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             return Ok(Some(key));
@@ -80,32 +80,61 @@ pub fn rollback_locks(
                 reader.start_ts = lock.ts;
                 rollback_lock(
                     txn,
-                    &mut reader,
+                    reader,
                     key.clone(),
                     &lock,
                     lock.is_pessimistic_txn(),
                     true,
                 )?;
             }
-            Either::Right(mut shared_locks) => {
-                // The `shared_locks` is built from read phase and only contains sub-locks
-                // to be rolled back (lock.ts != flashback_start_ts). Since
-                // flashback itself doesn't acquire shared locks, all sub-locks shall be
-                // rolled back in this step.
-                let timestamps: Vec<_> = shared_locks.iter_ts().cloned().collect();
-                for lock_ts in timestamps {
-                    reader.start_ts = lock_ts;
-                    rollback_shared_lock(
-                        txn,
-                        &mut reader,
-                        key.clone(),
-                        shared_locks.clone(),
-                        lock_ts,
-                        true,
-                    )?;
-                    // Synchronize local state so subsequent iterations pass the correct
-                    // shared_locks (with already-processed locks removed).
-                    let _ = shared_locks.remove_lock(&lock_ts);
+            Either::Right(batch) => {
+                // ScanLock paginates by member count. A batch can contain only
+                // a prefix of the holders on this key. Read the full wrapper
+                // under the write latch and keep members not in this batch.
+                let Some(Either::Right(mut holders)) = reader.load_lock(&key)? else {
+                    continue;
+                };
+                let mut wrapper_size = holders.estimated_encoded_size();
+                let key_size = CF_LOCK.len() + key.as_encoded().len();
+                let mut removed = false;
+                for ts in batch.iter_ts() {
+                    let Some((lock, member_size)) = holders
+                        .get_lock_with_size_bound(ts)
+                        .map_err(mvcc::Error::from)?
+                    else {
+                        continue;
+                    };
+                    wrapper_size -= member_size;
+                    reader.start_ts = *ts;
+                    // This helper only appends write CF modifications. Keep the previous
+                    // boundary so we can retry this member in the next Raft command.
+                    let previous_size = txn.write_size();
+                    let previous_modifies = txn.modifies.len();
+                    rollback_shared_member_record(txn, reader, &key, &lock, true)?;
+                    let remaining_size = if holders.len() == 1 { 0 } else { wrapper_size };
+                    let size = txn.write_size() + key_size + remaining_size;
+                    // A single indivisible member in an empty batch must make progress.
+                    if size > MAX_TXN_WRITE_SIZE && (previous_modifies != 0 || removed) {
+                        txn.modifies.truncate(previous_modifies);
+                        txn.write_size = previous_size;
+                        if removed {
+                            txn.put_remaining_shared_locks(key.clone(), holders);
+                        }
+                        return Ok(Some(key));
+                    }
+                    holders.discard_lock(ts);
+                    removed = true;
+                }
+                if !removed {
+                    continue;
+                }
+                // Only the final wrapper belongs in the Raft command; encoding
+                // every intermediate state would make the batch quadratic.
+                if holders.is_empty() {
+                    txn.unlock_key(key, true, TimeStamp::zero());
+                } else {
+                    txn.put_remaining_shared_locks(key.clone(), holders);
+                    return Ok(Some(key));
                 }
             }
         }
@@ -348,7 +377,10 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         Engine, TestEngineBuilder,
-        mvcc::tests::{must_get, must_get_none, write},
+        mvcc::tests::{
+            must_get, must_get_none, must_get_rollback_protected, must_load_shared_lock,
+            must_unlocked, write,
+        },
         txn::{
             actions::{
                 acquire_pessimistic_lock::tests::must_pessimistic_locked,
@@ -378,7 +410,9 @@ pub mod tests {
                 .unwrap();
         let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
-        rollback_locks(&mut txn, snapshot, key_locks).unwrap();
+        let mut reader = SnapshotReader::new(start_ts, snapshot, false);
+        reader.reader.set_allow_in_flashback(true);
+        rollback_locks(&mut txn, &mut reader, key_locks).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         rows
@@ -737,6 +771,52 @@ pub mod tests {
     }
 
     #[test]
+    fn test_flashback_preserves_shared_primaries_beyond_scan_limit() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"many-primaries";
+        let count = FLASHBACK_BATCH_SIZE as u64 + 1;
+        for ts in 1..=count {
+            must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, ts, 1000);
+        }
+        let flashback_ts = count + 1;
+        assert_eq!(
+            must_rollback_lock(&mut engine, key, flashback_ts),
+            FLASHBACK_BATCH_SIZE + 1
+        );
+        assert_eq!(must_load_shared_lock(&mut engine, key).len(), 1);
+        assert_eq!(must_rollback_lock(&mut engine, key, flashback_ts), 2);
+        must_unlocked(&mut engine, key);
+        for ts in 1..=count {
+            must_get_rollback_protected(&mut engine, key, ts, true);
+        }
+    }
+
+    #[test]
+    fn test_flashback_makes_progress_with_an_oversized_shared_wrapper() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = vec![b'p'; 1024];
+        let count = 40;
+        for ts in 1..=count {
+            must_acquire_shared_pessimistic_lock(&mut engine, &key, &key, ts, ts, 1000);
+        }
+        assert!(must_load_shared_lock(&mut engine, &key).to_bytes().len() > MAX_TXN_WRITE_SIZE);
+        // Each protected record repeats the long user key. Even a one-member
+        // rollback plus the surviving wrapper exceeds the target at first.
+        assert_eq!(must_rollback_lock(&mut engine, &key, count + 1), 2);
+        let mut remaining = count as usize - 1;
+        assert_eq!(must_load_shared_lock(&mut engine, &key).len(), remaining);
+        while remaining > 0 {
+            let rows = must_rollback_lock(&mut engine, &key, count + 1);
+            assert!(rows >= 2);
+            remaining -= rows - 1;
+        }
+        must_unlocked(&mut engine, &key);
+        for ts in 1..=count {
+            must_get_rollback_protected(&mut engine, &key, ts, true);
+        }
+    }
+
+    #[test]
     fn test_flashback_write_to_version_rollback_shared_locks() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k";
@@ -756,13 +836,8 @@ pub mod tests {
         must_acquire_shared_pessimistic_lock(&mut engine, k, pk2, 35, 35, 3000);
 
         // Flashback to version 17 with start_ts = 40, commit_ts = 45.
-        // This should rollback both shared locks:
-        // - Put 2 rollback records to write CF
-        // - Update shared_locks once (after first rollback, when one lock remains)
-        // - Delete the lock on `k` (after second rollback, when shared_locks becomes
-        //   empty)
-        // Total: 4 modifies
-        assert_eq!(must_rollback_lock(&mut engine, k, 40), 4);
+        // Two rollback records and one deletion of the shared wrapper.
+        assert_eq!(must_rollback_lock(&mut engine, k, 40), 3);
         assert_eq!(
             must_flashback_write_to_version(&mut engine, k, 17, 40, 45),
             1

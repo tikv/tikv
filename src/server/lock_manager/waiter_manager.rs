@@ -19,6 +19,7 @@ use futures::{
     task::{Context, Poll},
 };
 use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
+use smallvec::SmallVec;
 use tikv_util::{
     config::ReadableDuration,
     time::{InstantExt, duration_to_sec},
@@ -325,9 +326,8 @@ impl Waiter {
 }
 
 struct WaitTable {
-    // Map lock hash and ts to waiters.
-    // For compatibility.
-    wait_table: HashMap<(u64, TimeStamp), LockWaitToken>,
+    // Deadlock responses identify the transaction and key, not the request token.
+    wait_table: HashMap<(u64, TimeStamp), SmallVec<[LockWaitToken; 1]>>,
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
 }
@@ -354,20 +354,66 @@ impl WaitTable {
     /// the `token` is unique and doesn't exist in waiter manager currently.
     fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) {
         self.wait_table
-            .insert((waiter.wait_info.lock_digest.hash, waiter.start_ts), token);
+            .entry((waiter.wait_info.lock_digest.hash, waiter.start_ts))
+            .or_default()
+            .push(token);
         assert!(self.waiter_pool.insert(token, waiter).is_none());
     }
 
     fn take_waiter(&mut self, token: LockWaitToken) -> Option<Waiter> {
         let waiter = self.waiter_pool.remove(&token)?;
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        self.wait_table
-            .remove(&(waiter.wait_info.lock_digest.hash, waiter.start_ts));
+        let key = (waiter.wait_info.lock_digest.hash, waiter.start_ts);
+        let tokens = self.wait_table.get_mut(&key).unwrap();
+        tokens.retain(|t| *t != token);
+        if tokens.is_empty() {
+            self.wait_table.remove(&key);
+        }
         Some(waiter)
     }
 
     fn take_registered_edge(&mut self, token: LockWaitToken) -> Option<KeyLockWaitInfo> {
         self.waiter_pool.get_mut(&token)?.registered_edge.take()
+    }
+
+    /// Drops blockers still registered by another surviving waiter for the same
+    /// `(key_hash, start_ts)` so removing one duplicate token cannot erase a
+    /// DetectTable edge that an older waiter still needs.
+    fn filter_unshared_cleanup_edge(
+        &self,
+        start_ts: TimeStamp,
+        mut edge: KeyLockWaitInfo,
+    ) -> Option<KeyLockWaitInfo> {
+        let Some(tokens) = self.wait_table.get(&(edge.lock_digest.hash, start_ts)) else {
+            return Some(edge);
+        };
+        let is_covered = |blocker: TimeStamp| {
+            tokens.iter().any(|token| {
+                self.waiter_pool[token]
+                    .registered_edge
+                    .as_ref()
+                    .is_some_and(|other| other.blocking_txns(start_ts).any(|ts| ts == blocker))
+            })
+        };
+        if edge.lock_info.is_shared_lock() {
+            let shared: Vec<_> = edge
+                .lock_info
+                .take_shared_lock_infos()
+                .into_iter()
+                .filter(|holder| {
+                    let ts = TimeStamp::new(holder.lock_version);
+                    ts != start_ts && !is_covered(ts)
+                })
+                .collect();
+            if shared.is_empty() {
+                None
+            } else {
+                edge.lock_info.set_shared_lock_infos(shared.into());
+                Some(edge)
+            }
+        } else {
+            (!is_covered(edge.lock_digest.ts)).then_some(edge)
+        }
     }
 
     fn update_waiter(
@@ -380,14 +426,8 @@ impl WaitTable {
 
         assert_eq!(waiter.wait_info.key, update_event.wait_info.key);
 
-        // NOTE: `maybe_shared_lock_shrink` should be false currently. Because
-        // update_waiter is only triggered by UpdateWaitForEvent from
-        // LockWaitQueues::update_lock_wait, which is fed by `new_acquired_locks`.
-        // Shared-lock shrink (e.g. rollback/commit removing a sub-lock) writes
-        // SharedLocks with `is_new = false`, so it doesn't enter `new_locks`
-        // and thus won't emit update_wait_for events. However, if the production
-        // pipeline starts reporting shared-lock updates in the future, we should update
-        // the waiter even when the ts is unchanged.
+        // Removing a shared member changes the real blocker set even though
+        // the wrapper's digest still has the same timestamp.
         let maybe_shared_lock_shrink = waiter.wait_info.lock_info.is_shared_lock()
             && update_event.wait_info.lock_info.is_shared_lock();
         if !maybe_shared_lock_shrink
@@ -407,21 +447,34 @@ impl WaitTable {
         lock: LockDigest,
         waiter_ts: TimeStamp,
     ) -> Option<Waiter> {
-        let token = *self.wait_table.get(&(lock.hash, waiter_ts))?;
+        let tokens = self.wait_table.get(&(lock.hash, waiter_ts))?;
+        // A delayed detector response must still match a live blocker.
+        let token = tokens.iter().rev().copied().find(|token| {
+            self.waiter_pool[token]
+                .wait_info
+                .blocking_txns(waiter_ts)
+                .any(|ts| ts == lock.ts)
+        })?;
         self.take_waiter(token)
     }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.waiter_pool
             .values()
-            .map(|waiter| {
-                let mut wait_for_entry = WaitForEntry::default();
-                wait_for_entry.set_txn(waiter.start_ts.into_inner());
-                wait_for_entry.set_wait_for_txn(waiter.wait_info.lock_digest.ts.into_inner());
-                wait_for_entry.set_key_hash(waiter.wait_info.lock_digest.hash);
-                wait_for_entry.set_key(waiter.wait_info.key.to_raw().unwrap());
-                wait_for_entry.set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
-                wait_for_entry
+            .flat_map(|waiter| {
+                waiter
+                    .wait_info
+                    .blocking_txns(waiter.start_ts)
+                    .map(move |blocker| {
+                        let mut entry = WaitForEntry::default();
+                        entry.set_txn(waiter.start_ts.into_inner());
+                        entry.set_wait_for_txn(blocker.into_inner());
+                        entry.set_requested_lock_mode(waiter.diag_ctx.requested_lock_mode);
+                        entry.set_key_hash(waiter.wait_info.lock_digest.hash);
+                        entry.set_key(waiter.wait_info.key.to_raw().unwrap());
+                        entry.set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
+                        entry
+                    })
             })
             .collect()
     }
@@ -557,7 +610,10 @@ impl WaiterManager {
             let mut wait_table = wait_table.borrow_mut();
             if let Some(waiter) = wait_table.take_waiter(token) {
                 let start_ts = waiter.start_ts;
-                let edge = waiter.registered_edge.clone();
+                let edge = waiter
+                    .registered_edge
+                    .clone()
+                    .and_then(|edge| wait_table.filter_unshared_cleanup_edge(start_ts, edge));
                 let _wait_info = waiter.cancel_for_timeout();
                 if let Some(edge) = edge {
                     detector_scheduler.clean_up_wait_for(start_ts, edge);
@@ -579,7 +635,10 @@ impl WaiterManager {
             return;
         };
         let start_ts = waiter.start_ts;
-        let edge = waiter.registered_edge.clone();
+        let edge = waiter
+            .registered_edge
+            .clone()
+            .and_then(|edge| wait_table.filter_unshared_cleanup_edge(start_ts, edge));
         let _wait_info = waiter.cancel_for_finished();
         if let Some(edge) = edge {
             self.detector_scheduler.clean_up_wait_for(start_ts, edge);
@@ -596,15 +655,36 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, _diag_ctx)) = previous_wait_info {
-                if previous_wait_info.allow_lock_with_conflict {
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+                if previous_wait_info.lock_info.is_shared_lock()
+                    || event.wait_info.lock_info.is_shared_lock()
+                {
+                    if let Some(edge) =
+                        wait_table
+                            .take_registered_edge(event.token)
+                            .and_then(|edge| {
+                                wait_table.filter_unshared_cleanup_edge(event.start_ts, edge)
+                            })
+                    {
+                        self.detector_scheduler
+                            .clean_up_wait_for(event.start_ts, edge);
+                    }
+                    let waiter = wait_table.waiter_pool.get_mut(&event.token).unwrap();
+                    waiter.registered_edge = Some(event.wait_info.clone());
+                    self.detector_scheduler
+                        .detect(event.start_ts, event.wait_info, diag_ctx);
+                } else if previous_wait_info.allow_lock_with_conflict {
                     // First owner change: clean up the registered edge and do
                     // not Detect the new owner. Later changes are no-ops.
                     // A cycle that needs the new edge is invisible until this
                     // wait ends (capped by wait-for-lock-timeout) and retries.
                     if let Some(edge) = wait_table.take_registered_edge(event.token) {
-                        self.detector_scheduler
-                            .clean_up_wait_for(event.start_ts, edge);
+                        if let Some(edge) =
+                            wait_table.filter_unshared_cleanup_edge(event.start_ts, edge)
+                        {
+                            self.detector_scheduler
+                                .clean_up_wait_for(event.start_ts, edge);
+                        }
                         TASK_COUNTER_METRICS.drop_registered_edge.inc();
                     }
                 }
@@ -624,18 +704,28 @@ impl WaiterManager {
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
-        let waiter = self
-            .wait_table
-            .borrow_mut()
-            .take_waiter_by_lock_digest(lock, waiter_ts);
+        let (waiter, edge) = {
+            let mut wait_table = self.wait_table.borrow_mut();
+            match wait_table.take_waiter_by_lock_digest(lock, waiter_ts) {
+                Some(waiter) => {
+                    let edge = if waiter.wait_info.lock_info.is_shared_lock() {
+                        waiter.registered_edge.clone().and_then(|edge| {
+                            wait_table.filter_unshared_cleanup_edge(waiter_ts, edge)
+                        })
+                    } else {
+                        None
+                    };
+                    (Some(waiter), edge)
+                }
+                None => (None, None),
+            }
+        };
         if let Some(waiter) = waiter {
-            if waiter.wait_info.lock_info.is_shared_lock() {
+            if let Some(edge) = edge {
                 // When deadlock detected on a shared lock, some wait-for entries might have
                 // been registered to the detect table. So do clean up here to avoid those
                 // entries causing false-positive deadlock errors.
-                if let Some(edge) = waiter.registered_edge.clone() {
-                    self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
-                }
+                self.detector_scheduler.clean_up_wait_for(waiter_ts, edge);
             }
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
@@ -1027,6 +1117,61 @@ pub mod tests {
     }
 
     #[test]
+    fn test_delayed_deadlock_after_shared_to_exclusive_transition() {
+        let mut table = WaitTable::new(Arc::new(AtomicUsize::new(1)));
+        let token = LockWaitToken(Some(1));
+        let mut waiter = dummy_waiter(10.into(), 0.into(), 123);
+        waiter
+            .wait_info
+            .lock_info
+            .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+        for ts in [20, 30] {
+            let mut member = LockInfo::default();
+            member.set_lock_version(ts);
+            waiter
+                .wait_info
+                .lock_info
+                .mut_shared_lock_infos()
+                .push(member);
+        }
+        let current = dummy_waiter(10.into(), 20.into(), 123).wait_info;
+        table.add_waiter(token, waiter);
+        table
+            .update_waiter(
+                &UpdateWaitForEvent {
+                    token,
+                    start_ts: 10.into(),
+                    is_first_lock: false,
+                    wait_info: current,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        ts: 30.into(),
+                        hash: 123
+                    },
+                    10.into()
+                )
+                .is_none()
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        ts: 20.into(),
+                        hash: 123
+                    },
+                    10.into()
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
     fn test_wait_table_is_empty() {
         let waiter_count = Arc::new(AtomicUsize::new(0));
         let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
@@ -1102,6 +1247,61 @@ pub mod tests {
             }
         }
         assert!(wait_for_enties.is_empty());
+    }
+
+    #[test]
+    fn test_shared_wait_diagnostics_include_mode_and_other_blockers() {
+        let counter = Arc::new(AtomicUsize::new(1));
+        let mut table = WaitTable::new(counter);
+        let mut waiter = dummy_waiter(10.into(), 0.into(), 42);
+        waiter.diag_ctx.requested_lock_mode = kvproto::deadlock::RequestedLockMode::Upgrade;
+        waiter
+            .wait_info
+            .lock_info
+            .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+        waiter.wait_info.lock_info.set_shared_lock_infos(
+            [10, 20, 30]
+                .into_iter()
+                .map(|ts| LockInfo {
+                    lock_version: ts,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        table.add_waiter(LockWaitToken(Some(1)), waiter);
+        let entries = table.to_wait_for_entries();
+        assert_eq!(
+            entries.iter().map(|e| e.wait_for_txn).collect::<Vec<_>>(),
+            [20, 30]
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.get_requested_lock_mode()
+                    == kvproto::deadlock::RequestedLockMode::Upgrade)
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        hash: 42,
+                        ts: 40.into()
+                    },
+                    10.into()
+                )
+                .is_none()
+        );
+        assert!(
+            table
+                .take_waiter_by_lock_digest(
+                    LockDigest {
+                        hash: 42,
+                        ts: 20.into()
+                    },
+                    10.into()
+                )
+                .is_some()
+        );
     }
 
     fn start_waiter_manager(
@@ -1201,19 +1401,28 @@ pub mod tests {
                 hash: 20,
             },
         );
-        let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        scheduler.wait_for(
-            LockWaitToken(Some(1)),
-            1,
-            RegionEpoch::default(),
-            1,
-            waiter.start_ts,
-            waiter.wait_info,
-            WaitTimeout::Millis(1000),
-            waiter.cancel_callback,
-            DiagnosticContext::default(),
-            false,
-        );
+        let register = |token| {
+            let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
+            scheduler.wait_for(
+                token,
+                1,
+                RegionEpoch::default(),
+                1,
+                waiter.start_ts,
+                waiter.wait_info,
+                WaitTimeout::Millis(1000),
+                waiter.cancel_callback,
+                DiagnosticContext::default(),
+                false,
+            );
+            (lock_info, f)
+        };
+        let (lock_info, f) = register(LockWaitToken(Some(1)));
+        let duplicate = LockWaitToken(Some(2));
+        let (_, evicted) = register(duplicate);
+        scheduler.remove_lock_wait(duplicate);
+        // Eviction finishes the newer wait without canceling the older request.
+        block_on(evicted).unwrap_err();
         scheduler.deadlock(waiter_ts, b"foo".to_vec(), lock, 30, vec![]);
         assert_elapsed(
             || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, &[]),
@@ -1611,5 +1820,48 @@ pub mod tests {
         wait_for_counts(&counters, 0, 0);
         worker.stop().unwrap();
         counters.detect_worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_filter_unshared_cleanup_edge_preserves_shared_overlap() {
+        let mut table = WaitTable::new(Arc::new(AtomicUsize::new(2)));
+        let make_shared_waiter = |holders: &[u64]| {
+            let mut waiter = dummy_waiter(10.into(), 0.into(), 42);
+            waiter
+                .wait_info
+                .lock_info
+                .set_lock_type(kvproto::kvrpcpb::Op::SharedLock);
+            waiter.wait_info.lock_info.set_shared_lock_infos(
+                holders
+                    .iter()
+                    .map(|&ts| LockInfo {
+                        lock_version: ts,
+                        ..Default::default()
+                    })
+                    .collect(),
+            );
+            waiter.registered_edge = Some(waiter.wait_info.clone());
+            waiter
+        };
+        table.add_waiter(LockWaitToken(Some(1)), make_shared_waiter(&[20, 30]));
+        table.add_waiter(LockWaitToken(Some(2)), make_shared_waiter(&[20, 40]));
+
+        let removed = table.take_waiter(LockWaitToken(Some(2))).unwrap();
+        let filtered = table
+            .filter_unshared_cleanup_edge(10.into(), removed.registered_edge.unwrap())
+            .unwrap();
+        assert_eq!(
+            filtered.blocking_txns(10.into()).collect::<Vec<_>>(),
+            vec![TimeStamp::new(40)]
+        );
+
+        let last = table.take_waiter(LockWaitToken(Some(1))).unwrap();
+        let filtered = table
+            .filter_unshared_cleanup_edge(10.into(), last.registered_edge.unwrap())
+            .unwrap();
+        assert_eq!(
+            filtered.blocking_txns(10.into()).collect::<Vec<_>>(),
+            vec![TimeStamp::new(20), TimeStamp::new(30)]
+        );
     }
 }

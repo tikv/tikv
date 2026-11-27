@@ -247,6 +247,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             lock_info: vec![],
             released_locks,
             new_acquired_locks,
+            shared_lock_upgrade_hints: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
             known_txn_status: write_result_known_txn_status,
@@ -294,6 +295,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
+                    lock_wait_queues: None,
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
@@ -333,6 +335,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
+                        lock_wait_queues: None,
                         lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),

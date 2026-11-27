@@ -15,6 +15,189 @@ pub use testsuite::*;
 use tikv_util::store::new_peer;
 
 #[test]
+fn test_shared_primary_does_not_pin_region_resolved_ts() {
+    let mut suite = TestSuite::new(1);
+    suite.run();
+    let region = suite.cluster.get_region(&[]);
+    let ctx = suite.get_context(region.id);
+    let client = suite.get_tikv_client(region.id).clone();
+    let key = b"shared-primary";
+    let t = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut acquire = PessimisticLockRequest::default();
+    acquire.set_context(ctx.clone());
+    acquire.set_mutations(
+        vec![test_raftstore::new_mutation(
+            Op::SharedPessimisticLock,
+            key,
+            b"",
+        )]
+        .into(),
+    );
+    acquire.primary_lock = key.to_vec();
+    acquire.start_version = t.into_inner();
+    acquire.for_update_ts = t.into_inner();
+    acquire.lock_ttl = 3000;
+    let resp = client.kv_pessimistic_lock(&acquire).unwrap();
+    assert!(
+        !resp.has_region_error() && resp.errors.is_empty(),
+        "{resp:?}"
+    );
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
+
+    test_raftstore::must_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![test_raftstore::new_mutation(Op::SharedLock, key, b"")],
+        vec![PrewriteRequestPessimisticAction::DoPessimisticCheck],
+        key.to_vec(),
+        t.into_inner(),
+        t.into_inner(),
+        false,
+        false,
+    );
+    let later = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_get_rts_ge(region.id, later);
+    assert!(
+        test_raftstore::must_check_txn_status(
+            &client,
+            ctx,
+            key,
+            t.into_inner(),
+            0,
+            later.into_inner()
+        )
+        .lock_ttl
+            > 0
+    );
+    suite.stop();
+}
+
+#[test]
+fn test_shared_members_batch_resolve_and_foreign_rollback() {
+    let mut suite = TestSuite::new(1);
+    suite.run();
+    let region = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(region);
+    let client = suite.get_tikv_client(region).clone();
+    let pd = suite.cluster.pd_client.clone();
+    let tso = || block_on(pd.get_tso()).unwrap();
+    suite.must_get_rts_ge(region, tso());
+    let key = b"shared";
+    let mut resolve = ResolveLockRequest::default();
+    resolve.set_context(ctx.clone());
+    for _ in 0..2 {
+        let ts = tso().into_inner();
+        let mut acquire = PessimisticLockRequest::default();
+        acquire.set_context(ctx.clone());
+        acquire.set_mutations(
+            vec![test_raftstore::new_mutation(
+                Op::SharedPessimisticLock,
+                key,
+                b"",
+            )]
+            .into(),
+        );
+        acquire.primary_lock = key.to_vec();
+        acquire.start_version = ts;
+        acquire.for_update_ts = ts;
+        acquire.lock_ttl = 3000;
+        let resp = client.kv_pessimistic_lock(&acquire).unwrap();
+        assert!(
+            !resp.has_region_error() && resp.errors.is_empty(),
+            "{resp:?}"
+        );
+        test_raftstore::must_kv_prewrite_with(
+            &client,
+            ctx.clone(),
+            vec![test_raftstore::new_mutation(Op::SharedLock, key, b"")],
+            vec![PrewriteRequestPessimisticAction::DoPessimisticCheck],
+            key.to_vec(),
+            ts,
+            ts,
+            false,
+            false,
+        );
+        resolve.mut_txn_infos().push(TxnInfo {
+            txn: ts,
+            ..Default::default()
+        });
+    }
+    let resp = client.kv_resolve_lock(&resolve).unwrap();
+    assert!(!resp.has_region_error() && !resp.has_error(), "{resp:?}");
+    let mut inspect = MvccGetByKeyRequest::default();
+    inspect.set_context(ctx);
+    inspect.key = key.to_vec();
+    let versions = client.mvcc_get_by_key(&inspect).unwrap();
+    assert!(
+        !versions.has_region_error() && versions.error.is_empty(),
+        "{versions:?}"
+    );
+    let info = versions.get_info();
+    assert!(!info.has_lock());
+    for txn in resolve.get_txn_infos() {
+        assert!(
+            info.get_writes()
+                .iter()
+                .any(|w| w.start_ts == txn.txn && w.get_type() == Op::Rollback)
+        );
+    }
+    suite.must_get_rts_ge(region, tso());
+
+    let data = b"data";
+    let start = tso();
+    suite.must_kv_prewrite(
+        region,
+        vec![test_raftstore::new_mutation(Op::Put, data, b"value")],
+        data.to_vec(),
+        start,
+        false,
+    );
+    suite.must_kv_rollback(region, vec![data.to_vec()], tso());
+    let applied = suite.cluster.apply_state(region, 1).applied_index;
+    let candidate = tso();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        suite.must_schedule_task(
+            1,
+            Task::ResolvedTsAdvanced {
+                regions: vec![region],
+                ts: candidate,
+                ts_source: resolved_ts::TsSource::PdTso,
+            },
+        );
+        let (tx, rx) = channel();
+        suite.must_schedule_task(
+            1,
+            Task::GetDiagnosisInfo {
+                region_id: region,
+                log_locks: false,
+                min_start_ts: 0,
+                callback: Box::new(move |state| tx.send(state).unwrap()),
+            },
+        );
+        let (_, resolved, index, locks, _) =
+            rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        if index >= applied {
+            assert_eq!(locks, 1);
+            assert!(resolved < candidate.into_inner());
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "observer did not apply rollback"
+        );
+        sleep_ms(10);
+    }
+    let commit = tso();
+    suite.must_kv_commit(region, vec![data.to_vec()], start, commit);
+    suite.must_get_rts_ge(region, commit);
+    suite.stop();
+}
+
+#[test]
 fn test_resolved_ts_basic() {
     let mut suite = TestSuite::new(1);
     suite.run();
