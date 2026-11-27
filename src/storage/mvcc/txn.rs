@@ -154,9 +154,9 @@ impl MvccTxn {
         if is_new {
             self.new_locks
                 .push(shared_locks.clone().into_lock_info(key.to_raw().unwrap()));
-            self.write_size += key.as_encoded().len() + value.len();
         }
         let write = Modify::Put(CF_LOCK, key, value);
+        self.write_size += write.size();
         self.modifies.push(write);
     }
 
@@ -1819,8 +1819,8 @@ pub(crate) mod tests {
             txn.put_shared_locks(key.clone(), &shared_locks, false);
 
             assert!(txn.new_locks.is_empty());
-            assert_eq!(txn.write_size(), 0);
             assert_eq!(txn.modifies.len(), 1);
+            assert_eq!(txn.write_size(), txn.modifies[0].size());
         }
 
         // Test 3: put_shared_locks with new SharedLocks

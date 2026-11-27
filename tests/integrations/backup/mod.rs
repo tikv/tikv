@@ -66,6 +66,140 @@ fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvpro
 }
 
 #[test]
+fn test_snapshot_backup_reports_data_secondary_of_shared_primary() {
+    use test_raftstore::{
+        must_check_txn_status, must_kv_commit, must_kv_prewrite_with, must_kv_read_equal,
+        new_mutation,
+    };
+    let mut suite = TestSuite::new(1, 144 * 1024 * 1024, ApiVersion::V1);
+    let root = Builder::new().tempdir().unwrap();
+    let p = b"primary";
+    let q = b"secondary-commit";
+    let r = b"secondary-rollback";
+    let ctx = suite.context.clone();
+    let client = suite.tikv_cli.clone();
+    let acquire = |ts: u64, data: &[u8]| {
+        let mut req = PessimisticLockRequest::default();
+        req.set_context(ctx.clone());
+        req.set_start_version(ts);
+        req.set_for_update_ts(ts);
+        req.set_lock_ttl(3000);
+        req.set_primary_lock(p.to_vec());
+        req.set_mutations(
+            vec![
+                new_mutation(Op::SharedPessimisticLock, p, b""),
+                new_mutation(Op::PessimisticLock, data, b""),
+            ]
+            .into(),
+        );
+        let response = client.kv_pessimistic_lock(&req).unwrap();
+        assert!(
+            !response.has_region_error() && response.errors.is_empty(),
+            "{response:?}"
+        );
+    };
+    let prepare = |ts: u64, data: &[u8]| {
+        must_kv_prewrite_with(
+            &client,
+            ctx.clone(),
+            vec![
+                new_mutation(Op::SharedLock, p, b""),
+                new_mutation(Op::Put, data, b"value"),
+            ],
+            vec![PrewriteRequestPessimisticAction::DoPessimisticCheck; 2],
+            p.to_vec(),
+            ts,
+            ts,
+            false,
+            false,
+        );
+    };
+    let backup = |suite: &TestSuite, version: TimeStamp| {
+        let rx = suite.backup(
+            vec![],
+            vec![],
+            0.into(),
+            version,
+            &make_unique_dir(root.path()),
+        );
+        let mut responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 1, "{responses:?}");
+        responses.pop().unwrap()
+    };
+    let resolve = |lock: &LockInfo, commit_ts| {
+        let mut req = ResolveLockRequest::default();
+        req.set_context(ctx.clone());
+        req.set_start_version(lock.lock_version);
+        req.set_commit_version(commit_ts);
+        req.set_keys(vec![lock.key.clone()].into());
+        let resp = client.kv_resolve_lock(&req).unwrap();
+        assert!(!resp.has_region_error() && !resp.has_error(), "{resp:?}");
+    };
+
+    let t = suite.alloc_ts().into_inner();
+    let u = suite.alloc_ts().into_inner();
+    acquire(t, q);
+    acquire(u, r);
+    let version = suite.alloc_ts();
+    let resp = backup(&suite, version);
+    assert!(!resp.has_error() && resp.files.is_empty(), "{resp:?}");
+
+    prepare(t, q);
+    let version = suite.alloc_ts();
+    let resp = backup(&suite, version);
+    let lock = resp.get_error().get_kv_error().get_locked();
+    assert_eq!(
+        (&lock.key[..], &lock.primary_lock[..], lock.lock_version),
+        (&q[..], &p[..], t)
+    );
+    let active = must_check_txn_status(
+        &client,
+        ctx.clone(),
+        &lock.primary_lock,
+        t,
+        0,
+        version.into_inner(),
+    );
+    assert!(active.lock_ttl > 0);
+    let commit = suite.alloc_ts().into_inner();
+    must_kv_commit(&client, ctx.clone(), vec![p.to_vec()], t, commit, commit);
+    let status = must_check_txn_status(&client, ctx.clone(), &lock.primary_lock, t, 0, commit);
+    assert_eq!(status.commit_version, commit);
+    resolve(lock, status.commit_version);
+
+    prepare(u, r);
+    let version = suite.alloc_ts();
+    let resp = backup(&suite, version);
+    let lock = resp.get_error().get_kv_error().get_locked();
+    assert_eq!(
+        (&lock.key[..], &lock.primary_lock[..], lock.lock_version),
+        (&r[..], &p[..], u)
+    );
+    let expired = TimeStamp::compose(TimeStamp::new(u).physical() + 3001, 0).into_inner();
+    let status = must_check_txn_status(&client, ctx.clone(), &lock.primary_lock, u, 0, expired);
+    assert_eq!(status.action, Action::TtlExpireRollback);
+    assert_eq!(status.commit_version, 0);
+    resolve(lock, status.commit_version);
+    assert_eq!(
+        must_check_txn_status(&client, ctx.clone(), p, t, 0, expired).commit_version,
+        commit
+    );
+
+    let version = suite.alloc_ts();
+    let resp = backup(&suite, version);
+    assert!(!resp.has_error(), "{resp:?}");
+    assert_eq!(resp.files.iter().map(|file| file.total_kvs).sum::<u64>(), 1);
+    must_kv_read_equal(
+        &client,
+        ctx,
+        q.to_vec(),
+        b"value".to_vec(),
+        version.into_inner(),
+    );
+    suite.stop();
+}
+
+#[test]
 fn test_backup_and_import() {
     let mut suite = TestSuite::new(3, 144 * 1024 * 1024, ApiVersion::V1);
     // 3 version for each key.

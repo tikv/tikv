@@ -885,7 +885,7 @@ impl SharedLocks {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(self.pre_allocate_size());
+        let mut b = Vec::with_capacity(self.estimated_encoded_size());
         b.push(LockType::Shared.to_u8());
         if !self.flags.is_empty() {
             b.push(SHARED_LOCK_FLAGS_PREFIX);
@@ -902,7 +902,8 @@ impl SharedLocks {
         b
     }
 
-    fn pre_allocate_size(&self) -> usize {
+    /// Upper bound for the serialized wrapper, including every member.
+    pub fn estimated_encoded_size(&self) -> usize {
         1 // lock type
             + if !self.flags.is_empty() {
                 2 // SHARED_LOCK_FLAGS_PREFIX + flags byte
@@ -914,14 +915,38 @@ impl SharedLocks {
             + self
                 .txn_info_segments
                 .values()
-                .map(|lock| {
-                    MAX_VAR_I64_LEN
-                        + match lock {
-                            Either::Left(v) => v.len(),
-                            Either::Right(l) => l.pre_allocate_size(),
-                        }
-                })
+                .map(Self::segment_size_bound)
                 .sum::<usize>()
+    }
+
+    /// Read a member and its contribution to `estimated_encoded_size` without
+    /// replacing its stored bytes. A deferred member can then be copied
+    /// verbatim.
+    pub fn get_lock_with_size_bound(
+        &self,
+        ts: &TimeStamp,
+    ) -> Result<Option<(Cow<'_, Lock>, usize)>> {
+        let Some(segment) = self.txn_info_segments.get(ts) else {
+            return Ok(None);
+        };
+        let lock = match segment {
+            Either::Left(encoded) => Cow::Owned(Lock::parse(encoded)?),
+            Either::Right(lock) => Cow::Borrowed(lock),
+        };
+        Ok(Some((lock, Self::segment_size_bound(segment))))
+    }
+
+    /// Drop a member whose contents have already been read.
+    pub fn discard_lock(&mut self, ts: &TimeStamp) {
+        self.txn_info_segments.remove(ts);
+    }
+
+    fn segment_size_bound(segment: &Either<Vec<u8>, Lock>) -> usize {
+        MAX_VAR_I64_LEN
+            + match segment {
+                Either::Left(v) => v.len(),
+                Either::Right(l) => l.pre_allocate_size(),
+            }
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
@@ -1401,7 +1426,7 @@ mod tests {
                 (Either::Right(mut l), Either::Right(lock)) => {
                     l.parse_all();
                     assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
-                    assert!(lock.pre_allocate_size() >= v.len());
+                    assert!(lock.estimated_encoded_size() >= v.len());
                 }
                 (l, lock) => panic!("#{} mismatch: parsed={:?}, expected={:?}", i, l, lock),
             }

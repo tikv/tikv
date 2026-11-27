@@ -145,9 +145,21 @@ High-risk contracts:
   scheduler.
 - MVCC readers and writers must preserve lock, write, and default-CF
   relationships.
-- `CheckTxnStatus` must check whether a shared lock belongs to the queried
-  transaction before rejecting it as an invalid primary. Unrelated shared
-  holders must not hide that transaction's commit or rollback record.
+- A shared primary belongs to one transaction identified by its start
+  timestamp. Heartbeat, status checks, and TTL rollback update only that
+  member. Resolving an expired pessimistic member for a pessimistic secondary
+  removes the member without deciding the transaction. Resolving a prewritten
+  secondary checks its named primary and protects the rollback on expiry.
+  A terminal write takes precedence over a stale member.
+- Shared pessimistic lock acquisition honors lock-only-if-exists before inserting
+  a holder. Replaying a locking read on its own member returns the requested
+  value or existence at the request's for-update timestamp. A newer for-update
+  timestamp may change the member's primary and preserves its acknowledged
+  TTL and minimum commit timestamp.
+- Flashback rollback reads the full shared wrapper in the prepared region.
+  A partial batch persists remaining holders and resumes at the same key.
+  Its write budget includes the surviving wrapper and rollback records. An
+  indivisible member and its remaining wrapper can exceed the batch target.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

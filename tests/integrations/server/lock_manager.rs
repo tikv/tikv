@@ -95,7 +95,12 @@ fn kv_shared_pessimistic_lock(
     client.kv_pessimistic_lock(&req).unwrap()
 }
 
-fn must_kv_shared_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+pub(super) fn must_kv_shared_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    key: Vec<u8>,
+    ts: u64,
+) {
     let resp = kv_shared_pessimistic_lock(client, ctx.clone(), vec![key], ts, ts);
     assert!(
         !resp.has_region_error(),
