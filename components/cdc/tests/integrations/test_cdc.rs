@@ -113,6 +113,76 @@ fn test_shared_read_does_not_pin_cdc_resolved_ts() {
 }
 
 #[test]
+fn test_foreign_rollback_keeps_data_prewrite_pinning_cdc() {
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
+    let req = suite.new_changedata_request(1);
+    let (mut tx, _stream, recv) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(tx.send((req, WriteFlags::default()))).unwrap();
+    assert_eq!(
+        recv(false).get_events()[0].get_entries().entries[0].get_type(),
+        EventLogType::Initialized
+    );
+    let key = b"active";
+    let start = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(
+        1,
+        vec![new_mutation(Op::Put, key, b"value")],
+        key.to_vec(),
+        start,
+    );
+    let foreign = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_rollback(1, vec![key.to_vec()], foreign);
+    let mut rows = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        assert!(std::time::Instant::now() < deadline);
+        let event = recv(true);
+        for region in event.get_events() {
+            assert!(!region.has_error(), "{region:?}");
+            for row in region.get_entries().get_entries() {
+                rows.push((row.get_type(), row.start_ts));
+            }
+        }
+        if rows.len() >= 2 && event.has_resolved_ts() {
+            assert!(event.get_resolved_ts().ts < foreign.into_inner());
+            break;
+        }
+    }
+    assert_eq!(
+        rows,
+        [
+            (EventLogType::Prewrite, start.into_inner()),
+            (EventLogType::Rollback, foreign.into_inner())
+        ]
+    );
+    let commit = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start, commit);
+    let mut committed = false;
+    loop {
+        assert!(std::time::Instant::now() < deadline);
+        let event = recv(true);
+        for region in event.get_events() {
+            for row in region.get_entries().get_entries() {
+                assert_eq!(
+                    (row.get_type(), row.start_ts, row.commit_ts),
+                    (
+                        EventLogType::Commit,
+                        start.into_inner(),
+                        commit.into_inner()
+                    )
+                );
+                committed = true;
+            }
+        }
+        if event.get_resolved_ts().ts >= commit.into_inner() {
+            break;
+        }
+    }
+    assert!(committed);
+    suite.stop();
+}
+
+#[test]
 fn test_cdc_basic() {
     test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
 }

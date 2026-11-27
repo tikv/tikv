@@ -298,6 +298,37 @@ mod all {
         );
     }
 
+    #[test]
+    fn foreign_rollback_keeps_data_prewrite_pinning_checkpoint() {
+        let task = "foreign_rollback";
+        let mut suite = SuiteBuilder::new_named(task).nodes(1).build();
+        suite.must_register_task(1, task);
+        suite.sync();
+        let key = make_record_key(1, 42);
+        let start = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(key.clone(), b"value".to_vec())],
+            key.clone(),
+            start,
+        );
+        let ctx = suite.get_context(1);
+        let foreign = suite.tso();
+        test_raftstore::must_kv_rollback(
+            suite.get_tikv_client(1),
+            ctx,
+            vec![key.clone()],
+            foreign.into_inner(),
+        );
+        run_async_test(suite.force_flush_files_and_wait(task));
+        assert_eq!(suite.global_checkpoint(), start.into_inner());
+        let commit = suite.tso();
+        suite.must_kv_commit(1, vec![key], start, commit);
+        run_async_test(suite.force_flush_files_and_wait(task));
+        assert!(suite.global_checkpoint() >= commit.into_inner());
+        suite.cluster.shutdown();
+    }
+
     async fn collect_all_current<T>(
         mut s: impl Stream<Item = T> + Unpin,
         max_gap: Duration,
