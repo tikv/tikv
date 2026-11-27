@@ -139,6 +139,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     shared_locks,
                     self.current_ts,
                     self.caller_start_ts,
+                    self.resolving_pessimistic_lock,
+                    self.verify_is_primary,
+                    self.rollback_if_not_exist,
                 )?
             }
             l => {
@@ -202,11 +205,11 @@ pub mod tests {
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
-        ProcessResult, TestEngineBuilder,
+        ProcessResult, Statistics, TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc,
-        mvcc::{ErrorInner, tests::*},
+        mvcc::{ErrorInner, metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC as COUNTERS, tests::*},
         txn::{
             self,
             actions::acquire_pessimistic_lock::tests::acquire_pessimistic_lock_allow_lock_with_conflict,
@@ -228,7 +231,8 @@ pub mod tests {
         force_sync_commit: bool,
         resolving_pessimistic_lock: bool,
         status_pred: impl FnOnce(TxnStatus) -> bool,
-    ) {
+    ) -> Statistics {
+        let mut statistics = Statistics::default();
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
@@ -253,7 +257,7 @@ pub mod tests {
                     lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
-                    statistics: &mut Default::default(),
+                    statistics: &mut statistics,
                     async_apply_prewrite: false,
                     raw_ext: None,
                     txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
@@ -271,6 +275,7 @@ pub mod tests {
             unreachable!();
         }
         write(engine, &ctx, result.to_be_write.modifies);
+        statistics
     }
 
     pub fn must_err<E: Engine>(
@@ -1270,51 +1275,182 @@ pub mod tests {
     }
 
     #[test]
-    fn test_shared_primary_expiration_is_protected() {
+    fn test_shared_primary_pessimistic_expiration() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"shared-primary";
-        let ts1 = TimeStamp::compose(10, 0);
-        let ts2 = TimeStamp::compose(20, 0);
-        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts1, ts1, 100);
-        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts2, ts2, 200);
+        let ts = TimeStamp::compose(10, 0);
+        let sibling = ts.next();
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, ts, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, sibling, sibling, 200);
+        let before = COUNTERS.pessimistic_rollback.get();
         must_success(
             &mut engine,
             key,
-            ts1,
-            TimeStamp::zero(),
-            TimeStamp::compose(50, 0),
-            true,
-            false,
-            true,
-            |s| matches!(s, TxnStatus::Uncommitted { .. }),
-        );
-        must_success(
-            &mut engine,
-            key,
-            ts1,
-            TimeStamp::zero(),
+            ts,
+            0,
             TimeStamp::compose(111, 0),
             true,
             false,
             true,
-            |s| matches!(s, TxnStatus::TtlExpire),
+            pessimistic_rollback(),
         );
-        must_get_rollback_protected(&mut engine, key, ts1, true);
-        let mut shared = must_load_shared_lock(&mut engine, key);
-        assert_eq!(shared.len(), 1);
-        assert!(shared.get_lock(&ts2).unwrap().is_some());
+        assert!(COUNTERS.pessimistic_rollback.get() > before);
+        must_get_rollback_ts_none(&mut engine, key, ts);
+        let holders = must_load_shared_lock(&mut engine, key);
+        assert_eq!(holders.len(), 1);
+        assert!(holders.contains_start_ts(sibling));
+    }
+
+    #[test]
+    fn test_shared_primary_expiration_is_protected() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-primary";
+        let ts = TimeStamp::compose(10, 0);
+        let sibling = ts.next();
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, ts, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, sibling, sibling, 200);
+        let before = COUNTERS.rollback.get();
         must_success(
             &mut engine,
             key,
-            ts1,
-            TimeStamp::zero(),
-            TimeStamp::compose(112, 0),
+            ts,
+            0,
+            TimeStamp::compose(111, 0),
+            true,
+            false,
+            false,
+            ttl_expire(),
+        );
+        assert!(COUNTERS.rollback.get() > before);
+        must_get_rollback_protected(&mut engine, key, ts, true);
+        let holders = must_load_shared_lock(&mut engine, key);
+        assert_eq!(holders.len(), 1);
+        assert!(holders.contains_start_ts(sibling));
+    }
+
+    #[test]
+    fn test_shared_primary_status_scans_newer_commits_once() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"primary";
+        let ts = TimeStamp::from(10);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, ts, ts, 100);
+        // Model a prewritten shared primary with an overlapping commit and newer
+        // history.
+        let mut holders = must_load_shared_lock(&mut engine, key);
+        let mut lock = holders.get_lock(&ts).unwrap().unwrap().clone();
+        lock.lock_type = txn_types::LockType::Lock;
+        lock.min_commit_ts = ts.next();
+        holders.update_lock(lock).unwrap();
+        let key_enc = Key::from_raw(key);
+        let mut txn = MvccTxn::new(ts, ConcurrencyManager::new_for_test(ts));
+        txn.put_shared_locks(key_enc.clone(), &holders, false);
+        for commit in 10..30 {
+            let write = txn_types::Write::new(WriteType::Put, (commit - 1).into(), Some(vec![1]));
+            // Leave the tested start_ts without a terminal record.
+            if write.start_ts != ts {
+                txn.put_write(key_enc.clone(), commit.into(), write.as_ref().to_bytes());
+            }
+        }
+        write(&engine, &Context::default(), txn.into_modifies());
+
+        let before = COUNTERS.update_ts.get();
+        let lookup = must_success(
+            &mut engine,
+            key,
+            ts,
+            20,
+            0,
             true,
             false,
             true,
-            |s| matches!(s, TxnStatus::RolledBack),
+            uncommitted(100, 21, true),
         );
-        assert_eq!(must_load_shared_lock(&mut engine, key).len(), 1);
+        assert!(COUNTERS.update_ts.get() > before);
+        let before = COUNTERS.get_commit_info.get();
+        let expired = must_success(
+            &mut engine,
+            key,
+            ts,
+            0,
+            TimeStamp::compose(111, 0),
+            true,
+            false,
+            true,
+            ttl_expire(),
+        );
+        assert!(COUNTERS.get_commit_info.get() > before);
+        // The collapse check revisits the overlapping record at the current cursor.
+        assert!(lookup.write.next > 1);
+        assert_eq!(
+            expired.write.total_op_count(),
+            lookup.write.total_op_count()
+        );
+        must_get_overlapped_rollback(&mut engine, key, 10, 9, WriteType::Put, Some(12));
+        must_unlocked(&mut engine, key);
+    }
+
+    #[test]
+    fn test_stale_shared_primary_when_resolving_secondary() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"stale-primary";
+        let ts = TimeStamp::from(10);
+        let sibling = TimeStamp::from(20);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, b"other", ts, ts, 100);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, sibling, sibling, 200);
+        let err = must_err(&mut engine, key, ts, 0, 0, true, false, true);
+        assert!(matches!(
+            err,
+            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(box ErrorInner::PrimaryMismatch(_))))
+        ));
+        let err = must_err(&mut engine, key, ts, 0, 0, false, false, false);
+        assert!(matches!(
+            err,
+            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(box ErrorInner::TxnNotFound {
+                ..
+            })))
+        ));
+        assert_eq!(must_load_shared_lock(&mut engine, key).len(), 2);
+        must_get_rollback_ts_none(&mut engine, key, ts);
+
+        let before = COUNTERS.pessimistic_rollback.get();
+        must_success(
+            &mut engine,
+            key,
+            ts,
+            0,
+            0,
+            true,
+            false,
+            false,
+            lock_not_exist(),
+        );
+        assert!(COUNTERS.pessimistic_rollback.get() > before);
+        must_get_rollback_protected(&mut engine, key, ts, true);
+        let holders = must_load_shared_lock(&mut engine, key);
+        assert_eq!(holders.len(), 1);
+        assert!(holders.contains_start_ts(sibling));
+
+        // A delayed member can coexist with an already committed transaction.
+        let ts = TimeStamp::from(30);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, b"other", ts, ts, 100);
+        let mut txn = MvccTxn::new(ts, ConcurrencyManager::new_for_test(ts));
+        let record = txn_types::Write::new(WriteType::Lock, ts, None);
+        txn.put_write(Key::from_raw(key), ts.next(), record.as_ref().to_bytes());
+        write(&engine, &Context::default(), txn.into_modifies());
+        must_success(
+            &mut engine,
+            key,
+            ts,
+            0,
+            0,
+            false,
+            false,
+            false,
+            committed(ts.next()),
+        );
+        let holders = must_load_shared_lock(&mut engine, key);
+        assert_eq!(holders.len(), 1);
+        assert!(holders.contains_start_ts(sibling));
     }
 
     #[test]

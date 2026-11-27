@@ -147,11 +147,15 @@ High-risk contracts:
   relationships.
 - A shared primary belongs to one transaction identified by its start
   timestamp. Heartbeat, status checks, and TTL rollback update only that
-  member. Rollback of a primary writes a protected record. Unrelated holders
-  must not hide a transaction's commit or rollback record.
+  member. Resolving an expired pessimistic member for a pessimistic secondary
+  removes the member without deciding the transaction. Resolving a prewritten
+  secondary checks its named primary and protects the rollback on expiry.
+  A terminal write takes precedence over a stale member.
 - Shared pessimistic lock acquisition honors lock-only-if-exists before inserting
   a holder. Replaying a locking read on its own member returns the requested
-  value or existence at the request's for-update timestamp.
+  value or existence at the request's for-update timestamp. A newer for-update
+  timestamp may change the member's primary and preserves its acknowledged
+  TTL and minimum commit timestamp.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as

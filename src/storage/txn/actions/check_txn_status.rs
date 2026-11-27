@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::ControlFlow;
+
 use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
@@ -225,27 +227,63 @@ pub fn check_txn_status_shared_lock(
     mut shared_locks: SharedLocks,
     current_ts: TimeStamp,
     caller_start_ts: TimeStamp,
+    resolving_pessimistic_lock: bool,
+    verify_is_primary: bool,
+    rollback_if_not_exist: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     let mut lock = shared_locks.get_lock(&reader.start_ts)?.unwrap().clone();
-    if !primary_key.is_encoded_from(&lock.primary) {
-        return Err(
-            ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
-        );
-    }
-    if let Some(status) = check_determined_txn_status(reader, &primary_key)? {
-        // A protected outcome wins over a delayed/recreated pessimistic member.
+    let status = if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
+        if resolving_pessimistic_lock || !lock.is_pessimistic_lock() {
+            return Err(
+                ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
+            );
+        }
+        // A secondary that has prewritten already names the authoritative primary.
+        // Resolve its outcome before discarding this stale pessimistic member.
+        let status = check_txn_status_missing_lock(
+            txn,
+            reader,
+            primary_key.clone(),
+            None,
+            MissingLockAction::rollback(rollback_if_not_exist),
+            resolving_pessimistic_lock,
+        )?;
+        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+        Some(status)
+    } else {
+        match read_txn_status(reader, &primary_key)? {
+            ControlFlow::Break(status) => {
+                if lock.is_pessimistic_lock() {
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+                }
+                Some(status)
+            }
+            ControlFlow::Continue(overlapped_write)
+                if lock.ts.physical() + lock.ttl < current_ts.physical() =>
+            {
+                if lock.is_pessimistic_lock() && resolving_pessimistic_lock {
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+                    Some(TxnStatus::PessimisticRollBack)
+                } else {
+                    write_shared_member_rollback_record(
+                        txn,
+                        reader,
+                        &primary_key,
+                        true,
+                        overlapped_write,
+                        true,
+                    )?;
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+                    Some(TxnStatus::TtlExpire)
+                }
+            }
+            ControlFlow::Continue(_) => None,
+        }
+    };
+    if let Some(status) = status {
         shared_locks.remove_lock(&reader.start_ts)?;
-        let released = if shared_locks.is_empty() {
-            txn.unlock_key(primary_key, true, TimeStamp::zero())
-        } else {
-            txn.put_shared_locks(primary_key, &shared_locks, false);
-            None
-        };
+        let released = persist_remaining_shared_locks(txn, primary_key, &shared_locks);
         return Ok((status, released));
-    }
-    if lock.ts.physical() + lock.ttl < current_ts.physical() {
-        let released = rollback_shared_lock(txn, reader, primary_key, shared_locks, lock.ts, true)?;
-        return Ok((TxnStatus::TtlExpire, released));
     }
     if !lock.min_commit_ts.is_zero()
         && !caller_start_ts.is_max()
@@ -254,6 +292,7 @@ pub fn check_txn_status_shared_lock(
         lock.min_commit_ts = std::cmp::max(caller_start_ts.next(), current_ts);
         shared_locks.update_lock(lock.clone())?;
         txn.put_shared_locks(primary_key, &shared_locks, false);
+        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
     }
     let pushed = (!caller_start_ts.is_zero() && lock.min_commit_ts > caller_start_ts)
         || caller_start_ts.is_max();
@@ -268,18 +307,27 @@ pub fn check_determined_txn_status(
     reader: &mut SnapshotReader<impl Snapshot>,
     primary_key: &Key,
 ) -> Result<Option<TxnStatus>> {
+    Ok(read_txn_status(reader, primary_key)?.break_value())
+}
+
+/// A terminal record ends status resolution. Otherwise keep the overlapping
+/// write so rollback can protect it without scanning the version chain again.
+fn read_txn_status(
+    reader: &mut SnapshotReader<impl Snapshot>,
+    primary_key: &Key,
+) -> Result<ControlFlow<TxnStatus, Option<OverlappedWrite>>> {
     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
-    match reader.get_txn_commit_record(primary_key)? {
-        TxnCommitRecord::SingleRecord { commit_ts, write } => {
-            if write.write_type == WriteType::Rollback {
-                Ok(Some(TxnStatus::RolledBack))
-            } else {
-                Ok(Some(TxnStatus::committed(commit_ts)))
-            }
+    Ok(match reader.get_txn_commit_record(primary_key)? {
+        TxnCommitRecord::SingleRecord { commit_ts, write }
+            if write.write_type != WriteType::Rollback =>
+        {
+            ControlFlow::Break(TxnStatus::committed(commit_ts))
         }
-        TxnCommitRecord::OverlappedRollback { .. } => Ok(Some(TxnStatus::RolledBack)),
-        TxnCommitRecord::None { .. } => Ok(None),
-    }
+        TxnCommitRecord::SingleRecord { .. } | TxnCommitRecord::OverlappedRollback { .. } => {
+            ControlFlow::Break(TxnStatus::RolledBack)
+        }
+        TxnCommitRecord::None { overlapped_write } => ControlFlow::Continue(overlapped_write),
+    })
 }
 
 pub fn check_txn_status_missing_lock(
@@ -418,11 +466,19 @@ pub fn rollback_shared_lock(
     };
 
     rollback_shared_member_record(txn, reader, &key, &lock, collapse_rollback)?;
+    Ok(persist_remaining_shared_locks(txn, key, &shared_locks))
+}
+
+fn persist_remaining_shared_locks(
+    txn: &mut MvccTxn,
+    key: Key,
+    shared_locks: &SharedLocks,
+) -> Option<ReleasedLock> {
     if shared_locks.is_empty() {
-        Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+        txn.unlock_key(key, true, TimeStamp::zero())
     } else {
-        txn.put_shared_locks(key.clone(), &shared_locks, false);
-        Ok(None)
+        txn.put_shared_locks(key, shared_locks, false);
+        None
     }
 }
 
@@ -450,10 +506,27 @@ pub(super) fn rollback_shared_member_record(
         _ => return Ok(()),
     };
 
+    assert!(lock.generation == 0);
+    write_shared_member_rollback_record(
+        txn,
+        reader,
+        key,
+        key.is_encoded_from(&lock.primary),
+        overlapped_write,
+        collapse_rollback,
+    )
+}
+
+fn write_shared_member_rollback_record(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: &Key,
+    protected: bool,
+    overlapped_write: Option<OverlappedWrite>,
+    collapse_rollback: bool,
+) -> Result<()> {
     // A shared primary owns the transaction outcome just like an exclusive
     // primary. Its rollback must survive collapse while unrelated members remain.
-    let protected = key.is_encoded_from(&lock.primary);
-    assert!(lock.generation == 0);
     if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
