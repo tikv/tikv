@@ -722,6 +722,96 @@ fn test_mvcc_flashback() {
     must_kv_read_equal(&client, ctx, b"key@1".to_vec(), b"value@1".to_vec(), ts);
 }
 
+#[test]
+fn test_flashback_shared_holders() {
+    use raftstore::store::LocksStatus;
+    use tikv::storage::kv::SnapContext;
+    use txn_types::Write;
+
+    use super::lock_manager::must_kv_shared_pessimistic_lock;
+
+    let (mut cluster, client, ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.resolved_ts.enable = true;
+        cluster.cfg.resolved_ts.advance_ts_interval =
+            tikv_util::config::ReadableDuration::millis(10);
+    });
+    let store = ctx.get_peer().get_store_id();
+    let region = ctx.get_region_id();
+    assert!(cluster.sim.rl().get_resolved_ts_scheduler(store).is_some());
+    let progress = cluster.store_metas[&store]
+        .lock()
+        .unwrap()
+        .region_read_progress
+        .clone();
+    let wait_for_observer = |index| {
+        test_util::eventually(Duration::from_millis(20), Duration::from_secs(10), || {
+            progress
+                .get_tracked_index(&region)
+                .is_some_and(|tracked| tracked >= index)
+        })
+    };
+
+    // The first key is the flashback transaction's own primary.
+    let mut ts = 0;
+    write_and_read_key(&client, &ctx, &mut ts, b"b".to_vec(), b"old".to_vec());
+    let version = ts;
+    write_and_read_key(&client, &ctx, &mut ts, b"b".to_vec(), b"new".to_vec());
+    wait_for_observer(
+        cluster
+            .must_get_snapshot_of_region(region)
+            .get_apply_index()
+            .unwrap(),
+    );
+    let members = [(b"k1", 10), (b"k2", 11), (b"k2", 12)];
+    for (key, ts) in members {
+        must_kv_shared_pessimistic_lock(&client, ctx.clone(), key.to_vec(), ts);
+    }
+
+    let mut req = PrepareFlashbackToVersionRequest::default();
+    req.set_context(ctx.clone());
+    req.set_start_key(b"a".to_vec());
+    req.set_end_key(b"z".to_vec());
+    req.set_version(version);
+    req.set_start_ts(20);
+    let resp = client.kv_prepare_flashback_to_version(&req).unwrap();
+    assert!(
+        !resp.has_region_error() && resp.get_error().is_empty(),
+        "{:?}",
+        resp
+    );
+    let snap = cluster.must_get_snapshot_of_region_with_ctx(
+        region,
+        SnapContext {
+            allowed_in_flashback: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        snap.txn_ext
+            .as_ref()
+            .unwrap()
+            .pessimistic_locks
+            .read()
+            .status,
+        LocksStatus::IsInFlashback
+    );
+    let applied = snap.get_apply_index().unwrap();
+    let engine = cluster.get_engine(store);
+    for (key, ts) in members {
+        let key = Key::from_raw(key);
+        must_get_cf_none(&engine, CF_LOCK, key.as_encoded());
+        must_get_cf_equal(
+            &engine,
+            CF_WRITE,
+            key.append_ts(ts.into()).as_encoded(),
+            &Write::new_rollback(ts.into(), true).as_ref().to_bytes(),
+        );
+    }
+    must_finish_flashback(&client, ctx.clone(), version, 20, 21);
+    must_kv_read_equal(&client, ctx, b"b".to_vec(), b"old".to_vec(), 22);
+    wait_for_observer(applied);
+}
+
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_rw() {

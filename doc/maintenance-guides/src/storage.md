@@ -156,6 +156,10 @@ High-risk contracts:
   value or existence at the request's for-update timestamp. A newer for-update
   timestamp may change the member's primary and preserves its acknowledged
   TTL and minimum commit timestamp.
+- Flashback rollback reads the full shared wrapper in the prepared region.
+  A partial batch persists remaining holders and resumes at the same key.
+  Its write budget includes the surviving wrapper and rollback records. An
+  indivisible member and its remaining wrapper can exceed the batch target.
 - Region bounds, snapshot context, and flashback/max-ts safety must remain
   enforced.
 - Max-ts relational validation must use the same whole-millisecond precision as
