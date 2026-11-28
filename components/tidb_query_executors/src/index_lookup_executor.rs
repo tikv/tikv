@@ -35,10 +35,7 @@ use txn_types::Key;
 
 use crate::{
     BatchTableScanExecutor,
-    interface::{
-        BatchExecIsDrain, BatchExecuteResult, BatchExecutor, WithSummaryCollector,
-        cooperative_checkpoint,
-    },
+    interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor, WithSummaryCollector},
     util::scan_executor::field_type_from_column_info,
 };
 
@@ -463,9 +460,6 @@ where
         };
 
         let mut result = executor.next_batch(scan_rows).await;
-        // This child is concrete rather than boxed, so it needs the same
-        // post-batch safe point as the regular executor tree.
-        cooperative_checkpoint().await;
         if let Ok(is_drained) = result.is_drained {
             if is_drained.stop() {
                 state

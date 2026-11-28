@@ -227,16 +227,12 @@ collection and finalization are in `src/coprocessor/batch.rs`.
 
 ## Cooperative Read Scheduling
 
-- Boxed `BatchExecutor::next_batch` calls share a post-batch checkpoint in
-  `components/tidb_query_executors/src/interface.rs`. IndexLookup's concrete
-  table-scan child has the corresponding explicit checkpoint.
 - `RangesScanner` checks every 32 completed get/scan operations, including
   empty ranges, when a poll-scoped cooperative context is installed. Other
   callers retain the legacy scanner rescheduling policy.
-- The read-pool wrapper owns the poll time slice and CPU-budget context;
-  executor/scanner code owns safe-point placement. Never keep a poll guard
-  across an await. A synchronous storage operation or one compute batch can
-  still overrun the slice; this is not a hard execution-time bound.
+- The read-pool wrapper scopes its time-slice and CPU-budget guard to one
+  synchronous poll. After a scan returns, executor work can continue past the
+  time slice until the next checkpoint or the end of the poll.
 - Checkpoint changes must preserve streaming range accounting, row order and
   execution/storage statistics, including empty ranges and resumed scans.
 - The fair wrapper checks CPU debt before every inner poll, including inline
